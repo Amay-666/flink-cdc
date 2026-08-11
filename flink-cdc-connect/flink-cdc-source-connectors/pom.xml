@@ -30,6 +30,7 @@ limitations under the License.
 
     <modules>
         <module>flink-cdc-base</module>
+        <module>flink-connector-canal-cdc</module>
         <module>flink-connector-db2-cdc</module>
         <module>flink-connector-debezium</module>
         <module>flink-connector-mongodb-cdc</module>
