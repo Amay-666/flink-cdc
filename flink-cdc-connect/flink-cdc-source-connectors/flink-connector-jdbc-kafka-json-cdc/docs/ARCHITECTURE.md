@@ -17,10 +17,11 @@
 |---|---|---|
 | **用户可见** | 模块 `flink-connector-jdbc-kafka-json-cdc` / `flink-cdc-pipeline-connector-jdbc-kafka-json`；SQL/pipeline factory identifier = `jdbc-kafka-json-cdc`；配置键 `scan.message.format`、`scan.database.type`、`scan.ddl.parser`、`scan.message.event-time`、`scan.boundary.mode` | 一眼看出"JDBC 快照 + Kafka 上的 JSON 消息" |
 | **开发者** | package `org.apache.flink.cdc.connectors.kafkajson`；类前缀 `KafkaJson*` | 与用户可见名解耦，短好写 |
-| **wire 格式** | `scan.message.format` 的值 `canal` / `debezium`（`MessageFormat` 枚举）；`scan.database.type` 的值 `mysql` / `postgres`（`DatabaseType` 枚举） | 引用外部工具的真实格式，**不随改名变化** |
+| **wire 格式** | `scan.message.format` 的值 `canal` / `debezium`（`MessageFormat` 枚举）；`scan.database.type` 的值 `mysql` / `postgres` / `tidb`（`DatabaseType` 枚举，`tidb` 复用 MySQL 兼容 JDBC 路径） | 引用外部工具的真实格式，**不随改名变化** |
 
 > **扩展口子（只写了配置，没写实现）**：`scan.database.type` 选 JDBC/dialect 层，`scan.message.format` 选
-> 消息解析层。当前版本只实现 **canal 格式 + MySQL**；其他组合（如 debezium 消息、PG 快照）在
+> 消息解析层。当前版本只实现 **canal 格式 + MySQL/TiDB**（`scan.database.type=tidb` 复用 MySQL 协议
+> 兼容的 JDBC/dialect 路径）；其他组合（如 debezium 消息、PG 快照）在
 > `KafkaJsonSourceConfigFactory.create()` 里 **fail-fast**（`IllegalArgumentException`），不会跑到深层报错。
 > 后续加 PG：把 `KafkaJsonSourceConfigFactory` 的 JDBC driver/port 默认/dialect 按 `DatabaseType` 分支即可；
 > 加 debezium 格式：新增 `MessageFormat.DEBEZIUM` 分支的消息解析路径（对应 `KafkaJsonFlatMessageParser`）。

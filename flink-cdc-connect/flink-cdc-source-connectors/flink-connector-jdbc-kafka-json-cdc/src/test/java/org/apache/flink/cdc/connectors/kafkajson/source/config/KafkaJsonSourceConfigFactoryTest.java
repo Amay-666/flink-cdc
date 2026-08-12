@@ -121,6 +121,18 @@ class KafkaJsonSourceConfigFactoryTest {
         assertEquals(true, e.getMessage().contains("not implemented"));
     }
 
+    /**
+     * 'tidb' is accepted as an alias that reuses the MySQL-compatible JDBC/dialect path (TiDB
+     * speaks the MySQL wire protocol), so it must not fail fast at job setup.
+     */
+    @Test
+    void testTidbDatabaseTypeIsAccepted() {
+        KafkaJsonSourceConfig config =
+                buildFactory().databaseType(KafkaJsonSourceOptions.DatabaseType.TIDB).create(0);
+        assertEquals(KafkaJsonSourceOptions.DatabaseType.TIDB, config.getDatabaseType());
+        assertEquals("com.mysql.cj.jdbc.Driver", config.getDriverClassName());
+    }
+
     @Test
     void testSubtaskIdIsolation() {
         KafkaJsonSourceConfig config =

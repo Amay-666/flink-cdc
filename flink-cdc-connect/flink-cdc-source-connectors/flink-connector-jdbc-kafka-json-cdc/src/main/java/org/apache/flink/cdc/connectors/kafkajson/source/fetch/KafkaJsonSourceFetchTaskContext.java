@@ -37,10 +37,12 @@ import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonChunkUtil
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonKafkaUtils;
 import org.apache.flink.table.types.logical.RowType;
 
+import io.debezium.connector.AbstractSourceInfo;
 import io.debezium.connector.base.ChangeEventQueue;
 import io.debezium.connector.mysql.MySqlConnector;
 import io.debezium.connector.mysql.MySqlConnectorConfig;
 import io.debezium.connector.mysql.MySqlTopicSelector;
+import io.debezium.data.Envelope;
 import io.debezium.jdbc.JdbcConnection;
 import io.debezium.pipeline.DataChangeEvent;
 import io.debezium.pipeline.ErrorHandler;
@@ -52,6 +54,7 @@ import io.debezium.relational.history.TableChanges.TableChange;
 import io.debezium.schema.TopicSelector;
 import io.debezium.util.LoggingContext;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -150,6 +153,19 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
     @Override
     public KafkaJsonSourceConfig getSourceConfig() {
         return canalSourceConfig;
+    }
+
+    @Override
+    public TableId getTableId(SourceRecord record) {
+        // The base implementation (SourceRecordUtils.getTableId) also reads
+        // source.getString("schema"), which our source struct intentionally does not carry: MySQL
+        // (and TiDB over the MySQL protocol) has no separate schema namespace, so
+        // KafkaJsonSourceInfoStructMaker only emits db + table. Parse the two fields that exist.
+        Struct value = (Struct) record.value();
+        Struct source = value.getStruct(Envelope.FieldName.SOURCE);
+        String dbName = source.getString(AbstractSourceInfo.DATABASE_NAME_KEY);
+        String tableName = source.getString(AbstractSourceInfo.TABLE_NAME_KEY);
+        return new TableId(dbName, null, tableName);
     }
 
     /** Returns the {@link KafkaJsonRecordConverter} that turns canal flatMessages into records. */

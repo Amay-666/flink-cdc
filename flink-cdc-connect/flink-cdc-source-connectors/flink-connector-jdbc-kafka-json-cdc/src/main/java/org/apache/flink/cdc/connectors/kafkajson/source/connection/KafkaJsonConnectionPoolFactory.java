@@ -25,9 +25,14 @@ import com.zaxxer.hikari.HikariDataSource;
 /** A connection pool factory to create pooled MySQL {@link HikariDataSource}. */
 public class KafkaJsonConnectionPoolFactory extends JdbcConnectionPoolFactory {
 
+    // sslMode=DISABLED is required: useSSL=false only maps to Connector/J's sslMode=PREFERRED,
+    // which still attempts an encrypted handshake (and fails on a cert validity check when the
+    // container clock drifts). Explicitly disabling SSL keeps the JDBC path deterministic, and
+    // allowPublicKeyRetrieval is then needed for caching_sha2_password accounts (MySQL 8 default).
     public static final String JDBC_URL_PATTERN =
-            "jdbc:mysql://%s:%s/?useSSL=false&useUnicode=true&characterEncoding=UTF-8"
-                    + "&useCursorFetch=true&rewriteBatchedStatements=true";
+            "jdbc:mysql://%s:%s/?sslMode=DISABLED&allowPublicKeyRetrieval=true"
+                    + "&useUnicode=true&characterEncoding=UTF-8&useCursorFetch=true"
+                    + "&rewriteBatchedStatements=true";
 
     @Override
     public String getJdbcUrl(JdbcSourceConfig sourceConfig) {

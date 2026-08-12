@@ -174,8 +174,8 @@ public class KafkaJsonEventDeserializerTest {
 
     @Test
     public void testAlterWithoutObservedCreateIsSkipped() throws Exception {
-        // The registry is empty (the CREATE of this table was not observed), so the ALTER cannot
-        // be diffed and is skipped instead of emitting a conflicting CreateTableEvent.
+        // The registry is empty (the CREATE of this table was not observed), so a single ALTER
+        // change cannot be diffed and is skipped instead of emitting a conflicting CreateTableEvent.
         Table newTable =
                 Table.editor()
                         .tableId(new io.debezium.relational.TableId("test", null, "users"))
@@ -185,6 +185,35 @@ public class KafkaJsonEventDeserializerTest {
                         .create();
 
         assertThat(deserializer.deserialize(alterRecord(newTable))).isEmpty();
+    }
+
+    @Test
+    public void testAlterWithLeadingOldSchemaIsDiffedWithoutObservedCreate() throws Exception {
+        // The canal DDL handler carries the pre-change schema as a leading ALTER change, so an
+        // ALTER of a table whose CREATE was never observed (snapshot tables announce their schema
+        // via JDBC CreateTableEvents, bypassing the schema-change stream) can still be diffed into
+        // column-level events: the leading change primes the registry, the trailing change is
+        // diffed against it.
+        Table newTable =
+                Table.editor()
+                        .tableId(new io.debezium.relational.TableId("test", null, "users"))
+                        .addColumn(column("id", "BIGINT", Types.BIGINT, false, 1))
+                        .addColumn(column("name", "VARCHAR", Types.VARCHAR, true, 2, 255))
+                        .addColumn(column("age", "INT", Types.INTEGER, true, 3))
+                        .setPrimaryKeyNames("id")
+                        .create();
+        TableChanges changes = new TableChanges();
+        changes.alter(BASE_TABLE);
+        changes.alter(newTable);
+
+        List<? extends Event> events = deserializer.deserialize(schemaChangeRecord(changes));
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0)).isInstanceOf(AddColumnEvent.class);
+        AddColumnEvent add = (AddColumnEvent) events.get(0);
+        assertThat(add.tableId()).isEqualTo(TABLE_ID);
+        assertThat(add.getAddedColumns()).hasSize(1);
+        assertThat(add.getAddedColumns().get(0).getAddColumn().getName()).isEqualTo("age");
     }
 
     @Test

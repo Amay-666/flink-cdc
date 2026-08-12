@@ -85,19 +85,22 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
     @Override
     public KafkaJsonSourceConfig create(int subtaskId) {
         // Extension seam: only the canal flatMessage JSON format and the MySQL source are
-        // implemented in this version. Declared-but-unimplemented combinations fail fast here, at
-        // job setup, instead of surfacing later as a confusing error deep inside the read pipeline.
+        // implemented in this version; 'tidb' is accepted as an alias that reuses the
+        // MySQL-compatible JDBC/dialect path (TiDB speaks the MySQL wire protocol).
+        // Declared-but-unimplemented combinations fail fast here, at job setup, instead of
+        // surfacing later as a confusing error deep inside the read pipeline.
         if (messageFormat != KafkaJsonSourceOptions.MessageFormat.CANAL) {
             throw new IllegalArgumentException(
                     "scan.message.format="
                             + messageFormat
                             + " is declared but not implemented; only 'canal' is supported in this version.");
         }
-        if (databaseType != KafkaJsonSourceOptions.DatabaseType.MYSQL) {
+        if (databaseType != KafkaJsonSourceOptions.DatabaseType.MYSQL
+                && databaseType != KafkaJsonSourceOptions.DatabaseType.TIDB) {
             throw new IllegalArgumentException(
                     "scan.database.type="
                             + databaseType
-                            + " is declared but not implemented; only 'mysql' is supported in this version.");
+                            + " is declared but not implemented; only 'mysql' and 'tidb' are supported in this version.");
         }
         Properties props = new Properties();
         // Debezium MySQL connector config is only used as a light carrier for logical name /

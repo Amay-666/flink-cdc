@@ -161,16 +161,17 @@ public class KafkaJsonDataSourceOptions {
     /**
      * The database type of the source, used to select the JDBC/dialect layer. Declared as a string
      * for the same kebab-case reason as {@link #MESSAGE_FORMAT}; the {@link
-     * KafkaJsonSourceOptions.DatabaseType} enum is resolved in the factory. Only 'mysql' is
-     * implemented in this version.
+     * KafkaJsonSourceOptions.DatabaseType} enum is resolved in the factory. Only 'mysql' and
+     * 'tidb' are implemented in this version; 'tidb' reuses the MySQL-compatible JDBC/dialect
+     * path.
      */
     public static final ConfigOption<String> DATABASE_TYPE =
             ConfigOptions.key("scan.database.type")
                     .stringType()
                     .defaultValue("mysql")
                     .withDescription(
-                            "The database type of the source: 'mysql' (default) or 'postgres'. "
-                                    + "Only 'mysql' is implemented in this version; other values fail at startup.");
+                            "The database type of the source: 'mysql' (default), 'postgres', or 'tidb'. "
+                                    + "Only 'mysql' and 'tidb' are implemented in this version; other values fail at startup.");
 
     /** The timestamp field used as the offset event time. */
     public static final ConfigOption<String> EVENT_TIME =

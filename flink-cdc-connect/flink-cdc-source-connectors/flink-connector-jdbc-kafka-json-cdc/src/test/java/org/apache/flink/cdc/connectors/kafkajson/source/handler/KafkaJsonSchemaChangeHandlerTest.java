@@ -93,17 +93,25 @@ class KafkaJsonSchemaChangeHandlerTest {
         assertEquals("test", source.getString("db"));
         assertEquals("users", source.getString("table"));
 
-        // the history record carries the table change, which the emitter replays into the
-        // stream-split state
+        // the history record carries the table changes, which the emitter replays into the
+        // stream-split state; the pre-change schema leads as an ALTER change so the pipeline
+        // deserializer can diff the change even for tables it never observed a CREATE for
         HistoryRecord historyRecord = SourceRecordUtils.getHistoryRecord(record);
         Array tableChangesArray =
                 historyRecord.document().getArray(HistoryRecord.Fields.TABLE_CHANGES);
         TableChanges changes =
                 new FlinkJsonTableChangeSerializer().deserialize(tableChangesArray, true);
-        TableChange change = changes.iterator().next();
-        assertEquals(io.debezium.relational.history.TableChanges.TableChangeType.ALTER, change.getType());
-        assertEquals(TABLE_ID, change.getId());
-        assertEquals(3, change.getTable().columns().size());
+        List<TableChange> changeList = new ArrayList<>();
+        changes.forEach(changeList::add);
+        assertEquals(2, changeList.size());
+        TableChange oldChange = changeList.get(0);
+        assertEquals(io.debezium.relational.history.TableChanges.TableChangeType.ALTER, oldChange.getType());
+        assertEquals(TABLE_ID, oldChange.getId());
+        assertEquals(2, oldChange.getTable().columns().size());
+        TableChange newChange = changeList.get(1);
+        assertEquals(io.debezium.relational.history.TableChanges.TableChangeType.ALTER, newChange.getType());
+        assertEquals(TABLE_ID, newChange.getId());
+        assertEquals(3, newChange.getTable().columns().size());
     }
 
     @Test

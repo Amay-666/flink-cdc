@@ -38,9 +38,11 @@ limitations under the License.
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Test-jar of mysql-cdc for MySqlContainer/MySqlVersion/UniqueDatabase (mirrors
+             flink-cdc-pipeline-connector-mysql). -->
         <dependency>
             <groupId>org.apache.flink</groupId>
-            <artifactId>flink-connector-jdbc-kafka-json-cdc</artifactId>
+            <artifactId>flink-connector-mysql-cdc</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
             <type>test-jar</type>

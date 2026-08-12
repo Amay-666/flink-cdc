@@ -76,9 +76,10 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
 
     /**
      * The table registry used to diff the old and the new table schema of an {@code ALTER} DDL. It
-     * is only primed by the {@code CREATE} schema change events in the stream, so an {@code ALTER}
-     * of a table whose {@code CREATE} was not observed (e.g. the table existed before the job
-     * started and no subsequent {@code CREATE} was emitted) cannot be diffed and is skipped.
+     * is primed by the {@code CREATE} schema change events in the stream and by the pre-change
+     * schema that the canal DDL handler attaches as a leading {@code ALTER} change (snapshot tables
+     * announce their {@code CREATE} as {@code CreateTableEvent}s via JDBC, so their schema-change
+     * stream never contains a {@code CREATE}).
      */
     private transient Tables tables;
 

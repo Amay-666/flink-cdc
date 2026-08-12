@@ -31,6 +31,7 @@ import org.apache.kafka.connect.source.SourceRecord;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -142,7 +143,10 @@ public class KafkaJsonRecordConverter {
                 records.add(
                         factory.createRecord(
                                 table,
-                                beforeRow == null ? null : factory.canalRowData(table, beforeRow),
+                                beforeRow == null
+                                        ? null
+                                        : factory.canalRowData(
+                                                table, completeBeforeRow(afterRow, beforeRow)),
                                 factory.canalRowData(table, afterRow),
                                 op,
                                 sourceInfo,
@@ -163,6 +167,30 @@ public class KafkaJsonRecordConverter {
             }
         }
         return records;
+    }
+
+    /**
+     * Reconstructs the complete before row of an {@code UPDATE}.
+     *
+     * <p>In the canal flatMessage the {@code data} array carries the full row <em>after</em> the
+     * change, while the {@code old} array carries only the columns that actually changed. A column
+     * that did not change has the same value before and after the {@code UPDATE}, so the before
+     * image is simply the after row with the changed columns overlaid with their {@code old} values:
+     * {@code complete = afterRow ∪ old}.
+     *
+     * <p>This is not cosmetic: the reconstructed row is what the pipeline exposes to the consumer.
+     * It flows into the Debezium envelope's {@code before} struct of the {@code SourceRecord}
+     * (see {@link KafkaJsonRecordFactory#createRecord}), and the pipeline deserializer reads it as
+     * the {@code DataChangeEvent.before()} image of the emitted update event. Without the merge the
+     * unchanged columns would be {@code null} here, and the schema converters would fill their
+     * NOT NULL schema defaults ({@code 0}/{@code ""}) when building the struct, so the consumer
+     * would receive a fabricated before row instead of the true old row.
+     */
+    private static Map<String, String> completeBeforeRow(
+            Map<String, String> afterRow, Map<String, String> beforeRow) {
+        Map<String, String> complete = new HashMap<>(afterRow);
+        complete.putAll(beforeRow);
+        return complete;
     }
 
     /** Returns the registered (JDBC) schema, or rebuilds one from the message {@code mysqlType}. */

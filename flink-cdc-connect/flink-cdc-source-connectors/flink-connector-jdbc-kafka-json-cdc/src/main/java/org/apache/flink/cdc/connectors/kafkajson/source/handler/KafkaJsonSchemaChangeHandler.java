@@ -191,6 +191,16 @@ public class KafkaJsonSchemaChangeHandler {
             tableChanges.create(result.getNewTable());
         } else if (type == KafkaJsonTableChangeType.ALTER
                 || type == KafkaJsonTableChangeType.RENAME_COLUMN) {
+            // The Debezium history format carries only the post-change schema in an ALTER
+            // TableChange. The pipeline deserializer derives the column-level events by diffing the
+            // old and the new schema, so it needs both images: snapshot tables announce their schema
+            // as CreateTableEvents via JDBC (bypassing the schema-change stream), so the deserializer
+            // never observed their CREATE and cannot diff an ALTER on its own. Carry the pre-change
+            // schema as a leading ALTER change — the deserializer processes the changes in order, so
+            // the leading change primes its registry and the trailing change is diffed against it.
+            if (result.getOldTable() != null) {
+                tableChanges.alter(result.getOldTable());
+            }
             tableChanges.alter(result.getNewTable());
         } else if (type == KafkaJsonTableChangeType.RENAME_TABLE) {
             // The schema of the renamed table travels as a CREATE change of the new table id; the

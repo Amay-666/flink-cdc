@@ -54,6 +54,22 @@ public class KafkaJsonChunkSplitter extends JdbcSourceChunkSplitter {
     }
 
     @Override
+    protected Object[] queryMinMax(JdbcConnection jdbc, TableId tableId, Column splitColumn)
+            throws SQLException {
+        // The base implementation uses JdbcConnection.quotedTableIdString(), which quotes the
+        // table identity with double quotes regardless of the connection's quote characters;
+        // MySQL rejects that. Quote with backticks like the official MySQL connector does.
+        return KafkaJsonQueryUtils.queryMinMax(jdbc, tableId, splitColumn);
+    }
+
+    @Override
+    protected Object queryMin(
+            JdbcConnection jdbc, TableId tableId, Column splitColumn, Object excludedLowerBound)
+            throws SQLException {
+        return KafkaJsonQueryUtils.queryMin(jdbc, tableId, splitColumn, excludedLowerBound);
+    }
+
+    @Override
     protected Long queryApproximateRowCnt(JdbcConnection jdbc, TableId tableId)
             throws SQLException {
         return KafkaJsonQueryUtils.queryApproximateRowCnt(jdbc, tableId);
