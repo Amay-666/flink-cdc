@@ -29,10 +29,13 @@ import org.slf4j.LoggerFactory;
  * Supplies the current position of the change-log stream, the {@link KafkaJsonOffset} that the snapshot
  * phase uses as the low/high watermark.
  *
- * <p>The position is the minimum canal event time ({@code es}/{@code ts}) of the newest message in
- * each Kafka partition: any change whose event time is before that position is guaranteed to be
- * present in Kafka, so starting the stream phase from it loses no change (at the cost of possibly
- * replaying a few already-snapshot rows, which the high watermark deduplicates).
+ * <p>The position is the maximum canal event time ({@code es}/{@code ts}) of the newest message in
+ * each Kafka partition, stamped onto the sentinel partition/offset (see {@link
+ * KafkaJsonKafkaOffsetUtils}): any change whose event time is at or before that position was
+ * committed while the snapshot was running and is replayed exactly once by the snapshot split's
+ * bounded backfill, while the stream phase reads only event times strictly after it. A change
+ * committed during a snapshot split's JDBC read therefore never falls through to the stream side,
+ * where the snapshot rows would already contain its effect and it would be emitted twice.
  *
  * <p>A single {@link KafkaConsumer} is opened lazily and reused across {@link #current()} calls for
  * the whole reader lifetime; call {@link #close()} when the reader shuts down.

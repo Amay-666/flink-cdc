@@ -94,6 +94,33 @@ class KafkaJsonTypeUtilsTest {
     }
 
     @Test
+    void testOverLimitTemporalPrecision() {
+        // JDBC metadata reports the display width on MySQL/TiDB (DATETIME(6) -> 26, DATETIME(3) ->
+        // 23, DATETIME -> 19, TIMESTAMP(3) -> 23, TIME(6) -> 15); the fractional-seconds precision
+        // is recovered from it, so the mapping is exact rather than a blanket clamp to 6.
+        assertEquals(
+                "TIMESTAMP(6)", KafkaJsonTypeUtils.fromDbzColumn(column("DATETIME", 26)).toString());
+        assertEquals(
+                "TIMESTAMP(3)", KafkaJsonTypeUtils.fromDbzColumn(column("DATETIME", 23)).toString());
+        assertEquals(
+                "TIMESTAMP(0)", KafkaJsonTypeUtils.fromDbzColumn(column("DATETIME", 19)).toString());
+        assertEquals(
+                "TIMESTAMP_LTZ(3)",
+                KafkaJsonTypeUtils.fromDbzColumn(column("TIMESTAMP", 23)).toString());
+        assertEquals("TIME(6)", KafkaJsonTypeUtils.fromDbzColumn(column("TIME", 15)).toString());
+        assertEquals(
+                "TIMESTAMP(0)", KafkaJsonTypeUtils.fromDbzColumn(column("DATETIME", 0)).toString());
+    }
+
+    @Test
+    void testZeroLengthStringsClamped() {
+        // CHAR(0)/VARCHAR(0) are rejected by Flink, so the length is clamped to 1
+        assertEquals("CHAR(1)", KafkaJsonTypeUtils.fromDbzColumn(column("CHAR", 0)).toString());
+        assertEquals(
+                "VARCHAR(1)", KafkaJsonTypeUtils.fromDbzColumn(column("VARCHAR", 0)).toString());
+    }
+
+    @Test
     void testDecimal() {
         Column decimal =
                 Column.editor()
@@ -104,6 +131,31 @@ class KafkaJsonTypeUtilsTest {
                         .optional(true)
                         .create();
         assertEquals("DECIMAL(10, 2)", KafkaJsonTypeUtils.fromDbzColumn(decimal).toString());
+    }
+
+    @Test
+    void testDecimalClamped() {
+        // scale above the precision is clamped to the precision
+        Column invalidScale =
+                Column.editor()
+                        .name("c")
+                        .type("DECIMAL")
+                        .length(10)
+                        .scale(20)
+                        .optional(true)
+                        .create();
+        assertEquals("DECIMAL(10, 10)", KafkaJsonTypeUtils.fromDbzColumn(invalidScale).toString());
+
+        // a DECIMAL without a usable precision falls back to DECIMAL(38, 18)
+        Column noPrecision =
+                Column.editor()
+                        .name("c")
+                        .type("DECIMAL")
+                        .length(0)
+                        .scale(0)
+                        .optional(true)
+                        .create();
+        assertEquals("DECIMAL(38, 18)", KafkaJsonTypeUtils.fromDbzColumn(noPrecision).toString());
     }
 
     @Test

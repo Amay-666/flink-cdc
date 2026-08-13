@@ -36,9 +36,12 @@ import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -117,13 +120,122 @@ class KafkaJsonStreamFetchTaskTest {
         KafkaJsonStreamFetchTask task = new KafkaJsonStreamFetchTask(split);
         context.configure(split);
 
-        // bounded read finishes on its own: after the last message the END watermark is dispatched
+        // bounded read finishes on its own and emits only the messages strictly before the ending
+        // offset: the UPDATE carries es == 3005 (the ending offset), so it belongs to the stream
+        // phase and must not be duplicated here; the END watermark is dispatched instead
+        task.execute(context);
+
+        List<SourceRecord> records = drain(context.getQueue(), 2);
+        assertEquals(2, records.size());
+        assertEquals("c", ((Struct) records.get(0).value()).getString(Envelope.FieldName.OPERATION));
+        assertTrue(WatermarkEvent.isEndWatermarkEvent(records.get(1)));
+        assertFalse(task.isRunning());
+    }
+
+    @Test
+    void testBoundedReadKeepsMessagesBeforeEndingAndWaitsForLaggingPartition() throws Exception {
+        // Partition 0 crosses the ending offset (es 4000) while partition 1 still has messages
+        // before it (es 3400) that have not been polled yet. The bounded read must emit every
+        // message before the ending offset from both partitions and only then dispatch END.
+        TopicPartition p0 = new TopicPartition("t", 0);
+        TopicPartition p1 = new TopicPartition("t", 1);
+        List<ConsumerRecord<String, String>> log0 = new ArrayList<>();
+        log0.add(insertRecord("1", "Alice", 3000, p0, 0));
+        log0.add(insertRecord("2", "Bob", 4000, p0, 1));
+        List<ConsumerRecord<String, String>> log1 = new ArrayList<>();
+        log1.add(insertRecord("3", "Carol", 3100, p1, 0));
+        log1.add(insertRecord("4", "Dave", 3400, p1, 1));
+
+        Map<TopicPartition, List<ConsumerRecord<String, String>>> log = new HashMap<>();
+        log.put(p0, log0);
+        log.put(p1, log1);
+        FakeKafkaConsumer consumer = new FakeKafkaConsumer(log, null, 1);
+        KafkaJsonSourceFetchTaskContext context = context(consumer);
+        StreamSplit split =
+                streamSplit(new KafkaJsonOffset(3000, -1, -1), new KafkaJsonOffset(3500, -1, -1));
+        KafkaJsonStreamFetchTask task = new KafkaJsonStreamFetchTask(split);
+        context.configure(split);
+
+        task.execute(context);
+
+        List<SourceRecord> records = drain(context.getQueue(), 4);
+        assertEquals(4, records.size(), "Alice/Carol/Dave before ending + END watermark");
+        Set<String> names = new HashSet<>();
+        for (SourceRecord record : records) {
+            if (!WatermarkEvent.isEndWatermarkEvent(record)) {
+                names.add(((Struct) record.value()).getStruct(Envelope.FieldName.AFTER).getString("name"));
+            }
+        }
+        assertEquals(new HashSet<>(Arrays.asList("Alice", "Carol", "Dave")), names);
+        assertTrue(WatermarkEvent.isEndWatermarkEvent(records.get(3)));
+        assertFalse(task.isRunning());
+    }
+
+    @Test
+    void testBoundedReadKeepsBoundaryMessageAtEndingOffset() throws Exception {
+        // The user-observed duplicate: a change committed while the snapshot split's JDBC read is
+        // running is the newest message in the topic, so its event time equals the split's high
+        // watermark. The watermark carries the sentinel partition/offset, so the boundary message
+        // is ordered BEFORE it (isAfter is false) and is emitted exactly once by this bounded
+        // backfill; only messages strictly after the ending offset are left to the stream phase.
+        // (With a minimum-event-time watermark the same boundary message fell through to the stream
+        // phase and was emitted again, on top of a JDBC snapshot that already contained its effect.)
+        FakeKafkaConsumer consumer = consumer(INSERT, UPDATE); // es 3000 then es 3005
+        KafkaJsonSourceFetchTaskContext context = context(consumer);
+        StreamSplit split =
+                streamSplit(
+                        new KafkaJsonOffset(3000, -1, -1),
+                        new KafkaJsonOffset(3005, Integer.MAX_VALUE, Long.MAX_VALUE));
+        KafkaJsonStreamFetchTask task = new KafkaJsonStreamFetchTask(split);
+        context.configure(split);
+
         task.execute(context);
 
         List<SourceRecord> records = drain(context.getQueue(), 3);
-        assertEquals(3, records.size());
-        assertEquals("c", ((Struct) records.get(0).value()).getString(Envelope.FieldName.OPERATION));
-        assertEquals("u", ((Struct) records.get(1).value()).getString(Envelope.FieldName.OPERATION));
+        assertEquals(3, records.size(), "INSERT + boundary UPDATE (es == ending) + END watermark");
+        Struct update = (Struct) records.get(1).value();
+        assertEquals("u", update.getString(Envelope.FieldName.OPERATION));
+        assertEquals("Bob", update.getStruct(Envelope.FieldName.AFTER).getString("name"));
+        assertTrue(WatermarkEvent.isEndWatermarkEvent(records.get(2)));
+        assertFalse(task.isRunning());
+    }
+
+    @Test
+    void testBoundedReadDropsMessagesBeforeStartingOffset() throws Exception {
+        // A message committed before the snapshot but delivered to Kafka only after the seek
+        // position (canal lag) carries an event time below the low watermark. The JDBC snapshot row
+        // already reflects — and possibly supersedes — it, so replaying it would override the
+        // snapshot with a stale value: it is dropped, while messages inside the (low, high] window
+        // are still emitted. The Kafka timestamp of the lagged message is >= the seek timestamp so
+        // the consumer actually reads it and the drop is what keeps it out of the backfill.
+        TopicPartition p0 = new TopicPartition("t", 0);
+        List<ConsumerRecord<String, String>> log0 = new ArrayList<>();
+        log0.add(insertRecord("1", "Alice", 2900, 3000, p0, 0)); // pre-snapshot change, lagged: dropped
+        log0.add(insertRecord("2", "Bob", 3200, 3200, p0, 1)); // inside the backfill window: emitted
+        log0.add(insertRecord("3", "Carol", 3400, 3400, p0, 2)); // inside the backfill window: emitted
+
+        Map<TopicPartition, List<ConsumerRecord<String, String>>> log = new HashMap<>();
+        log.put(p0, log0);
+        FakeKafkaConsumer consumer = new FakeKafkaConsumer(log, null);
+        KafkaJsonSourceFetchTaskContext context = context(consumer);
+        StreamSplit split =
+                streamSplit(
+                        new KafkaJsonOffset(3000, -1, -1),
+                        new KafkaJsonOffset(3500, Integer.MAX_VALUE, Long.MAX_VALUE));
+        KafkaJsonStreamFetchTask task = new KafkaJsonStreamFetchTask(split);
+        context.configure(split);
+
+        task.execute(context);
+
+        List<SourceRecord> records = drain(context.getQueue(), 3);
+        assertEquals(3, records.size(), "Bob + Carol inside the window + END watermark; Alice dropped");
+        Set<String> names = new HashSet<>();
+        for (SourceRecord record : records) {
+            if (!WatermarkEvent.isEndWatermarkEvent(record)) {
+                names.add(((Struct) record.value()).getStruct(Envelope.FieldName.AFTER).getString("name"));
+            }
+        }
+        assertEquals(new HashSet<>(Arrays.asList("Bob", "Carol")), names);
         assertTrue(WatermarkEvent.isEndWatermarkEvent(records.get(2)));
         assertFalse(task.isRunning());
     }
@@ -217,6 +329,46 @@ class KafkaJsonStreamFetchTaskTest {
         }
         log.put(PARTITION, records);
         return new FakeKafkaConsumer(log, null);
+    }
+
+    /** Builds an INSERT record whose canal event time (inside the JSON) equals its Kafka timestamp. */
+    private static ConsumerRecord<String, String> insertRecord(
+            String id, String name, long eventTime, TopicPartition partition, long offset) {
+        return insertRecord(id, name, eventTime, eventTime, partition, offset);
+    }
+
+    /**
+     * Builds an INSERT record with a distinct canal event time and Kafka timestamp. The Kafka
+     * timestamp drives {@code offsetsForTimes} (the seek); the canal event time is the ordering key
+     * used by the bounded read, so separating them simulates a message that canal committed before
+     * the snapshot but delivered to Kafka only later (lag).
+     */
+    private static ConsumerRecord<String, String> insertRecord(
+            String id,
+            String name,
+            long eventTime,
+            long kafkaTimestamp,
+            TopicPartition partition,
+            long offset) {
+        String json =
+                String.format(
+                        "{\"data\":[{\"id\":\"%s\",\"name\":\"%s\"}],\"database\":\"test\",\"es\":%d,"
+                                + "\"id\":1,\"isDdl\":false,"
+                                + "\"mysqlType\":{\"id\":\"bigint(20)\",\"name\":\"varchar(255)\"},"
+                                + "\"old\":null,\"pkNames\":[\"id\"],\"sql\":\"\",\"sqlType\":{},"
+                                + "\"table\":\"users\",\"ts\":%d,\"type\":\"INSERT\"}",
+                        id, name, eventTime, kafkaTimestamp);
+        return new ConsumerRecord<>(
+                partition.topic(),
+                partition.partition(),
+                offset,
+                kafkaTimestamp,
+                TimestampType.CREATE_TIME,
+                -1L,
+                -1,
+                -1,
+                null,
+                json);
     }
 
     private static void runQuietly(KafkaJsonStreamFetchTask task, KafkaJsonSourceFetchTaskContext context) {

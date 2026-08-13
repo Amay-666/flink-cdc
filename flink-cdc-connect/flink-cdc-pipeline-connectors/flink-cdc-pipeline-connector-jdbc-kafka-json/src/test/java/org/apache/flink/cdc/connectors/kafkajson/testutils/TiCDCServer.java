@@ -96,11 +96,15 @@ public class TiCDCServer {
      */
     public void createChangefeed(String topic) throws Exception {
         waitForServerReady();
+        // enable-tidb-extension=true makes TiCDC also emit TIDB_WATERMARK marker events (plus the
+        // _tidb field on DML); the connector must drop them so the chain exercises the watermark
+        // filter end to end.
         String sinkUri =
                 "kafka://kafka:9092/"
                         + topic
                         + "?protocol=canal-json&kafka-version=2.6.0"
-                        + "&replication-factor=1&max-message-bytes=10485760&partition-num=1";
+                        + "&replication-factor=1&max-message-bytes=10485760&partition-num=1"
+                        + "&enable-tidb-extension=true";
         ExecResult result =
                 runCli(
                         "changefeed create --server=http://127.0.0.1:"

@@ -58,8 +58,29 @@ public class KafkaUtil {
 
     private KafkaUtil() {}
 
-    /** Creates a Kafka container with commonly used configurations, joined to the test network. */
-    public static KafkaContainer createKafkaContainer(Logger logger, org.testcontainers.containers.Network network) {
+    /**
+     * Creates a Kafka container with commonly used configurations, joined to the test network.
+     *
+     * @see #createKafkaContainer(Logger, Network, int)
+     */
+    public static KafkaContainer createKafkaContainer(
+            Logger logger, org.testcontainers.containers.Network network) {
+        return createKafkaContainer(logger, network, -1);
+    }
+
+    /**
+     * Creates a Kafka container like {@link #createKafkaContainer(Logger, Network)}, and if
+     * {@code fixedHostPort} is positive pins the Kafka listener (container port {@value
+     * KafkaContainer#KAFKA_PORT}) to that host port, so clients outside the test JVM (e.g. a
+     * Windows Kafka console) can reach it at a stable {@code localhost:&lt;fixedHostPort&gt;}.
+     */
+    public static KafkaContainer createKafkaContainer(
+            Logger logger, org.testcontainers.containers.Network network, int fixedHostPort) {
+        DockerImageName image = DockerImageName.parse(KAFKA_IMAGE);
+        boolean pinPort = fixedHostPort > 0;
+        KafkaContainer container =
+                pinPort ? new FixedPortKafkaContainer(image) : new KafkaContainer(image);
+
         String logLevel;
         if (logger.isTraceEnabled()) {
             logLevel = "TRACE";
@@ -74,7 +95,7 @@ public class KafkaUtil {
         } else {
             logLevel = "OFF";
         }
-        return new KafkaContainer(DockerImageName.parse(KAFKA_IMAGE))
+        container
                 .withNetwork(network)
                 .withNetworkAliases("kafka")
                 .withEnv("KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR", "1")
@@ -88,6 +109,27 @@ public class KafkaUtil {
                         String.valueOf(Duration.ofHours(2).toMillis()))
                 .withEnv("KAFKA_LOG4J_TOOLS_ROOT_LOGLEVEL", logLevel)
                 .withLogConsumer(new Slf4jLogConsumer(logger));
+        if (pinPort) {
+            ((FixedPortKafkaContainer) container).pinHostPort(fixedHostPort, KafkaContainer.KAFKA_PORT);
+        }
+        return container;
+    }
+
+    /**
+     * A {@link KafkaContainer} that can pin its Kafka listener to a fixed host port. testcontainers
+     * 1.18.3 keeps the fluent {@code withFixedExposedPort} only on {@code FixedHostPortGenericContainer}
+     * (not on {@link KafkaContainer}), and the equivalent {@code addFixedExposedPort} on {@code
+     * GenericContainer} is protected, so it is surfaced through this subclass.
+     */
+    private static final class FixedPortKafkaContainer extends KafkaContainer {
+
+        private FixedPortKafkaContainer(DockerImageName image) {
+            super(image);
+        }
+
+        private void pinHostPort(int hostPort, int containerPort) {
+            addFixedExposedPort(hostPort, containerPort);
+        }
     }
 
     /**

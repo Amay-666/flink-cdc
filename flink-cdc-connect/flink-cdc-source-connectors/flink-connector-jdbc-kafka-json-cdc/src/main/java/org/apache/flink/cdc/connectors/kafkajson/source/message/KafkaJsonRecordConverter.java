@@ -94,6 +94,11 @@ public class KafkaJsonRecordConverter {
                 return convertRows(message, topic, partition, kafkaOffset, Envelope.Operation.UPDATE);
             case "DELETE":
                 return convertRows(message, topic, partition, kafkaOffset, Envelope.Operation.DELETE);
+            case "TIDB_WATERMARK":
+                // TiCDC emits these marker events (isDdl=false but type=TIDB_WATERMARK, data=null)
+                // when the TiDB extension is enabled; they carry no DML rows and are not DDL.
+                // TiCDC does not filter them itself, so dropping them is the consumer's job.
+                return Collections.emptyList();
             default:
                 // GTID / XACOMPLETE / SAVEPOINT / ... : no data rows
                 return Collections.emptyList();

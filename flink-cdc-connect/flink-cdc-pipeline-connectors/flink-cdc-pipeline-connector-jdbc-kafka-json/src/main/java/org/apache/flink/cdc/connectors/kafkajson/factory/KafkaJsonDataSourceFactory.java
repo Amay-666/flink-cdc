@@ -260,6 +260,9 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
         options.add(BOUNDARY_MODE);
         options.add(KAFKA_STARTUP_MODE);
         options.add(CANAL_DDL_PARSER);
+        // must be registered here, otherwise FactoryHelper.validateExcept rejects it as an
+        // unsupported option and createDataSource fails for users setting scan.database.type=tidb
+        options.add(DATABASE_TYPE);
         return options;
     }
 

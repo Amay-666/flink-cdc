@@ -34,7 +34,6 @@ import org.apache.flink.cdc.connectors.kafkajson.serializer.KafkaJsonEventTypeIn
 import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSource;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
-import org.apache.flink.cdc.connectors.mysql.testutils.MySqlContainer;
 import org.apache.flink.cdc.connectors.mysql.testutils.MySqlVersion;
 import org.apache.flink.cdc.runtime.typeutils.BinaryRecordDataGenerator;
 import org.apache.flink.runtime.minicluster.RpcServiceSharing;
@@ -109,9 +108,16 @@ public abstract class KafkaJsonSourceTestBase extends TestLogger {
                 DockerClientFactory.instance().isDockerAvailable());
     }
 
-    /** Creates a MySQL container with the binlog/replication setup required by the snapshot reader and canal. */
-    protected static MySqlContainer createMySqlContainer(MySqlVersion version) {
-        return (MySqlContainer)
+    /**
+     * Creates a MySQL container with the binlog/replication setup required by the snapshot reader and
+     * canal. Returned as {@link KafkaJsonMySqlContainer} so callers can pin a fixed host port (see
+     * {@link KafkaJsonMySqlContainer#withFixedExposedPort}).
+     */
+    protected static KafkaJsonMySqlContainer createMySqlContainer(MySqlVersion version) {
+        // withConfigurationOverride/withSetupSQL/withDatabaseName/... are declared on the released
+        // MySqlContainer to return MySqlContainer, so the chain's static type is MySqlContainer and
+        // the concrete KafkaJsonMySqlContainer requires an explicit cast.
+        return (KafkaJsonMySqlContainer)
                 new KafkaJsonMySqlContainer(version)
                         .withConfigurationOverride("docker/server-gtids/my.cnf")
                         .withSetupSQL("docker/setup.sql")

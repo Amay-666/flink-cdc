@@ -44,7 +44,8 @@ import java.util.Properties;
  * <p>Each partition is backed by an immutable log of {@link ConsumerRecord}s plus a mutable read
  * position. {@link #seek}/{@link #seekToBeginning}/{@link #seekToEnd} move the position; {@link
  * #poll(Duration)} returns the records of the currently assigned partitions that are at or after the
- * position and then advances it. {@link #offsetsForTimes(Map)} searches the log by the record
+ * position and then advances it (at most {@code maxRecordsPerPoll} per partition when configured, to
+ * simulate a lagging partition). {@link #offsetsForTimes(Map)} searches the log by the record
  * timestamp (which the tests set to the canal event time). {@link #endOffsets(Collection)} returns
  * the preconfigured log end (which may exceed the buffered records, as a real topic log would).
  *
@@ -59,12 +60,22 @@ public class FakeKafkaConsumer extends KafkaConsumer<String, String> {
     private final Map<TopicPartition, Long> endingOffsets = new HashMap<>();
     private final Map<TopicPartition, Long> positions = new HashMap<>();
     private final List<TopicPartition> assigned = new ArrayList<>();
+    /** Maximum records a single {@link #poll(Duration)} returns per partition (to simulate lag). */
+    private final int maxRecordsPerPoll;
     private volatile boolean wakeupCalled = false;
 
     public FakeKafkaConsumer(
             Map<TopicPartition, List<ConsumerRecord<String, String>>> log,
             Map<TopicPartition, Long> endingOffsets) {
+        this(log, endingOffsets, Integer.MAX_VALUE);
+    }
+
+    public FakeKafkaConsumer(
+            Map<TopicPartition, List<ConsumerRecord<String, String>>> log,
+            Map<TopicPartition, Long> endingOffsets,
+            int maxRecordsPerPoll) {
         super(defaultProps());
+        this.maxRecordsPerPoll = maxRecordsPerPoll;
         for (Map.Entry<TopicPartition, List<ConsumerRecord<String, String>>> entry :
                 log.entrySet()) {
             TopicPartition topicPartition = entry.getKey();
@@ -160,7 +171,7 @@ public class FakeKafkaConsumer extends KafkaConsumer<String, String> {
                     log.getOrDefault(topicPartition, Collections.emptyList());
             long position = positions.getOrDefault(topicPartition, 0L);
             List<ConsumerRecord<String, String>> toReturn = new ArrayList<>();
-            while (position < partitionLog.size()) {
+            while (position < partitionLog.size() && toReturn.size() < maxRecordsPerPoll) {
                 toReturn.add(partitionLog.get((int) position));
                 position++;
             }
@@ -194,6 +205,11 @@ public class FakeKafkaConsumer extends KafkaConsumer<String, String> {
     /** Returns the current read position of the given partition. */
     public long positionOf(TopicPartition topicPartition) {
         return positions.getOrDefault(topicPartition, 0L);
+    }
+
+    @Override
+    public long position(TopicPartition partition) {
+        return positions.getOrDefault(partition, 0L);
     }
 
     private static Properties defaultProps() {

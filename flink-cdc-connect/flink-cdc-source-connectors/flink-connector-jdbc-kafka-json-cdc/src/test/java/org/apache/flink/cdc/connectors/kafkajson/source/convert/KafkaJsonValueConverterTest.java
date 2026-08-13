@@ -17,6 +17,8 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.convert;
 
+import org.apache.flink.util.FlinkRuntimeException;
+
 import io.debezium.relational.Column;
 import org.junit.jupiter.api.Test;
 
@@ -30,6 +32,7 @@ import java.time.ZoneOffset;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /** Unit test for {@link KafkaJsonValueConverter}. */
 class KafkaJsonValueConverterTest {
@@ -160,5 +163,109 @@ class KafkaJsonValueConverterTest {
         assertEquals("2020", converter.convert(column(Types.DATE, "YEAR", 4), "2020"));
         assertEquals("red", converter.convert(column(Types.VARCHAR, "ENUM", 255), "red"));
         assertEquals("a,b", converter.convert(column(Types.VARCHAR, "SET", 255), "a,b"));
+    }
+
+    @Test
+    void testIntegerBoundariesPassThrough() {
+        // signed integer extremes stay String: the Debezium converters parse them from String
+        assertEquals("2147483647", converter.convert(column(Types.INTEGER, "INT", 11), "2147483647"));
+        assertEquals("-2147483648", converter.convert(column(Types.INTEGER, "INT", 11), "-2147483648"));
+        assertEquals(
+                "9223372036854775807",
+                converter.convert(column(Types.BIGINT, "BIGINT", 20), "9223372036854775807"));
+        assertEquals(
+                "-9223372036854775808",
+                converter.convert(column(Types.BIGINT, "BIGINT", 20), "-9223372036854775808"));
+    }
+
+    @Test
+    void testFloatAndDoublePassThrough() {
+        assertEquals("1.5", converter.convert(column(Types.FLOAT, "FLOAT", 12), "1.5"));
+        assertEquals("-1.5", converter.convert(column(Types.DOUBLE, "DOUBLE", 22), "-1.5"));
+        // scientific notation is preserved verbatim (the Debezium converter parses it from String)
+        assertEquals(
+                "1.7976931348623157E308",
+                converter.convert(column(Types.DOUBLE, "DOUBLE", 22), "1.7976931348623157E308"));
+        // UNSIGNED float/double are not in the unsigned-integer list and pass through too
+        assertEquals("1.5", converter.convert(column(Types.DOUBLE, "DOUBLE UNSIGNED", 22), "1.5"));
+    }
+
+    @Test
+    void testDecimalPrecisionAndScalePassThrough() {
+        assertEquals(
+                "12345678901234567890.1234567890",
+                converter.convert(column(Types.DECIMAL, "DECIMAL", 38), "12345678901234567890.1234567890"));
+        assertEquals(
+                "0.0000000001", converter.convert(column(Types.DECIMAL, "DECIMAL", 30), "0.0000000001"));
+        // DECIMAL UNSIGNED (fractional) must NOT go through the integer Number path
+        assertEquals("99.99", converter.convert(column(Types.DECIMAL, "DECIMAL UNSIGNED", 10), "99.99"));
+    }
+
+    @Test
+    void testVarcharEdgeCases() {
+        assertEquals("", converter.convert(column(Types.VARCHAR, "VARCHAR", 255), ""));
+        assertEquals("你好, wörld", converter.convert(column(Types.VARCHAR, "VARCHAR", 255), "你好, wörld"));
+        assertEquals("  padded  ", converter.convert(column(Types.VARCHAR, "VARCHAR", 255), "  padded  "));
+    }
+
+    @Test
+    void testTimeWithFraction() {
+        assertEquals(
+                Duration.ofHours(15).plusMinutes(3).plusSeconds(2).plusNanos(123456000),
+                converter.convert(column(Types.TIME, "TIME", 6), "15:03:02.123456"));
+        // a negative time with a fraction negates every component
+        assertEquals(
+                Duration.ofHours(-1).minusMinutes(30).minusNanos(500000000),
+                converter.convert(column(Types.TIME, "TIME", 1), "-01:30:00.5"));
+    }
+
+    @Test
+    void testDateBoundaries() {
+        assertEquals(
+                java.sql.Date.valueOf("1000-01-01"),
+                converter.convert(column(Types.DATE, "DATE", 10), "1000-01-01"));
+        assertEquals(
+                java.sql.Date.valueOf("9999-12-31"),
+                converter.convert(column(Types.DATE, "DATE", 10), "9999-12-31"));
+    }
+
+    @Test
+    void testDatetimePrecisionAndBoundaries() {
+        assertEquals(
+                java.sql.Timestamp.valueOf("1000-01-01 00:00:00"),
+                converter.convert(column(Types.TIMESTAMP, "DATETIME", 6), "1000-01-01 00:00:00"));
+        assertEquals(
+                java.sql.Timestamp.valueOf("9999-12-31 23:59:59.999999"),
+                converter.convert(column(Types.TIMESTAMP, "DATETIME", 6), "9999-12-31 23:59:59.999999"));
+    }
+
+    @Test
+    void testTimestampWithZoneLeapDayAndMaxPrecision() {
+        OffsetDateTime expected =
+                OffsetDateTime.of(LocalDateTime.parse("2020-02-29T23:59:59.999999"), ZoneOffset.UTC);
+        assertEquals(
+                expected,
+                converter.convert(
+                        column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP", 6), "2020-02-29 23:59:59.999999"));
+    }
+
+    @Test
+    void testInvalidValuesThrow() {
+        // a non-numeric unsigned integer
+        assertThrows(
+                FlinkRuntimeException.class,
+                () -> converter.convert(column(Types.INTEGER, "INT UNSIGNED", 10), "abc"));
+        // a malformed date
+        assertThrows(
+                FlinkRuntimeException.class,
+                () -> converter.convert(column(Types.DATE, "DATE", 10), "2020-13-01"));
+        // a malformed time (stringToDuration throws a plain RuntimeException)
+        assertThrows(
+                RuntimeException.class,
+                () -> converter.convert(column(Types.TIME, "TIME", 0), "abc"));
+        // a malformed timestamp
+        assertThrows(
+                FlinkRuntimeException.class,
+                () -> converter.convert(column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP", 6), "2020-13-40 00:00:00"));
     }
 }

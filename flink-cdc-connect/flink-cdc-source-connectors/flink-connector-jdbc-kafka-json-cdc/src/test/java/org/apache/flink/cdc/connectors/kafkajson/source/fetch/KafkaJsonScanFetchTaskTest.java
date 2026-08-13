@@ -85,7 +85,7 @@ class KafkaJsonScanFetchTaskTest {
         rows.add(new Object[] {3L, "D"});
 
         // the change log already written by canal to Kafka: an insert at the low watermark, a DDL
-        // message, and an insert between the low and the high watermark (all replayed by backfill)
+        // message between the watermarks, and an insert at the high watermark (es == 3000 == HIGH)
         FakeKafkaConsumer consumer =
                 consumer(
                         new Object[] {1000L, insertMessage(1000, "1", "B")},
@@ -111,8 +111,8 @@ class KafkaJsonScanFetchTaskTest {
 
         new KafkaJsonScanFetchTask(split).execute(context);
 
-        List<SourceRecord> records = drain(context.getQueue(), 7);
-        assertEquals(7, records.size());
+        List<SourceRecord> records = drain(context.getQueue(), 6);
+        assertEquals(6, records.size());
 
         // 1. low watermark: the stream position captured before the snapshot read
         assertTrue(WatermarkEvent.isLowWatermarkEvent(records.get(0)));
@@ -126,14 +126,17 @@ class KafkaJsonScanFetchTaskTest {
         assertTrue(WatermarkEvent.isHighWatermarkEvent(records.get(3)));
         assertEquals(new KafkaJsonOffset(3000, -1, -1).getOffset(), records.get(3).sourceOffset());
 
-        // 5-6. the backfill replayed (LOW, HIGH]; the id=1 insert overrides the snapshot row of the
-        // same key via the base framework's output-buffer rewrite
+        // 5. the backfill replayed (LOW, HIGH): the id=1 insert (es == LOW) overrides the snapshot
+        // row of the same key via the base framework's output-buffer rewrite
         assertChangeRecord(records.get(4), 1L, "B");
-        assertChangeRecord(records.get(5), 2L, "C");
 
-        // 7. the end watermark finalizes the split
-        assertTrue(WatermarkEvent.isEndWatermarkEvent(records.get(6)));
-        assertEquals(new KafkaJsonOffset(3000, -1, -1).getOffset(), records.get(6).sourceOffset());
+        // the id=2 insert carries es == 3000 == the high watermark: this injected ending offset is
+        // (3000, -1, -1), not the sentinel watermark of queryCurrentOffset, so the record is ordered
+        // AFTER it (partition 0 > -1) and dropped by the bounded read — the stream phase emits it
+
+        // 6. the end watermark finalizes the split
+        assertTrue(WatermarkEvent.isEndWatermarkEvent(records.get(5)));
+        assertEquals(new KafkaJsonOffset(3000, -1, -1).getOffset(), records.get(5).sourceOffset());
 
         assertEquals(2, watermarkCalls.get());
     }

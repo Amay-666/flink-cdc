@@ -42,21 +42,25 @@ class KafkaJsonOffsetSupplierTest {
     private static final TopicPartition PARTITION_1 = new TopicPartition("t", 1);
 
     @Test
-    void testCurrentReturnsMinEventTimeAcrossPartitions() {
+    void testCurrentReturnsMaxEventTimeAcrossPartitionsOnSentinel() {
         // partition 0: 5 messages, last one at es=3000 / ts=3500
         // partition 1: 3 messages, last one at es=2500 / ts=2800
         KafkaJsonOffsetSupplier supplier =
                 new KafkaJsonOffsetSupplier(config(EventTime.ES), consumer(3000L, 2500L));
-        assertEquals(new KafkaJsonOffset(2500L, -1, -1L), supplier.current());
+        // the max of the partitions' newest event times, stamped on the sentinel partition/offset
+        // so that real messages with the same event time order BEFORE the watermark
+        assertEquals(
+                new KafkaJsonOffset(3000L, Integer.MAX_VALUE, Long.MAX_VALUE), supplier.current());
     }
 
     @Test
     void testCurrentWithTsMode() {
         // same es as the ES-mode test: partition 0 last es=3000 -> ts=3500, partition 1 last
-        // es=2500 -> ts=2800, so the min send time is 2800
+        // es=2500 -> ts=2800, so the max send time is 3500
         KafkaJsonOffsetSupplier supplier =
                 new KafkaJsonOffsetSupplier(config(EventTime.TS), consumer(3000L, 2500L));
-        assertEquals(new KafkaJsonOffset(2800L, -1, -1L), supplier.current());
+        assertEquals(
+                new KafkaJsonOffset(3500L, Integer.MAX_VALUE, Long.MAX_VALUE), supplier.current());
     }
 
     @Test

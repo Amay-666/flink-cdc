@@ -39,6 +39,19 @@ public class KafkaJsonMySqlContainer extends MySqlContainer {
         super(version);
     }
 
+    /**
+     * Pins the container's MySQL port (3306) to a fixed host port, so the database is reachable
+     * from Windows at a stable {@code localhost:&lt;hostPort&gt;}.
+     *
+     * <p>testcontainers 1.18.3 only exposes the fluent {@code withFixedExposedPort} on {@code
+     * FixedHostPortGenericContainer}; on {@link org.testcontainers.containers.GenericContainer} the
+     * equivalent {@code addFixedExposedPort} is protected, so it is surfaced through this subclass.
+     */
+    public KafkaJsonMySqlContainer withFixedExposedPort(int hostPort, int containerPort) {
+        addFixedExposedPort(hostPort, containerPort);
+        return this;
+    }
+
     @Override
     public String getJdbcUrl(String databaseName) {
         // The released MySqlContainer's getJdbcUrl() carries no query parameters (its

@@ -213,6 +213,58 @@ class KafkaJsonRecordConverterTest {
     }
 
     @Test
+    void testTidbWatermarkProducesNoDataRecords() {
+        // TiCDC (with enable-tidb-extension=true) emits these marker events: isDdl=false but
+        // type=TIDB_WATERMARK and data=null, so they must never be dispatched as DML rows.
+        KafkaJsonRecordConverter converter = converter(false);
+        List<SourceRecord> records =
+                converter.convert(
+                        KafkaJsonFlatMessageParser.parse(
+                                "{"
+                                        + "\"data\":null,\"database\":\"\",\"es\":1656559521880,"
+                                        + "\"id\":0,\"isDdl\":false,\"mysqlType\":null,"
+                                        + "\"old\":null,\"pkNames\":null,\"sql\":\"\","
+                                        + "\"sqlType\":null,\"table\":\"\","
+                                        + "\"ts\":1656559524120,\"type\":\"TIDB_WATERMARK\"}"),
+                        "test.users",
+                        0,
+                        100L);
+        assertTrue(records.isEmpty());
+    }
+
+    @Test
+    void testTidbDeleteWithNullOldUsesDataAsBefore() {
+        // TiCDC DELETE events put the deleted row in `data` and leave `old` null; the before image
+        // and the key must come from `data`. Both es and ts are present and reliable (the es/ts
+        // evidence P2-2 depends on).
+        KafkaJsonRecordConverter converter = converter(false);
+        List<SourceRecord> records =
+                converter.convert(
+                        KafkaJsonFlatMessageParser.parse(
+                                "{"
+                                        + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
+                                        + "\"database\":\"test\",\"es\":1656559521880,\"id\":3,"
+                                        + "\"isDdl\":false,"
+                                        + MYSQL_TYPE
+                                        + ",\"old\":null,\"pkNames\":[\"id\"],"
+                                        + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
+                                        + "\"ts\":1656559524120,\"type\":\"DELETE\"}"),
+                        "test.users",
+                        0,
+                        100L);
+        assertEquals(1, records.size());
+        SourceRecord record = records.get(0);
+        Struct value = (Struct) record.value();
+        assertEquals("d", value.getString("op"));
+        assertNull(value.getStruct("after"));
+        assertEquals("Alice", value.getStruct("before").getString("name"));
+        assertEquals(1L, ((Struct) record.key()).getInt64("id"));
+        Struct source = value.getStruct("source");
+        assertEquals(1656559521880L, source.getInt64("es"));
+        assertEquals(1656559524120L, source.getInt64("ts"));
+    }
+
+    @Test
     void testSchemaIsCachedAcrossMessages() {
         KafkaJsonRecordConverter converter = converter(false);
         String insert =

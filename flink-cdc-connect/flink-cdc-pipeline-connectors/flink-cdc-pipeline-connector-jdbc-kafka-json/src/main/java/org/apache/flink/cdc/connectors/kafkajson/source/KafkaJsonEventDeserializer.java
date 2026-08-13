@@ -31,8 +31,8 @@ import org.apache.flink.cdc.common.types.DataType;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.serializer.KafkaJsonEventTypeInfo;
 import org.apache.flink.cdc.connectors.kafkajson.source.handler.KafkaJsonSchemaChangeHandler;
+import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonColumnMeta;
 import org.apache.flink.cdc.connectors.kafkajson.utils.KafkaJsonSchemaUtils;
-import org.apache.flink.cdc.connectors.kafkajson.utils.KafkaJsonTypeUtils;
 import org.apache.flink.cdc.debezium.event.DebeziumEventDeserializationSchema;
 import org.apache.flink.cdc.debezium.event.DebeziumSchemaDataTypeInference;
 import org.apache.flink.cdc.debezium.history.FlinkJsonTableChangeSerializer;
@@ -265,7 +265,10 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
             if (oldColumn != null) {
                 usedOldColumns.add(newColumn.name());
                 if (!sameColumnType(oldColumn, newColumn)) {
-                    alteredColumns.put(newColumn.name(), KafkaJsonTypeUtils.fromDbzColumn(newColumn));
+                    alteredColumns.put(
+                            newColumn.name(),
+                            KafkaJsonColumnMeta.fromColumn(newColumn)
+                                    .toCdcDataType(newColumn.isOptional()));
                 }
                 continue;
             }
@@ -329,6 +332,8 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
 
     private static boolean sameColumnType(
             io.debezium.relational.Column a, io.debezium.relational.Column b) {
-        return KafkaJsonTypeUtils.fromDbzColumn(a).equals(KafkaJsonTypeUtils.fromDbzColumn(b));
+        return KafkaJsonColumnMeta.fromColumn(a)
+                .toCdcDataType(a.isOptional())
+                .equals(KafkaJsonColumnMeta.fromColumn(b).toCdcDataType(b.isOptional()));
     }
 }

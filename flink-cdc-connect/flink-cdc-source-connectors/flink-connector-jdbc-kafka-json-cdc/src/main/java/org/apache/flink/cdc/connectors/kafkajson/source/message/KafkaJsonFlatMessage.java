@@ -50,7 +50,11 @@ public class KafkaJsonFlatMessage implements Serializable {
 
     @JsonProperty private boolean isDdl;
 
-    /** One of INSERT / UPDATE / DELETE / CREATE / ALTER / ERASE / QUERY / TRUNCATE / GTID / ... */
+    /**
+     * One of INSERT / UPDATE / DELETE / CREATE / ALTER / ERASE / QUERY / TRUNCATE / GTID / ...
+     * plus {@code TIDB_WATERMARK} for TiCDC's marker events (not DML, see {@code
+     * KafkaJsonRecordConverter}).
+     */
     @JsonProperty private String type;
 
     /** The binlog execution time of the event (millis). */

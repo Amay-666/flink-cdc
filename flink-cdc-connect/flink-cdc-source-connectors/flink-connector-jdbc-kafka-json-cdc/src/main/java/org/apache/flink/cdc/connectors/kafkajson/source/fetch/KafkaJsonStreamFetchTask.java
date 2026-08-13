@@ -47,8 +47,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The stream fetch task of the Canal source: consumes the change-log messages written by canal to
@@ -63,7 +65,16 @@ import java.util.Map;
  *
  * <p>When the split is a bounded read (its ending offset is a real event time rather than {@link
  * KafkaJsonOffset#NO_STOPPING_OFFSET}) the task dispatches the {@link WatermarkKind#END} watermark once
- * it has consumed past the ending offset, which finalizes the incremental snapshot of the split.
+ * every partition has delivered a message at-or-after the ending offset (or is drained to its end),
+ * which finalizes the incremental snapshot of the split. Messages <em>strictly after</em> the ending
+ * offset are not emitted: the stream split that follows reads only event times strictly after its
+ * starting offset (its high-watermark watermark), so emitting them here would duplicate the
+ * stream-phase emission. The ending offset itself is <em>not</em> after the ending offset (the
+ * watermark carries the sentinel partition/offset, see {@link KafkaJsonKafkaOffsetUtils}) and is
+ * therefore backfilled exactly once. Messages <em>strictly before</em> the starting offset — the
+ * split's low watermark — are pre-snapshot changes whose effect the JDBC read has already captured
+ * (possibly superseded by a later change), and are dropped so they cannot override the snapshot with
+ * a stale value.
  *
  * <p>The position of the most recent consumed message is kept as {@link KafkaJsonOffset} and committed
  * by {@link KafkaJsonDialect#notifyCheckpointComplete(long, Offset)}; the Kafka group offset itself is
@@ -91,6 +102,13 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
     private volatile KafkaJsonOffset currentOffset;
 
     private volatile KafkaJsonOffset lastCommittedOffset;
+
+    /** Partitions that have already delivered a message at-or-after the ending offset (bounded reads). */
+    private final Set<TopicPartition> partitionsPastEnding = new HashSet<>();
+    /** The partitions the consumer was assigned to (populated by {@link #assignAndSeek}). */
+    private volatile List<TopicPartition> assignedPartitions = new ArrayList<>();
+    /** Partition log ends captured when the bounded read starts; a drained partition counts as done. */
+    private volatile Map<TopicPartition, Long> partitionEndOffsets = new HashMap<>();
 
     /** Applies the DDL messages to the shared schema; built once per execute. */
     private volatile KafkaJsonSchemaChangeHandler schemaChangeHandler;
@@ -128,6 +146,12 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
         try {
             this.consumer = sourceFetchContext.getKafkaConsumer();
             assignAndSeek(consumer, sourceConfig);
+            if (isBoundedRead()) {
+                // capture the partition log ends once the consumer is positioned: the bounded read is
+                // over when every partition has delivered a message at-or-after the ending offset or
+                // has been drained to its end (e.g. an empty partition, which has nothing to read)
+                this.partitionEndOffsets = consumer.endOffsets(this.assignedPartitions);
+            }
             while (taskRunning && !stopped) {
                 ConsumerRecords<String, String> records;
                 try {
@@ -157,7 +181,8 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
 
     /**
      * Consumes one poll batch: parses each message, converts it into the data records and enqueues
-     * them. Returns {@code true} when the last consumed message reached the ending offset.
+     * them. Returns {@code true} when the bounded read is over — that is, every assigned partition
+     * has delivered a message at-or-after the ending offset, or has been drained to its end.
      */
     private boolean processRecords(
             KafkaJsonSourceFetchTaskContext sourceFetchContext, ConsumerRecords<String, String> records)
@@ -183,6 +208,26 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                             record.partition(),
                             record.offset());
 
+            if (isBoundedRead()) {
+                if (lastOffset.getEventTime() < startingOffset.getEventTime()) {
+                    // Below the low watermark: a pre-snapshot change whose effect the JDBC read has
+                    // already captured (the snapshot may even reflect a later change that supersedes
+                    // it). Replaying it here could override the snapshot row with a stale value, so
+                    // it is dropped; the low watermark is the inclusive lower bound of the backfill.
+                    continue;
+                }
+                if (lastOffset.isAfter(endingOffset)) {
+                    // A message strictly after the ending offset belongs to the stream phase, which
+                    // reads only event times strictly after its starting offset, so emitting it here
+                    // would duplicate the stream-phase emission. Drop it and remember that this
+                    // partition has crossed the ending offset. The boundary message (event time equal
+                    // to the ending offset; the watermark carries the sentinel partition/offset, so
+                    // isAfter is false) is backfilled exactly once by this bounded read.
+                    partitionsPastEnding.add(new TopicPartition(record.topic(), record.partition()));
+                    continue;
+                }
+            }
+
             if (message.isDdl()) {
                 // DDL: apply the schema change to the shared schema and (when configured) emit the
                 // schema-change record; no data record is produced
@@ -204,7 +249,21 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
         if (lastOffset != null) {
             currentOffset = lastOffset;
         }
-        return currentOffset.getEventTime() >= endingOffset.getEventTime();
+        if (!isBoundedRead()) {
+            // unbounded stream read: never finishes on its own
+            return false;
+        }
+        // Only when every partition has crossed the ending offset (or is drained to its end) is the
+        // bounded read complete. Terminating on the first crossing record would silently drop the
+        // still-unread messages of a lagging partition, so the loop keeps polling until they arrive.
+        for (TopicPartition partition : assignedPartitions) {
+            if (!partitionsPastEnding.contains(partition)
+                    && consumer.position(partition)
+                            < partitionEndOffsets.getOrDefault(partition, 0L)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** Routes a DDL message to the schema-change pipeline (parser + shared-schema update + record). */
@@ -239,6 +298,7 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
             throw new FlinkRuntimeException(
                     "No Kafka partition found for topics: " + sourceConfig.getKafkaTopics());
         }
+        this.assignedPartitions = partitions;
         consumer.assign(partitions);
 
         if (startingOffset.getEventTime() > 0) {

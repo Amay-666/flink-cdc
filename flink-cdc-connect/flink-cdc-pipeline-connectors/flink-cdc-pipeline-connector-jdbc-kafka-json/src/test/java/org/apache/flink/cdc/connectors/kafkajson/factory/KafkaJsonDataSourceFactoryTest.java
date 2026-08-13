@@ -107,6 +107,16 @@ public class KafkaJsonDataSourceFactoryTest {
     }
 
     @Test
+    public void testDatabaseTypeOptionIsRegistered() {
+        // DATABASE_TYPE (scan.database.type) is read by createDataSource for the TiDB snapshot
+        // boundary (TSO); it must be in optionalOptions() or FactoryHelper.validateExcept rejects
+        // it as unsupported and createDataSource fails for users setting scan.database.type=tidb.
+        assertThat(factory.optionalOptions())
+                .extracting(ConfigOption::key)
+                .contains("scan.database.type");
+    }
+
+    @Test
     public void testInvalidStartupMode() {
         Map<String, String> options = baseOptions();
         options.put(SCAN_STARTUP_MODE.key(), "specific-offset");

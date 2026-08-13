@@ -27,13 +27,17 @@ import org.apache.flink.cdc.connectors.base.source.meta.offset.Offset;
 import org.apache.flink.cdc.connectors.base.source.meta.split.SourceSplitBase;
 import org.apache.flink.cdc.connectors.base.source.reader.external.FetchTask;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.DatabaseType;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
 import org.apache.flink.cdc.connectors.kafkajson.source.connection.KafkaJsonConnectionPoolFactory;
+import org.apache.flink.cdc.connectors.kafkajson.source.connection.KafkaJsonJdbcConnection;
 import org.apache.flink.cdc.connectors.kafkajson.source.fetch.KafkaJsonScanFetchTask;
 import org.apache.flink.cdc.connectors.kafkajson.source.fetch.KafkaJsonSourceFetchTaskContext;
 import org.apache.flink.cdc.connectors.kafkajson.source.fetch.KafkaJsonStreamFetchTask;
 import org.apache.flink.cdc.connectors.kafkajson.source.kafka.KafkaJsonKafkaOffsetUtils;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTableDiscoveryUtils;
+import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTidbOffsetUtils;
 import org.apache.flink.util.FlinkRuntimeException;
 
 import io.debezium.connector.mysql.MySqlConnectorConfig;
@@ -41,6 +45,8 @@ import io.debezium.jdbc.JdbcConnection;
 import io.debezium.relational.TableId;
 import io.debezium.relational.Tables;
 import io.debezium.relational.history.TableChanges.TableChange;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -56,16 +62,26 @@ import java.util.function.Supplier;
  * <p>The snapshot data is read directly from MySQL through JDBC (using the incremental snapshot
  * algorithm of flink-cdc-base), while the change-log data is consumed from Kafka where canal has
  * written the binlog change events. The {@code displayCurrentOffset} therefore queries the current
- * Kafka position instead of the binlog position.
+ * Kafka position instead of the binlog position — except for TiDB, where the current TSO is queried
+ * from the database (see {@link KafkaJsonTidbOffsetUtils}).
  */
 public class KafkaJsonDialect implements JdbcDataSourceDialect {
 
     private static final long serialVersionUID = 1L;
 
+    private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonDialect.class);
+
     private final KafkaJsonSourceConfig sourceConfig;
-    private transient KafkaJsonSchema schema;
-    private transient Tables.TableFilter filters;
+
+    // The dialect is a single instance shared by every subtask (and the split enumerator), so these
+    // lazily-built fields may be initialized and used from several threads (e.g. the enumerator's
+    // chunk splitter and the stream-split reader both call queryTableSchema). They are volatile and
+    // built under a double-checked lock; the cached KafkaJsonSchema itself serializes its mutations
+    // (see KafkaJsonSchema#getTableSchema).
+    private transient volatile KafkaJsonSchema schema;
+    private transient volatile Tables.TableFilter filters;
     @Nullable private transient Supplier<KafkaJsonOffset> currentOffsetSupplier;
+    @Nullable private transient Supplier<KafkaJsonOffset> tidbOffsetSupplier;
     @Nullable private KafkaJsonStreamFetchTask streamFetchTask;
 
     public KafkaJsonDialect(KafkaJsonSourceConfig sourceConfig) {
@@ -81,8 +97,10 @@ public class KafkaJsonDialect implements JdbcDataSourceDialect {
     public JdbcConnection openJdbcConnection(JdbcSourceConfig sourceConfig) {
         KafkaJsonSourceConfig canalSourceConfig = (KafkaJsonSourceConfig) sourceConfig;
         MySqlConnectorConfig dbzConfig = canalSourceConfig.getDbzConnectorConfig();
-        // MySQL identifiers are quoted with backticks
-        return new JdbcConnection(
+        // MySQL identifiers are quoted with backticks. The KafkaJsonJdbcConnection drops the column
+        // default value that the MySQL driver reports as a literal (e.g. `0x` for a BINARY default);
+        // feeding it into Debezium's TableSchemaBuilder fails the snapshot schema read.
+        return new KafkaJsonJdbcConnection(
                 dbzConfig.getJdbcConfig(),
                 new JdbcConnectionFactory(sourceConfig, getPooledDataSourceFactory()),
                 "`",
@@ -94,13 +112,37 @@ public class KafkaJsonDialect implements JdbcDataSourceDialect {
         if (currentOffsetSupplier != null) {
             return currentOffsetSupplier.get();
         }
-        return KafkaJsonKafkaOffsetUtils.queryCurrentOffset((KafkaJsonSourceConfig) sourceConfig);
+        KafkaJsonSourceConfig canalSourceConfig = (KafkaJsonSourceConfig) sourceConfig;
+        // For TiDB the boundary is queried from the database instead of Kafka: the current TSO is an
+        // authoritative commit-clock value (an upper bound on the `es` of every change already visible
+        // to the JDBC read), whereas the Kafka-sampled boundary trails the database by the publish lag
+        // and is empty before the first change is published. TSO is only a valid boundary for
+        // `es` (commit time); with `ts` the boundary stays on the Kafka-sampled value.
+        if (canalSourceConfig.getDatabaseType() == DatabaseType.TIDB
+                && canalSourceConfig.getEventTime() == EventTime.ES) {
+            KafkaJsonOffset tidbOffset =
+                    tidbOffsetSupplier != null
+                            ? tidbOffsetSupplier.get()
+                            : KafkaJsonTidbOffsetUtils.queryCurrentOffset(canalSourceConfig);
+            if (tidbOffset != null) {
+                return tidbOffset;
+            }
+            LOG.warn(
+                    "TiDB current TSO boundary is unavailable; falling back to the Kafka-sampled boundary");
+        }
+        return KafkaJsonKafkaOffsetUtils.queryCurrentOffset(canalSourceConfig);
     }
 
     /** Injects a supplier of the current stream offset (used in unit tests). */
     @VisibleForTesting
     public void setCurrentOffsetSupplierForTesting(Supplier<KafkaJsonOffset> supplier) {
         this.currentOffsetSupplier = supplier;
+    }
+
+    /** Injects a supplier of the current TiDB TSO boundary (used in unit tests). */
+    @VisibleForTesting
+    public void setTidbOffsetSupplierForTesting(Supplier<KafkaJsonOffset> supplier) {
+        this.tidbOffsetSupplier = supplier;
     }
 
     @Override
@@ -149,10 +191,19 @@ public class KafkaJsonDialect implements JdbcDataSourceDialect {
 
     @Override
     public TableChange queryTableSchema(JdbcConnection jdbc, TableId tableId) {
-        if (schema == null) {
-            schema = new KafkaJsonSchema(sourceConfig);
+        KafkaJsonSchema localSchema = schema;
+        if (localSchema == null) {
+            synchronized (this) {
+                localSchema = schema;
+                if (localSchema == null) {
+                    localSchema = new KafkaJsonSchema(sourceConfig);
+                    schema = localSchema;
+                }
+            }
         }
-        return schema.getTableSchema(jdbc, tableId);
+        // getTableSchema is synchronized on the schema, so concurrent chunk-splitting (enumerator
+        // thread) and stream-split schema discovery (reader thread) never corrupt the cached map
+        return localSchema.getTableSchema(jdbc, tableId);
     }
 
     @Override
@@ -179,9 +230,16 @@ public class KafkaJsonDialect implements JdbcDataSourceDialect {
 
     @Override
     public boolean isIncludeDataCollection(JdbcSourceConfig sourceConfig, TableId tableId) {
-        if (filters == null) {
-            this.filters = sourceConfig.getTableFilters().dataCollectionFilter();
+        Tables.TableFilter filter = filters;
+        if (filter == null) {
+            synchronized (this) {
+                filter = filters;
+                if (filter == null) {
+                    filter = sourceConfig.getTableFilters().dataCollectionFilter();
+                    filters = filter;
+                }
+            }
         }
-        return filters.isIncluded(tableId);
+        return filter.isIncluded(tableId);
     }
 }

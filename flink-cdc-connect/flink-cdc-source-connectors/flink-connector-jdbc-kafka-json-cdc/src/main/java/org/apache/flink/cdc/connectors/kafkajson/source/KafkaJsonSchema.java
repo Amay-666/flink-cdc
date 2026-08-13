@@ -76,8 +76,16 @@ public class KafkaJsonSchema extends io.debezium.relational.RelationalDatabaseSc
         this.recordFactory = recordFactory;
     }
 
-    /** Returns the {@link TableChange} of the given table, reading it from MySQL if not cached. */
-    public TableChange getTableSchema(JdbcConnection jdbc, TableId tableId) {
+    /**
+     * Returns the {@link TableChange} of the given table, reading it from MySQL if not cached.
+     *
+     * <p>This is the only mutation entry point of the shared schema held by {@code KafkaJsonDialect}
+     * (a single instance used by every subtask thread): the split enumerator's chunk splitter and
+     * the stream-split reader both resolve table schemas here. The method is synchronized so
+     * concurrent calls never corrupt the {@link #schemasByTableId} cache. Per-subtask schemas
+     * (owned by {@code KafkaJsonSourceFetchTaskContext}) are single-threaded and unaffected.
+     */
+    public synchronized TableChange getTableSchema(JdbcConnection jdbc, TableId tableId) {
         // read schema from cache first
         if (!schemasByTableId.containsKey(tableId)) {
             try {
@@ -90,12 +98,12 @@ public class KafkaJsonSchema extends io.debezium.relational.RelationalDatabaseSc
     }
 
     /** Registers (or replaces) the given table in the underlying record factory. */
-    public void registerTable(Table table) {
+    public synchronized void registerTable(Table table) {
         recordFactory.registerTable(table);
     }
 
     /** Removes the given table (e.g. on a {@code DROP TABLE} DDL). */
-    public void removeTable(TableId tableId) {
+    public synchronized void removeTable(TableId tableId) {
         schemasByTableId.remove(tableId);
         recordFactory.removeTable(tableId);
     }

@@ -40,12 +40,18 @@ import java.util.Properties;
 /**
  * Utilities to query the current change-log position from Kafka.
  *
- * <p>Unlike a binlog position, there is no single "current offset" of the change log stream: each
- * Kafka partition has its own position. We therefore define the current position as the <b>minimum
- * message event time across all partitions</b>, which is a conservative lower bound: any change
- * generated before that event time has certainly been written to Kafka, while changes generated
- * after it will be read later in the stream phase. This keeps the full-&gt;incremental switch
- * lossless (at the cost of possible duplicate replay, which is deduplicated by the high watermark).
+ * <p>Unlike a binlog position, there is no single "current offset" of the change-log stream: each
+ * Kafka partition has its own position. We therefore define the current position as the <b>maximum
+ * message event time across all partitions' newest messages</b>, stamped onto a sentinel
+ * partition/offset ({@link Integer#MAX_VALUE}, {@link Long#MAX_VALUE}). Because a real message's
+ * partition is always smaller than the sentinel, a message whose event time equals the watermark is
+ * ordered <em>before</em> it: the bounded backfill of a snapshot split owns the boundary message
+ * (inclusive at the high watermark) and the stream phase emits only event times strictly after the
+ * watermark. A change committed while the snapshot split's JDBC read is running therefore has its
+ * event time inside the split's {@code (low, high]} backfill window, is replayed exactly once by the
+ * backfill, and is never re-emitted by the stream — the full-&gt;incremental switch is exactly-once
+ * for those changes. (A minimum event time, by contrast, would leave such changes on the stream side
+ * while the JDBC read has already captured their effect, duplicating them.)
  */
 public class KafkaJsonKafkaOffsetUtils {
 
@@ -54,9 +60,9 @@ public class KafkaJsonKafkaOffsetUtils {
     private KafkaJsonKafkaOffsetUtils() {}
 
     /**
-     * Returns the current position of the change-log stream: the minimum message event time across
-     * all configured topics and partitions. Returns {@link KafkaJsonOffset#INITIAL_OFFSET} when no
-     * message is available yet.
+     * Returns the current position of the change-log stream: the maximum message event time across
+     * all configured topics and partitions, stamped on the sentinel partition/offset (see the class
+     * javadoc). Returns {@link KafkaJsonOffset#INITIAL_OFFSET} when no message is available yet.
      */
     public static KafkaJsonOffset queryCurrentOffset(KafkaJsonSourceConfig sourceConfig) {
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(buildConsumerProps(sourceConfig))) {
@@ -80,7 +86,7 @@ public class KafkaJsonKafkaOffsetUtils {
         }
 
         Map<TopicPartition, Long> endOffsets = consumer.endOffsets(partitions);
-        long minEventTime = Long.MAX_VALUE;
+        long maxEventTime = Long.MIN_VALUE;
         boolean found = false;
         for (TopicPartition partition : partitions) {
             Long endOffset = endOffsets.get(partition);
@@ -96,7 +102,7 @@ public class KafkaJsonKafkaOffsetUtils {
                 if (record.offset() == lastOffset) {
                     long et = extractEventTime(record.value(), eventTime);
                     if (et >= 0) {
-                        minEventTime = Math.min(minEventTime, et);
+                        maxEventTime = Math.max(maxEventTime, et);
                         found = true;
                     }
                 }
@@ -105,8 +111,11 @@ public class KafkaJsonKafkaOffsetUtils {
         if (!found) {
             return KafkaJsonOffset.INITIAL_OFFSET;
         }
-        // the position is not bound to any specific partition
-        return new KafkaJsonOffset(minEventTime, -1, -1L);
+        // The watermark is the maximum event time of the partitions' newest messages, stamped onto a
+        // sentinel partition/offset. Real messages (partition < Integer.MAX_VALUE) with the same
+        // event time therefore order BEFORE the watermark: the bounded backfill owns them (inclusive
+        // at the high watermark) and the stream phase emits only event times strictly after it.
+        return new KafkaJsonOffset(maxEventTime, Integer.MAX_VALUE, Long.MAX_VALUE);
     }
 
     /**

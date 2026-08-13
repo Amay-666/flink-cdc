@@ -22,6 +22,7 @@ import org.apache.flink.cdc.common.schema.Column;
 import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
+import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonColumnMeta;
 
 import io.debezium.jdbc.JdbcConnection;
 import io.debezium.relational.Table;
@@ -140,7 +141,9 @@ public class KafkaJsonSchemaUtils {
 
     public static Column toColumn(io.debezium.relational.Column column) {
         return Column.physicalColumn(
-                column.name(), KafkaJsonTypeUtils.fromDbzColumn(column), column.comment());
+                column.name(),
+                KafkaJsonColumnMeta.fromColumn(column).toCdcDataType(column.isOptional()),
+                column.comment());
     }
 
     public static io.debezium.relational.TableId toDbzTableId(TableId tableId) {
