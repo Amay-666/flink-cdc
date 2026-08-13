@@ -74,8 +74,10 @@ class KafkaJsonStreamFetchTaskTest {
     void testConsumesConvertsAndTracksOffset() throws Exception {
         FakeKafkaConsumer consumer = consumer(INSERT, DDL, UPDATE);
         KafkaJsonSourceFetchTaskContext context = context(consumer);
+        // the stream reads strictly after its starting offset, so the boundary is below the first
+        // message (es 3000); the stream split must emit every message in this test
         StreamSplit split =
-                streamSplit(new KafkaJsonOffset(3000, 0, 0), KafkaJsonOffset.NO_STOPPING_OFFSET);
+                streamSplit(new KafkaJsonOffset(2999, -1, -1), KafkaJsonOffset.NO_STOPPING_OFFSET);
         KafkaJsonStreamFetchTask task = new KafkaJsonStreamFetchTask(split);
         context.configure(split);
 
@@ -116,7 +118,7 @@ class KafkaJsonStreamFetchTaskTest {
         FakeKafkaConsumer consumer = consumer(INSERT, DDL, UPDATE);
         KafkaJsonSourceFetchTaskContext context = context(consumer);
         StreamSplit split =
-                streamSplit(new KafkaJsonOffset(3000, 0, 0), new KafkaJsonOffset(3005, -1, -1));
+                backfillSplit(new KafkaJsonOffset(3000, 0, 0), new KafkaJsonOffset(3005, -1, -1));
         KafkaJsonStreamFetchTask task = new KafkaJsonStreamFetchTask(split);
         context.configure(split);
 
@@ -152,7 +154,7 @@ class KafkaJsonStreamFetchTaskTest {
         FakeKafkaConsumer consumer = new FakeKafkaConsumer(log, null, 1);
         KafkaJsonSourceFetchTaskContext context = context(consumer);
         StreamSplit split =
-                streamSplit(new KafkaJsonOffset(3000, -1, -1), new KafkaJsonOffset(3500, -1, -1));
+                backfillSplit(new KafkaJsonOffset(3000, -1, -1), new KafkaJsonOffset(3500, -1, -1));
         KafkaJsonStreamFetchTask task = new KafkaJsonStreamFetchTask(split);
         context.configure(split);
 
@@ -183,7 +185,7 @@ class KafkaJsonStreamFetchTaskTest {
         FakeKafkaConsumer consumer = consumer(INSERT, UPDATE); // es 3000 then es 3005
         KafkaJsonSourceFetchTaskContext context = context(consumer);
         StreamSplit split =
-                streamSplit(
+                backfillSplit(
                         new KafkaJsonOffset(3000, -1, -1),
                         new KafkaJsonOffset(3005, Integer.MAX_VALUE, Long.MAX_VALUE));
         KafkaJsonStreamFetchTask task = new KafkaJsonStreamFetchTask(split);
@@ -219,7 +221,7 @@ class KafkaJsonStreamFetchTaskTest {
         FakeKafkaConsumer consumer = new FakeKafkaConsumer(log, null);
         KafkaJsonSourceFetchTaskContext context = context(consumer);
         StreamSplit split =
-                streamSplit(
+                backfillSplit(
                         new KafkaJsonOffset(3000, -1, -1),
                         new KafkaJsonOffset(3500, Integer.MAX_VALUE, Long.MAX_VALUE));
         KafkaJsonStreamFetchTask task = new KafkaJsonStreamFetchTask(split);
@@ -238,6 +240,42 @@ class KafkaJsonStreamFetchTaskTest {
         assertEquals(new HashSet<>(Arrays.asList("Bob", "Carol")), names);
         assertTrue(WatermarkEvent.isEndWatermarkEvent(records.get(2)));
         assertFalse(task.isRunning());
+    }
+
+    @Test
+    void testStreamSplitDropsBoundaryMessageAtStartingOffset() throws Exception {
+        // F1 regression (see docs/BOUNDARY_AUDIT.md): the newest message at the moment the snapshot
+        // split finished carries an event time equal to the split's high watermark, so its event
+        // time equals the stream split's starting offset (the high-watermark sentinel). The bounded
+        // backfill emits it exactly once; the base pure-stream threshold is inclusive (isAtOrAfter),
+        // so without the strict lower bound the stream re-emits it a second time. The stream split
+        // reads strictly after its starting offset: the boundary INSERT (es == 3000) is consumed
+        // (the read position advances) but not re-emitted, while the UPDATE strictly after it is.
+        FakeKafkaConsumer consumer = consumer(INSERT, UPDATE); // es 3000 (boundary) then es 3005
+        KafkaJsonSourceFetchTaskContext context = context(consumer);
+        StreamSplit split =
+                streamSplit(
+                        new KafkaJsonOffset(3000, Integer.MAX_VALUE, Long.MAX_VALUE),
+                        KafkaJsonOffset.NO_STOPPING_OFFSET);
+        KafkaJsonStreamFetchTask task = new KafkaJsonStreamFetchTask(split);
+        context.configure(split);
+
+        Thread thread = new Thread(() -> runQuietly(task, context));
+        thread.setDaemon(true);
+        thread.start();
+        try {
+            List<SourceRecord> records = drain(context.getQueue(), 1);
+            assertEquals(1, records.size(), "boundary INSERT at es == starting offset is dropped");
+            Struct update = (Struct) records.get(0).value();
+            assertEquals("u", update.getString(Envelope.FieldName.OPERATION));
+            assertEquals("Bob", update.getStruct(Envelope.FieldName.AFTER).getString("name"));
+            // the dropped boundary message still advanced the read position and offset tracking
+            assertEquals(new KafkaJsonOffset(3005, 0, 1), task.getCurrentOffset());
+            assertEquals(2L, consumer.positionOf(PARTITION));
+        } finally {
+            task.close();
+            thread.join(5000);
+        }
     }
 
     @Test
@@ -301,6 +339,22 @@ class KafkaJsonStreamFetchTaskTest {
     private static StreamSplit streamSplit(KafkaJsonOffset startingOffset, KafkaJsonOffset endingOffset) {
         return new StreamSplit(
                 StreamSplit.STREAM_SPLIT_ID,
+                startingOffset,
+                endingOffset,
+                new ArrayList<>(),
+                new HashMap<>(),
+                0);
+    }
+
+    /**
+     * Builds a backfill split: the bounded re-read of a finished snapshot split, whose splitId is
+     * the snapshot split id rather than {@link StreamSplit#STREAM_SPLIT_ID}. Unlike the stream
+     * split, the backfill keeps inclusive bounds — it must emit the boundary message whose event
+     * time equals the ending offset — so the stream-split exclusive lower bound must not apply.
+     */
+    private static StreamSplit backfillSplit(KafkaJsonOffset startingOffset, KafkaJsonOffset endingOffset) {
+        return new StreamSplit(
+                "snapshot-split-0",
                 startingOffset,
                 endingOffset,
                 new ArrayList<>(),

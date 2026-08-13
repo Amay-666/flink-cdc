@@ -208,6 +208,20 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                             record.partition(),
                             record.offset());
 
+            if (StreamSplit.STREAM_SPLIT_ID.equals(split.splitId())
+                    && lastOffset.isAtOrBefore(startingOffset)) {
+                // The stream split reads strictly after its starting offset. The base incremental
+                // snapshot treats the stream phase as at-or-after its high watermark (inclusive) via
+                // IncrementalSourceStreamFetcher#hasEnterPureStreamPhase, so a message whose event
+                // time equals the stream starting offset (the boundary message, es == HIGH) would
+                // otherwise be re-emitted here on top of the bounded backfill — the F1 double. Every
+                // message at-or-before the starting offset is already covered by the bounded backfill
+                // ([LOW, HIGH], inclusive) or by the JDBC snapshot (es < LOW), so it is dropped, not
+                // emitted, on the stream path. The backfill split (whose splitId is the snapshot
+                // split id, not STREAM_SPLIT_ID) keeps its inclusive bounds and is untouched here.
+                continue;
+            }
+
             if (isBoundedRead()) {
                 if (lastOffset.getEventTime() < startingOffset.getEventTime()) {
                     // Below the low watermark: a pre-snapshot change whose effect the JDBC read has
