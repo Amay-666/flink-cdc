@@ -18,6 +18,7 @@
 package org.apache.flink.cdc.connectors.kafkajson.source.fetch;
 
 import org.apache.flink.cdc.connectors.base.source.meta.offset.Offset;
+import org.apache.flink.cdc.connectors.base.source.meta.split.FinishedSnapshotSplitInfo;
 import org.apache.flink.cdc.connectors.base.source.meta.split.SourceSplitBase;
 import org.apache.flink.cdc.connectors.base.source.meta.split.StreamSplit;
 import org.apache.flink.cdc.connectors.base.source.meta.wartermark.WatermarkKind;
@@ -31,6 +32,7 @@ import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.util.FlinkRuntimeException;
 
 import io.debezium.pipeline.DataChangeEvent;
+import io.debezium.relational.TableId;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -76,6 +78,15 @@ import java.util.Set;
  * (possibly superseded by a later change), and are dropped so they cannot override the snapshot with
  * a stale value.
  *
+ * <p>In the unbounded stream phase (the {@code stream-split}) the task enforces the strict exclusive
+ * lower bound: every message at-or-before the starting offset — the minimum high watermark over the
+ * finished snapshot splits — is dropped, because the bounded backfill of its owning snapshot split
+ * has already emitted it or the JDBC snapshot already reflects it. A message strictly after that
+ * lower bound but still at-or-before the high watermark of the finished snapshot split that owns its
+ * primary key is dropped as well (the multi-split residual). Both guards keep the stream phase from
+ * re-emitting a change the incremental snapshot has already delivered once the base pure-stream
+ * filter is bypassed; see docs/BOUNDARY_AUDIT.md.
+ *
  * <p>The position of the most recent consumed message is kept as {@link KafkaJsonOffset} and committed
  * by {@link KafkaJsonDialect#notifyCheckpointComplete(long, Offset)}; the Kafka group offset itself is
  * left untouched because exactly-once recovery relies on the Flink checkpointed state.
@@ -113,6 +124,15 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
     /** Applies the DDL messages to the shared schema; built once per execute. */
     private volatile KafkaJsonSchemaChangeHandler schemaChangeHandler;
 
+    /**
+     * The finished snapshot splits of the stream split, indexed by table. Each split carries the
+     * primary-key range and the high watermark of the bounded backfill that already replayed it, so
+     * the stream phase can drop in-range records whose event time is still at-or-before that high
+     * watermark (the {@code finishedSnapshotSplitInfos} of the stream split). Empty for backfill
+     * splits, whose splitId is the snapshot split id rather than {@link StreamSplit#STREAM_SPLIT_ID}.
+     */
+    private final Map<TableId, List<FinishedSnapshotSplitInfo>> finishedSplitsByTable = new HashMap<>();
+
     public KafkaJsonStreamFetchTask(StreamSplit split) {
         this.split = split;
         this.startingOffset =
@@ -124,6 +144,11 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                         ? KafkaJsonOffset.NO_STOPPING_OFFSET
                         : (KafkaJsonOffset) split.getEndingOffset();
         this.currentOffset = startingOffset;
+        for (FinishedSnapshotSplitInfo finishedSplit : split.getFinishedSnapshotSplitInfos()) {
+            finishedSplitsByTable
+                    .computeIfAbsent(finishedSplit.getTableId(), ignored -> new ArrayList<>())
+                    .add(finishedSplit);
+        }
     }
 
     @Override
@@ -210,12 +235,14 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
 
             if (StreamSplit.STREAM_SPLIT_ID.equals(split.splitId())
                     && lastOffset.isAtOrBefore(startingOffset)) {
-                // The stream split reads strictly after its starting offset. The base incremental
-                // snapshot treats the stream phase as at-or-after its high watermark (inclusive) via
-                // IncrementalSourceStreamFetcher#hasEnterPureStreamPhase, so a message whose event
-                // time equals the stream starting offset (the boundary message, es == HIGH) would
-                // otherwise be re-emitted here on top of the bounded backfill — the F1 double. Every
-                // message at-or-before the starting offset is already covered by the bounded backfill
+                // The stream split reads strictly after its starting offset (the minimum high
+                // watermark over the finished snapshot splits). Once the base
+                // IncrementalSourceStreamFetcher#hasEnterPureStreamPhase fires — the first record at
+                // or after a table's max high watermark — the per-split shouldEmit filter is
+                // short-circuited, so an already-backfilled message (es <= its owning split's high
+                // watermark) that is read after that trigger would otherwise be re-emitted here on
+                // top of the bounded backfill (the F4 double, see docs/BOUNDARY_AUDIT.md). Every
+                // message at-or-before the starting offset is covered by the bounded backfill
                 // ([LOW, HIGH], inclusive) or by the JDBC snapshot (es < LOW), so it is dropped, not
                 // emitted, on the stream path. The backfill split (whose splitId is the snapshot
                 // split id, not STREAM_SPLIT_ID) keeps its inclusive bounds and is untouched here.
@@ -257,6 +284,19 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                                     record.partition(),
                                     record.offset());
             for (SourceRecord sourceRecord : sourceRecords) {
+                if (StreamSplit.STREAM_SPLIT_ID.equals(split.splitId())
+                        && isCoveredByFinishedSnapshotSplit(
+                                sourceFetchContext, sourceRecord, lastOffset)) {
+                    // The F4 residual in a multi-split stream: a message whose event time lies in
+                    // (startingOffset, owning split's high watermark] — strictly after the stream
+                    // starting offset but still at-or-before the high watermark of the finished
+                    // snapshot split that owns its primary key — was already emitted by that split's
+                    // bounded backfill. Once the pure-stream phase fires for the table, the base
+                    // filter no longer drops it, so this pre-filter does, exactly as the base
+                    // per-split shouldEmit would in single-partition order (see docs/BOUNDARY_AUDIT.md).
+                    // A genuinely new change (es after the owning high watermark) still passes through.
+                    continue;
+                }
                 sourceFetchContext.getQueue().enqueue(new DataChangeEvent(sourceRecord));
             }
         }
@@ -278,6 +318,36 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
             }
         }
         return true;
+    }
+
+    /**
+     * Returns whether {@code sourceRecord} — carrying the message event time {@code lastOffset} —
+     * was already covered by the bounded backfill of one of the finished snapshot splits of its
+     * table: its primary key falls in the split's range and its event time is at-or-before the
+     * split's high watermark. Such a record must not be re-emitted by the stream phase once the
+     * base pure-stream filter is bypassed (the F4 double).
+     */
+    private boolean isCoveredByFinishedSnapshotSplit(
+            KafkaJsonSourceFetchTaskContext context,
+            SourceRecord sourceRecord,
+            KafkaJsonOffset lastOffset) {
+        TableId tableId = context.getTableId(sourceRecord);
+        if (context.getDatabaseSchema().tableFor(tableId) == null) {
+            // the split key type cannot be resolved for a table the shared schema does not know
+            // (yet); never drop a record we cannot classify
+            return false;
+        }
+        for (FinishedSnapshotSplitInfo finishedSplit :
+                finishedSplitsByTable.getOrDefault(tableId, Collections.emptyList())) {
+            if (lastOffset.isAtOrBefore(finishedSplit.getHighWatermark())
+                    && context.isRecordBetween(
+                            sourceRecord,
+                            finishedSplit.getSplitStart(),
+                            finishedSplit.getSplitEnd())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Routes a DDL message to the schema-change pipeline (parser + shared-schema update + record). */

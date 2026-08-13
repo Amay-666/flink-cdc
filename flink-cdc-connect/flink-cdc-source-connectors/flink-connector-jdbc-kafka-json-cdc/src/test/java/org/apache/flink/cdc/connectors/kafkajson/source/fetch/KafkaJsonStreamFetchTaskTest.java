@@ -17,17 +17,24 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.fetch;
 
+import org.apache.flink.cdc.connectors.base.source.meta.split.FinishedSnapshotSplitInfo;
 import org.apache.flink.cdc.connectors.base.source.meta.split.StreamSplit;
 import org.apache.flink.cdc.connectors.base.source.meta.wartermark.WatermarkEvent;
 import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
+import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffsetFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.FakeKafkaConsumer;
 
 import io.debezium.connector.base.ChangeEventQueue;
 import io.debezium.data.Envelope;
 import io.debezium.pipeline.DataChangeEvent;
+import io.debezium.relational.Column;
+import io.debezium.relational.Table;
+import io.debezium.relational.TableId;
+import io.debezium.relational.history.TableChanges.TableChange;
+import io.debezium.relational.history.TableChanges.TableChangeType;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.record.TimestampType;
@@ -35,8 +42,10 @@ import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.jupiter.api.Test;
 
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -51,6 +60,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class KafkaJsonStreamFetchTaskTest {
 
     private static final TopicPartition PARTITION = new TopicPartition("t", 0);
+    private static final TableId TABLE_ID = new TableId("test", null, "users");
 
     private static final String INSERT =
             "{\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],\"database\":\"test\",\"es\":3000,"
@@ -279,6 +289,79 @@ class KafkaJsonStreamFetchTaskTest {
     }
 
     @Test
+    void testStreamSplitDropsRecordsCoveredByEarlierSnapshotSplits() throws Exception {
+        // F4 / multi-split regression (see docs/BOUNDARY_AUDIT.md): the stream starting offset is
+        // the MINIMUM high watermark over the finished snapshot splits. split-0 covered pk [1,10)
+        // up to HIGH=(3000,MAX,MAX), split-1 covered pk [10,20) up to HIGH=(4000,MAX,MAX). A
+        // message whose event time lies in (startingOffset, owning HIGH] — here es == 4000 ==
+        // split-1's high watermark, exactly the boundary the min-HIGH lower bound cannot see — was
+        // already emitted by split-1's bounded backfill, so the stream phase must not re-emit it
+        // even though it is strictly after the starting offset. Messages after their owning high
+        // watermark are genuinely new and still pass through.
+        FinishedSnapshotSplitInfo split0 =
+                finishedSplit(
+                        TABLE_ID,
+                        "users-split-0",
+                        new Object[] {1L},
+                        new Object[] {10L},
+                        new KafkaJsonOffset(3000, Integer.MAX_VALUE, Long.MAX_VALUE));
+        FinishedSnapshotSplitInfo split1 =
+                finishedSplit(
+                        TABLE_ID,
+                        "users-split-1",
+                        new Object[] {10L},
+                        new Object[] {20L},
+                        new KafkaJsonOffset(4000, Integer.MAX_VALUE, Long.MAX_VALUE));
+
+        List<ConsumerRecord<String, String>> log0 = new ArrayList<>();
+        // es == split-1's high watermark, pk 12 in split-1's range: already backfilled, dropped
+        log0.add(insertRecord("12", "Backfilled", 4000, PARTITION, 0));
+        // es > split-1's high watermark: genuinely new, emitted
+        log0.add(insertRecord("12", "NewAfterSplit1", 4500, PARTITION, 1));
+        // es > split-0's high watermark, pk 5 in split-0's range: genuinely new, emitted
+        log0.add(insertRecord("5", "NewAfterSplit0", 3200, PARTITION, 2));
+        Map<TopicPartition, List<ConsumerRecord<String, String>>> log = new HashMap<>();
+        log.put(PARTITION, log0);
+        FakeKafkaConsumer consumer = new FakeKafkaConsumer(log, null);
+        KafkaJsonSourceFetchTaskContext context = context(consumer);
+        StreamSplit split =
+                streamSplitWithFinishedSplits(
+                        new KafkaJsonOffset(3000, Integer.MAX_VALUE, Long.MAX_VALUE),
+                        KafkaJsonOffset.NO_STOPPING_OFFSET,
+                        Arrays.asList(split0, split1),
+                        Collections.singletonMap(
+                                TABLE_ID, new TableChange(TableChangeType.CREATE, table())));
+        KafkaJsonStreamFetchTask task = new KafkaJsonStreamFetchTask(split);
+        context.configure(split);
+
+        Thread thread = new Thread(() -> runQuietly(task, context));
+        thread.setDaemon(true);
+        thread.start();
+        try {
+            List<SourceRecord> records = drain(context.getQueue(), 2);
+            assertEquals(2, records.size(), "only the two post-HIGH records are emitted");
+            // the id=12 es=4500 record (offset 1) was processed first
+            Struct first = (Struct) records.get(0).value();
+            assertEquals("c", first.getString(Envelope.FieldName.OPERATION));
+            assertEquals(
+                    "NewAfterSplit1",
+                    first.getStruct(Envelope.FieldName.AFTER).getString("name"));
+            // then the id=5 es=3200 record (offset 2), in split-0's range but after split-0's HIGH
+            Struct second = (Struct) records.get(1).value();
+            assertEquals("c", second.getString(Envelope.FieldName.OPERATION));
+            assertEquals(
+                    "NewAfterSplit0",
+                    second.getStruct(Envelope.FieldName.AFTER).getString("name"));
+            // the dropped boundary message still advanced the read position and offset tracking
+            assertEquals(new KafkaJsonOffset(3200, 0, 2), task.getCurrentOffset());
+            assertEquals(3L, consumer.positionOf(PARTITION));
+        } finally {
+            task.close();
+            thread.join(5000);
+        }
+    }
+
+    @Test
     void testInitialOffsetStartsFromEarliest() throws Exception {
         FakeKafkaConsumer consumer = consumer(INSERT);
         KafkaJsonSourceFetchTaskContext context = context(consumer);
@@ -360,6 +443,57 @@ class KafkaJsonStreamFetchTaskTest {
                 new ArrayList<>(),
                 new HashMap<>(),
                 0);
+    }
+
+    /** Builds a stream split carrying finished snapshot split infos and the split's table schemas. */
+    private static StreamSplit streamSplitWithFinishedSplits(
+            KafkaJsonOffset startingOffset,
+            KafkaJsonOffset endingOffset,
+            List<FinishedSnapshotSplitInfo> finishedSplits,
+            Map<TableId, TableChange> tableSchemas) {
+        return new StreamSplit(
+                StreamSplit.STREAM_SPLIT_ID,
+                startingOffset,
+                endingOffset,
+                finishedSplits,
+                tableSchemas,
+                finishedSplits.size());
+    }
+
+    /** Builds a finished snapshot split info: the pk range and the high watermark of its backfill. */
+    private static FinishedSnapshotSplitInfo finishedSplit(
+            TableId tableId,
+            String splitId,
+            Object[] splitStart,
+            Object[] splitEnd,
+            KafkaJsonOffset highWatermark) {
+        return new FinishedSnapshotSplitInfo(
+                tableId, splitId, splitStart, splitEnd, highWatermark, new KafkaJsonOffsetFactory());
+    }
+
+    private static Table table() {
+        return Table.editor()
+                .tableId(TABLE_ID)
+                .addColumn(
+                        Column.editor()
+                                .name("id")
+                                .type("BIGINT")
+                                .jdbcType(Types.BIGINT)
+                                .length(20)
+                                .optional(false)
+                                .position(1)
+                                .create())
+                .addColumn(
+                        Column.editor()
+                                .name("name")
+                                .type("VARCHAR")
+                                .jdbcType(Types.VARCHAR)
+                                .length(255)
+                                .optional(true)
+                                .position(2)
+                                .create())
+                .setPrimaryKeyNames("id")
+                .create();
     }
 
     /** Builds a single-partition consumer whose records carry ascending timestamps. */
