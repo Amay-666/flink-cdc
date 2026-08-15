@@ -23,8 +23,12 @@ import org.apache.flink.cdc.connectors.base.source.meta.split.SourceSplitBase;
 import org.apache.flink.cdc.connectors.base.source.meta.split.StreamSplit;
 import org.apache.flink.cdc.connectors.base.source.meta.wartermark.WatermarkKind;
 import org.apache.flink.cdc.connectors.base.source.reader.external.FetchTask;
+import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
 import org.apache.flink.cdc.connectors.kafkajson.source.handler.KafkaJsonSchemaChangeHandler;
+import org.apache.flink.cdc.connectors.kafkajson.source.kafka.KafkaJsonKafkaOffsetUtils;
+import org.apache.flink.cdc.connectors.kafkajson.source.kafka.KafkaJsonOffsetSupplier;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonFlatMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonFlatMessageParser;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonRecordConverter;
@@ -52,6 +56,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -218,6 +223,12 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                 break;
             }
             KafkaJsonFlatMessage message = KafkaJsonFlatMessageParser.parse(record.value());
+            if (sourceFetchContext.getSourceConfig().getDatabaseType() == KafkaJsonSourceOptions.DatabaseType.TIDB
+                    && sourceFetchContext.getSourceConfig().getEventTime() == KafkaJsonSourceOptions.EventTime.TIDB_TSO
+                    && Objects.equals(message.getType(), "TIDB_WATERMARK")) {
+                // tidb watermark message, without tso, ignore it
+                continue;
+            }
             if (message == null) {
                 LOG.warn(
                         "Ignoring unparsable canal message at {}-{}@{}",

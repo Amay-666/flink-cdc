@@ -88,8 +88,9 @@ public class KafkaJsonTidbOffsetUtils {
             connection.setAutoCommit(false);
             long tso;
             try {
-                try (Statement statement = connection.createStatement();
-                        ResultSet resultSet = statement.executeQuery(SELECT_CURRENT_TSO)) {
+                try (Statement statement = connection.createStatement()) {
+                    statement.execute("BEGIN");
+                    ResultSet resultSet = statement.executeQuery(SELECT_CURRENT_TSO);
                     if (!resultSet.next()) {
                         LOG.warn("{} returned no row", SELECT_CURRENT_TSO);
                         return null;

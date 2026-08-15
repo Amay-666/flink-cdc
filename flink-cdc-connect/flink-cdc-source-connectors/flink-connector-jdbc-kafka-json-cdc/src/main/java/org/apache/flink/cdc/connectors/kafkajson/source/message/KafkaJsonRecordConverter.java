@@ -77,7 +77,16 @@ public class KafkaJsonRecordConverter {
      * EventTime} mode: the binlog execution time {@code es} or the canal send time {@code ts}.
      */
     public static long eventTime(KafkaJsonFlatMessage message, EventTime eventTimeMode) {
-        return eventTimeMode == EventTime.ES ? message.getEs() : message.getTs();
+        switch (eventTimeMode) {
+            case ES:
+                return message.getEs();
+            case TS:
+                return message.getTs();
+            case TIDB_TSO:
+                return message.getTidbInfo().getCommitTimeStamp();
+            default:
+                throw new IllegalArgumentException("Unknown event time mode: " + eventTimeMode);
+        }
     }
 
     public List<SourceRecord> convert(

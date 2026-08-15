@@ -17,6 +17,7 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.message;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import javax.annotation.Nullable;
@@ -75,6 +76,35 @@ public class KafkaJsonFlatMessage implements Serializable {
 
     /** The {@code before} image, present for UPDATE (and only for the updated columns). */
     @JsonProperty private List<Map<String, String>> old;
+
+    @JsonProperty("_tidb")
+    private TidbInfo tidbInfo;
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class TidbInfo implements Serializable {
+        private Long commitTs;
+
+        public Long getCommitTs() {
+            return commitTs;
+        }
+
+        public void setCommitTs(Long commitTs) {
+            this.commitTs = commitTs;
+        }
+
+        // The commit time of the TiDB transaction.
+        @JsonProperty("commit-ts")
+        public Long getCommitTimeStamp() {
+            return commitTs != null ? commitTs >> 18 : null;
+        }
+
+        @Override
+        public String toString() {
+            return "{" +
+                    "commitTs=" + commitTs +
+                    '}';
+        }
+    }
 
     public long getId() {
         return id;
@@ -189,6 +219,17 @@ public class KafkaJsonFlatMessage implements Serializable {
         this.old = old;
     }
 
+    @JsonProperty("_tidb")
+    public TidbInfo getTidbInfo() {
+        return this.tidbInfo;
+    }
+
+    @JsonProperty("_tidb")
+    public void setTidbInfo(TidbInfo tidbInfo) {
+        this.tidbInfo = tidbInfo;
+    }
+
+
     @Override
     public String toString() {
         return "KafkaJsonFlatMessage{"
@@ -216,6 +257,8 @@ public class KafkaJsonFlatMessage implements Serializable {
                 + (data == null ? 0 : data.size())
                 + ", oldSize="
                 + (old == null ? 0 : old.size())
+                + ", tidbInfo="
+                + tidbInfo
                 + '}';
     }
 }

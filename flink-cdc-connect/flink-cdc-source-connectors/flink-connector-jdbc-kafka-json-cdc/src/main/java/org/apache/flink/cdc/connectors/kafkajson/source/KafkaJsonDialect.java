@@ -119,7 +119,7 @@ public class KafkaJsonDialect implements JdbcDataSourceDialect {
         // and is empty before the first change is published. TSO is only a valid boundary for
         // `es` (commit time); with `ts` the boundary stays on the Kafka-sampled value.
         if (canalSourceConfig.getDatabaseType() == DatabaseType.TIDB
-                && canalSourceConfig.getEventTime() == EventTime.ES) {
+                && canalSourceConfig.getEventTime() == EventTime.TIDB_TSO) {
             KafkaJsonOffset tidbOffset =
                     tidbOffsetSupplier != null
                             ? tidbOffsetSupplier.get()

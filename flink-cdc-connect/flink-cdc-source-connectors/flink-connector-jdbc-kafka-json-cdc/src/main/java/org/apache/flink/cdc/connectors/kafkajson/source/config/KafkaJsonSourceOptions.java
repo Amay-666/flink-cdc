@@ -148,7 +148,8 @@ public class KafkaJsonSourceOptions extends JdbcSourceOptions {
     /** Timestamp field of a canal message used as the offset event time. */
     public enum EventTime {
         ES,
-        TS
+        TS,
+        TIDB_TSO
     }
 
     /** Boundary handling mode of the full->incremental switch. */

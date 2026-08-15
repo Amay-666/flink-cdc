@@ -128,12 +128,16 @@ public class KafkaJsonKafkaOffsetUtils {
         }
         try {
             JsonNode root = OBJECT_MAPPER.readTree(message);
-            String field = eventTime == EventTime.ES ? "es" : "ts";
-            JsonNode node = root.get(field);
-            if (node == null || node.isNull()) {
-                return -1L;
+            switch (eventTime) {
+                case ES:
+                    return root.get("es").asLong(-1L);
+                case TS:
+                    return root.get("ts").asLong(-1L);
+                case TIDB_TSO:
+                    return root.get("_tidb").get("commitTs").asLong(-1L) >> 18;
+                default:
+                    return -1L;
             }
-            return node.asLong(-1L);
         } catch (Exception e) {
             return -1L;
         }
