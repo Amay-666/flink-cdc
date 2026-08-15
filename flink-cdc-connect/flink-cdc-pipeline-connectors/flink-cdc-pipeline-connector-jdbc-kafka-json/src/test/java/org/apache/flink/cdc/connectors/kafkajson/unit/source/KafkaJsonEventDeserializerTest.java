@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.source;
+package org.apache.flink.cdc.connectors.kafkajson.unit.source;
 
 import org.apache.flink.cdc.common.event.AddColumnEvent;
 import org.apache.flink.cdc.common.event.AlterColumnTypeEvent;
@@ -28,6 +28,7 @@ import org.apache.flink.cdc.common.event.RenameColumnEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.types.DataType;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
+import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonEventDeserializer;
 import org.apache.flink.cdc.connectors.kafkajson.source.handler.KafkaJsonSchemaChangeHandler;
 import org.apache.flink.cdc.debezium.history.FlinkJsonTableChangeSerializer;
 import org.apache.flink.cdc.debezium.table.DebeziumChangelogMode;
@@ -54,8 +55,8 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Unit test for {@link KafkaJsonEventDeserializer}: the schema-change records (produced by the canal
- * DDL handler) are diffed against the internal table registry into column-level schema change
+ * Unit test for {@link KafkaJsonEventDeserializer}: the schema-change records (produced by the
+ * canal DDL handler) are diffed against the internal table registry into column-level schema change
  * events, and the data-change records are turned into {@link DataChangeEvent}s.
  */
 public class KafkaJsonEventDeserializerTest {
@@ -175,7 +176,8 @@ public class KafkaJsonEventDeserializerTest {
     @Test
     public void testAlterWithoutObservedCreateIsSkipped() throws Exception {
         // The registry is empty (the CREATE of this table was not observed), so a single ALTER
-        // change cannot be diffed and is skipped instead of emitting a conflicting CreateTableEvent.
+        // change cannot be diffed and is skipped instead of emitting a conflicting
+        // CreateTableEvent.
         Table newTable =
                 Table.editor()
                         .tableId(new io.debezium.relational.TableId("test", null, "users"))
@@ -287,8 +289,7 @@ public class KafkaJsonEventDeserializerTest {
         KafkaJsonEventDeserializer deserializerWithoutSchemaChange =
                 new KafkaJsonEventDeserializer(DebeziumChangelogMode.ALL, false);
 
-        assertThat(deserializerWithoutSchemaChange.deserialize(createRecord(BASE_TABLE)))
-                .isEmpty();
+        assertThat(deserializerWithoutSchemaChange.deserialize(createRecord(BASE_TABLE))).isEmpty();
     }
 
     @Test
@@ -394,7 +395,9 @@ public class KafkaJsonEventDeserializerTest {
                     new Struct(valueSchema)
                             .put(
                                     "source",
-                                    new Struct(sourceSchema).put("db", "test").put("table", "users"))
+                                    new Struct(sourceSchema)
+                                            .put("db", "test")
+                                            .put("table", "users"))
                             .put("historyRecord", historyRecordStr);
             return new SourceRecord(
                     Collections.emptyMap(),
@@ -433,7 +436,9 @@ public class KafkaJsonEventDeserializerTest {
                     new Struct(valueSchema)
                             .put(
                                     "source",
-                                    new Struct(sourceSchema).put("db", "test").put("table", "users"))
+                                    new Struct(sourceSchema)
+                                            .put("db", "test")
+                                            .put("table", "users"))
                             .put("historyRecord", historyRecordStr);
             return new SourceRecord(
                     Collections.emptyMap(),
@@ -454,12 +459,7 @@ public class KafkaJsonEventDeserializerTest {
     }
 
     private static Column column(
-            String name,
-            String type,
-            int jdbcType,
-            boolean optional,
-            int position,
-            int length) {
+            String name, String type, int jdbcType, boolean optional, int position, int length) {
         ColumnEditor editor =
                 Column.editor()
                         .name(name)

@@ -24,10 +24,10 @@ import org.apache.flink.cdc.common.event.DataChangeEvent;
 import org.apache.flink.cdc.common.event.Event;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
+import org.apache.flink.cdc.connectors.kafkajson.infra.CanalServerContainer;
+import org.apache.flink.cdc.connectors.kafkajson.infra.KafkaJsonSourceTestBase;
+import org.apache.flink.cdc.connectors.kafkajson.infra.KafkaUtil;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
-import org.apache.flink.cdc.connectors.kafkajson.testutils.CanalServerContainer;
-import org.apache.flink.cdc.connectors.kafkajson.testutils.KafkaJsonSourceTestBase;
-import org.apache.flink.cdc.connectors.kafkajson.testutils.KafkaUtil;
 import org.apache.flink.cdc.connectors.mysql.testutils.MySqlContainer;
 import org.apache.flink.cdc.connectors.mysql.testutils.MySqlVersion;
 import org.apache.flink.cdc.connectors.mysql.testutils.UniqueDatabase;
@@ -131,10 +131,8 @@ public class MySqlCanalChainITCase extends KafkaJsonSourceTestBase {
                             dbName));
             statement.execute(
                     String.format(
-                            "UPDATE `%s`.`customers` SET address='Hangzhou' WHERE id=101",
-                            dbName));
-            statement.execute(
-                    String.format("DELETE FROM `%s`.`customers` WHERE id=102", dbName));
+                            "UPDATE `%s`.`customers` SET address='Hangzhou' WHERE id=101", dbName));
+            statement.execute(String.format("DELETE FROM `%s`.`customers` WHERE id=102", dbName));
         }
         // give canal time to tail the binlog and produce to Kafka before the connector consumes
         Thread.sleep(5_000);
@@ -145,8 +143,7 @@ public class MySqlCanalChainITCase extends KafkaJsonSourceTestBase {
                 Statement statement = connection.createStatement()) {
             statement.execute(
                     String.format(
-                            "ALTER TABLE `%s`.`customers` ADD COLUMN email VARCHAR(255)",
-                            dbName));
+                            "ALTER TABLE `%s`.`customers` ADD COLUMN email VARCHAR(255)", dbName));
         }
         List<Event> schemaChanges = fetchDataEvents(events, 1, createTables);
 

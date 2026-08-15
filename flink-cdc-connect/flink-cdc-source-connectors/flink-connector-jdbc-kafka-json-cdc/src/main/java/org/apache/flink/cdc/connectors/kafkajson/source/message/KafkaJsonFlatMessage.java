@@ -80,6 +80,7 @@ public class KafkaJsonFlatMessage implements Serializable {
     @JsonProperty("_tidb")
     private TidbInfo tidbInfo;
 
+    /** The {@code _tidb} extension object carried by TiCDC canal-json messages. */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class TidbInfo implements Serializable {
         private Long commitTs;
@@ -228,7 +229,6 @@ public class KafkaJsonFlatMessage implements Serializable {
     public void setTidbInfo(TidbInfo tidbInfo) {
         this.tidbInfo = tidbInfo;
     }
-
 
     @Override
     public String toString() {

@@ -25,11 +25,11 @@ import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.schema.Column;
 import org.apache.flink.cdc.common.schema.Schema;
+import org.apache.flink.cdc.connectors.kafkajson.infra.CanalServerContainer;
+import org.apache.flink.cdc.connectors.kafkajson.infra.KafkaJsonMySqlContainer;
+import org.apache.flink.cdc.connectors.kafkajson.infra.KafkaJsonSourceTestBase;
+import org.apache.flink.cdc.connectors.kafkajson.infra.KafkaUtil;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
-import org.apache.flink.cdc.connectors.kafkajson.testutils.CanalServerContainer;
-import org.apache.flink.cdc.connectors.kafkajson.testutils.KafkaJsonMySqlContainer;
-import org.apache.flink.cdc.connectors.kafkajson.testutils.KafkaJsonSourceTestBase;
-import org.apache.flink.cdc.connectors.kafkajson.testutils.KafkaUtil;
 import org.apache.flink.cdc.connectors.mysql.testutils.MySqlVersion;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.util.CloseableIterator;
@@ -54,8 +54,8 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 /**
- * Manual end-to-end harness that boots a real {@code MySQL + canal-server + Kafka} stack and lets you
- * write data yourself, watching every event the connector emits in real time.
+ * Manual end-to-end harness that boots a real {@code MySQL + canal-server + Kafka} stack and lets
+ * you write data yourself, watching every event the connector emits in real time.
  *
  * <p><b>Why a {@code main()}, not a JUnit test:</b> the harness must run for as long as you keep
  * writing data, so it never completes on its own. A plain {@code main()} in the test sources is
@@ -63,17 +63,17 @@ import java.util.stream.Stream;
  * classpath is on the run configuration automatically) and is never picked up by surefire/failsafe,
  * unlike an {@code *ITCase}.
  *
- * <p><b>Windows connection:</b> this machine runs Docker natively inside WSL2 in mirrored networking
- * mode, so Windows and WSL share the loopback: Windows can reach the containers through {@code
- * localhost:3306} / {@code localhost:9092} (and, as a fallback, the WSL VM IP printed in the banner).
- * Both MySQL ports are pinned with fixed host ports, so your Windows SQL client configuration stays
- * stable across runs.
+ * <p><b>Windows connection:</b> this machine runs Docker natively inside WSL2 in mirrored
+ * networking mode, so Windows and WSL share the loopback: Windows can reach the containers through
+ * {@code localhost:3306} / {@code localhost:9092} (and, as a fallback, the WSL VM IP printed in the
+ * banner). Both MySQL ports are pinned with fixed host ports, so your Windows SQL client
+ * configuration stays stable across runs.
  *
  * <p><b>Flow:</b> create {@code manualdb.customers} with 4 seed rows -&gt; start canal tailing the
  * binlog to topic {@code manual-topic} -&gt; run the connector source (JDBC snapshot + Kafka
- * increment) -&gt; print the 4 snapshot inserts -&gt; then print every incremental event as you write
- * SQL from Windows, until you stop the program. Exactly mirrors the {@code MySqlCanalChainITCase}
- * wire format, but fixed database/topic names so your ad-hoc SQL is stable.
+ * increment) -&gt; print the 4 snapshot inserts -&gt; then print every incremental event as you
+ * write SQL from Windows, until you stop the program. Exactly mirrors the {@code
+ * MySqlCanalChainITCase} wire format, but fixed database/topic names so your ad-hoc SQL is stable.
  *
  * <p>Stop the run by clicking the red square in IDEA. The containers are removed automatically when
  * the JVM exits.
@@ -102,7 +102,8 @@ public class MySqlCanalManualHarness extends KafkaJsonSourceTestBase {
         checkDockerAvailableOrExit();
 
         KafkaJsonMySqlContainer mysql =
-                createMySqlContainer(MySqlVersion.V8_0).withFixedExposedPort(MYSQL_PORT, MYSQL_PORT);
+                createMySqlContainer(MySqlVersion.V8_0)
+                        .withFixedExposedPort(MYSQL_PORT, MYSQL_PORT);
         KafkaContainer kafka = KafkaUtil.createKafkaContainer(LOG, NETWORK, KAFKA_PORT);
 
         LOG.info("Starting MySQL + Kafka containers...");
@@ -163,8 +164,7 @@ public class MySqlCanalManualHarness extends KafkaJsonSourceTestBase {
 
     private static void checkDockerAvailableOrExit() {
         if (!org.testcontainers.DockerClientFactory.instance().isDockerAvailable()) {
-            System.out.println(
-                    "Docker 不可用。请先在 WSL 里启动原生 docker（systemctl start docker），再重试。");
+            System.out.println("Docker 不可用。请先在 WSL 里启动原生 docker（systemctl start docker），再重试。");
             System.exit(1);
         }
     }

@@ -15,11 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.factory;
+package org.apache.flink.cdc.connectors.kafkajson.unit.factory;
 
 import org.apache.flink.cdc.common.configuration.ConfigOption;
 import org.apache.flink.cdc.common.configuration.Configuration;
 import org.apache.flink.cdc.common.factories.Factory;
+import org.apache.flink.cdc.connectors.kafkajson.factory.KafkaJsonDataSourceFactory;
 import org.apache.flink.table.api.ValidationException;
 
 import org.junit.Test;
@@ -41,8 +42,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Unit tests for {@link KafkaJsonDataSourceFactory}. Only the option-validation paths are covered here
- * (they do not need a running MySQL/Kafka); the full data-source creation is exercised by the
+ * Unit tests for {@link KafkaJsonDataSourceFactory}. Only the option-validation paths are covered
+ * here (they do not need a running MySQL/Kafka); the full data-source creation is exercised by the
  * integration tests.
  */
 public class KafkaJsonDataSourceFactoryTest {
@@ -74,9 +75,10 @@ public class KafkaJsonDataSourceFactoryTest {
     @Test
     public void testLackRequireOption() {
         Map<String, String> options = baseOptions();
-        for (String requireKey : factory.requiredOptions().stream()
-                .map(ConfigOption::key)
-                .collect(Collectors.toList())) {
+        for (String requireKey :
+                factory.requiredOptions().stream()
+                        .map(ConfigOption::key)
+                        .collect(Collectors.toList())) {
             Map<String, String> remainingOptions = new HashMap<>(options);
             remainingOptions.remove(requireKey);
             Factory.Context context = new MockContext(Configuration.fromMap(remainingOptions));
