@@ -17,7 +17,7 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.utils;
 
-import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonFlatMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.CanalMessage;
 
 import io.debezium.relational.Column;
 import io.debezium.relational.Table;
@@ -37,9 +37,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Unit test for {@link KafkaJsonTableUtils}. */
 class KafkaJsonTableUtilsTest {
 
-    private static KafkaJsonFlatMessage message(
+    private static CanalMessage message(
             Map<String, String> mysqlType, Map<String, String> row, String... pkNames) {
-        KafkaJsonFlatMessage message = new KafkaJsonFlatMessage();
+        CanalMessage message = new CanalMessage();
         message.setDatabase("test");
         message.setTable("users");
         message.setPkNames(Arrays.asList(pkNames));
@@ -144,7 +144,7 @@ class KafkaJsonTableUtilsTest {
 
     @Test
     void testEmptyMessageReturnsNull() {
-        KafkaJsonFlatMessage message = new KafkaJsonFlatMessage();
+        CanalMessage message = new CanalMessage();
         message.setDatabase("test");
         message.setTable("users");
         message.setData(Collections.emptyList());

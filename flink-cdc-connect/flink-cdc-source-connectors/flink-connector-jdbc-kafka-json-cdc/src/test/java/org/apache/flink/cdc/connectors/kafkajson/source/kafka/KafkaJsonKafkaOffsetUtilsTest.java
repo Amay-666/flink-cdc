@@ -48,10 +48,50 @@ class KafkaJsonKafkaOffsetUtilsTest {
     }
 
     @Test
-    void testMissingField() {
+    void testMissingEventTimeField() {
+        // The extraction is unified on the message layer (KafkaJsonRecordConverter#eventTime):
+        // es/ts are primitive long fields, so a message without them defaults to 0 rather than -1
+        // (the -1 fallback is reserved for null/empty/unparsable input, see testInvalidJson).
         String message = "{\"data\":[]}";
-        assertEquals(-1L, KafkaJsonKafkaOffsetUtils.extractEventTime(message, EventTime.ES));
-        assertEquals(-1L, KafkaJsonKafkaOffsetUtils.extractEventTime(message, EventTime.TS));
+        assertEquals(0L, KafkaJsonKafkaOffsetUtils.extractEventTime(message, EventTime.ES));
+        assertEquals(0L, KafkaJsonKafkaOffsetUtils.extractEventTime(message, EventTime.TS));
+    }
+
+    @Test
+    void testCanalTidbCommitTso() {
+        // A DML message carries the commit TSO in `_tidb.commitTs`; >> 18 gives the physical millis.
+        String dml =
+                "{\"data\":[{\"id\":\"1\"}],\"database\":\"test\",\"es\":1598752886000,"
+                        + "\"id\":1,\"isDdl\":false,\"mysqlType\":{},\"old\":null,"
+                        + "\"pkNames\":null,\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
+                        + "\"ts\":1598752887000,\"type\":\"INSERT\","
+                        + "\"_tidb\":{\"commitTs\":4398046511104}}";
+        assertEquals(
+                16777216L,
+                KafkaJsonKafkaOffsetUtils.extractEventTime(dml, EventTime.TIDB_TSO));
+    }
+
+    @Test
+    void testCanalTidbWatermarkTs() {
+        // A watermark event carries no `_tidb.commitTs` but `_tidb.watermarkTs` (the TSO at which
+        // every smaller commit TSO has been published); it yields a real event time in tidb_tso
+        // mode, so the offset keeps advancing during quiet periods.
+        String watermark =
+                "{\"data\":null,\"database\":\"\",\"es\":1656559521880,"
+                        + "\"id\":0,\"isDdl\":false,\"mysqlType\":null,"
+                        + "\"old\":null,\"pkNames\":null,\"sql\":\"\","
+                        + "\"sqlType\":null,\"table\":\"\","
+                        + "\"ts\":1656559524120,\"type\":\"TIDB_WATERMARK\","
+                        + "\"_tidb\":{\"watermarkTs\":4398046511104}}";
+        assertEquals(16777216L, KafkaJsonKafkaOffsetUtils.extractEventTime(watermark, EventTime.TIDB_TSO));
+        assertEquals(1656559521880L, KafkaJsonKafkaOffsetUtils.extractEventTime(watermark, EventTime.ES));
+    }
+
+    @Test
+    void testCanalPlainMessageWithoutTidbInTsoMode() {
+        // A plain canal flatMessage (no `_tidb`) has no TSO: tidb_tso yields null → -1.
+        assertEquals(
+                -1L, KafkaJsonKafkaOffsetUtils.extractEventTime(FLAT_MESSAGE, EventTime.TIDB_TSO));
     }
 
     @Test

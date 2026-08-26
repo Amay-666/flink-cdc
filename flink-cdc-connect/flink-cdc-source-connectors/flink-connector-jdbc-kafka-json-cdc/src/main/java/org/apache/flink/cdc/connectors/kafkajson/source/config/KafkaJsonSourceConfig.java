@@ -172,6 +172,24 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
     }
 
     /**
+     * Returns whether the snapshot backfill must be skipped.
+     *
+     * <p>The backfill re-reads the Kafka boundary window ({@code (low, high]}) after the snapshot
+     * to catch changes that raced with the snapshot read. Its bounded read completes only when
+     * every partition has delivered a message strictly after the ending offset — with no change
+     * during the snapshot, a quiet topic never produces such a message and the consumer polls
+     * forever. MySQL has no continuous boundary signal (unlike TiDB's TSO watermarks), so it must
+     * always skip the backfill. TiDB keeps the backfill on by default: TiCDC keeps emitting
+     * watermark events, so the bounded read always has a watermark at-or-after the ending offset
+     * to cross.
+     */
+    @Override
+    public boolean isSkipSnapshotBackfill() {
+        return super.isSkipSnapshotBackfill()
+                || databaseType == KafkaJsonSourceOptions.DatabaseType.MYSQL;
+    }
+
+    /**
      * Returns the minimal Debezium MySQL connector config used by the {@code
      * JdbcSourceEventDispatcher} (logical name, schema name adjuster, source info struct maker,
      * table filters). Since canal is bound to MySQL, we reuse {@link MySqlConnectorConfig} built

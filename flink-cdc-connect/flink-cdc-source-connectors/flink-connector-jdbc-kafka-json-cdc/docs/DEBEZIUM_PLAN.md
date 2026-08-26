@@ -15,7 +15,7 @@
 | 阶段 | 内容 | 交付物 |
 |------|------|--------|
 | 一（第1周） | 基础设施：`KafkaJsonMessage` 抽象基类、`KafkaJsonMessageParser` 接口、`KafkaJsonParserFactory` 工厂 | 3 个新类 |
-| 二（第2周） | 实体完善与存量适配：完善 `DebeziumMessage`（Schema/Payload/Source/TableChange/TransactionInfo 内部类）、`KafkaJsonFlatMessage` 改名 `CanalMessage`、所有调用点改为走工厂/父类、`KafkaJsonSourceInfo*` 适配两种格式、测试类适配 | 20 项任务（T2.1–T2.20） |
+| 二（第2周） | 实体完善与存量适配：完善 `DebeziumMessage`（Schema/Payload/Source/TableChange/TransactionInfo 内部类）、`KafkaJsonFlatMessage`→`CanalMessage` 改名（用户拍板，已执行）、所有调用点改为走工厂/父类、`KafkaJsonSourceInfo*` 适配两种格式、测试类适配 | 20 项任务（T2.1–T2.20） |
 | 三（第3周） | Debezium 解析器：标准 schema+payload 格式、schema-include=false（无 schema 层）、TiCDC 特殊字段（commit_ts/cluster_id） | `DebeziumMessageParser` + 单测 |
 | 四（第4周） | 路由与事件处理集成：Converter 支持解析器选择、新增 `debezium-json.format=standard|ticdc` 配置、SchemaChangeHandler 支持 Debezium DDL、EventDeserializer 支持 Debezium 事件、集成测试 | 5 项任务 |
 | 五（第5周） | 细粒度 ALTER：`ColumnChangeInfo`、扩展 `KafkaJsonTableChangeType`（ADD/DROP/ALTER_TYPE/ALTER_COMMENT/ALTER_POSITION）、`DdlParsedResult.columnChanges`、Druid `parseAlter` 检测列变更、`compareColumnChanges` | 5 项任务 |
@@ -50,7 +50,7 @@
 | N1 | **Debezium 格式 DML 的消费**（核心） | 现在 `scan.message.format=debezium` 是 fail-fast 拒绝的（`KafkaJsonSourceConfigFactory` 第 96 行）。Debezium 消息自带 schema+payload 信封、typed before/after、source.ts_ms，与 canal 的 string 行完全不同，需要一个 `DebeziumMessageParser` + 转换路径把它变成现有的 Debezium-shaped `SourceRecord`。**这是整个规划文档最有价值、也是最大的缺口。** |
 | N2 | **EventTime.TIDB_TSO** | 现有 `EventTime{ES,TS}` 没有 TIDB_TSO；Debezium 消息有 `payload.ts_ms` 与 `payload.source.ts_ms` 两个时间（与 canal 的 es/ts 对应），需评估映射并统一 `KafkaJsonKafkaOffsetUtils.extractEventTime` / `KafkaJsonRecordConverter.eventTime`。 |
 | N3 | **Debezium WaterMark（op=="m"）** | TiCDC 的 Debezium 兼容格式（enable-tidb-extension=true）以 `op:"m"` 发 watermark，需识别为 `TIDB_WATERMARK` 而非 DML。 |
-| N4 | **解析器工厂可插拔** | `KafkaJsonMessageParser` 接口 + `KafkaJsonParserFactory`：当前 `KafkaJsonFlatMessageParser.parse()` 是静态直调，工厂化后 `scan.message.format` 一处决定解析器。 |
+| N4 | **解析器工厂可插拔** | `KafkaJsonMessageParser` 接口 + `KafkaJsonParserFactory`：`CanalMessageParser`/`DebeziumMessageParser` 由 `scan.message.format` 一处决定，流式任务从不直接构造解析器。 |
 | N5 | **Debezium DDL 消息接入** | Debezium 的 DDL 以 schema-change 事件（或 history topic）下发，SQL 文本可复用现有 Druid/Debezium DDL parser 链路。注意 TiCDC 8.x **不发** Debezium DDL（ROADMAP P4-2），仅标准 Debezium 有此路径。 |
 
 ### 2.3 规划文档的问题与风险（评估意见）
@@ -58,7 +58,7 @@
 1. **「消息抽象层」过度设计，且与现有代码冲突。**
    - 原文 `KafkaJsonMessage` 里 `getEventTime()` 出现两次（一次返回 `EventTime`、一次返回 `Long`），类图里又变 `getEventTimeValue()`——签名是坏的；`EventTime`/`MessageType` 又打算复用 `KafkaJsonSourceOptions.EventTime` 又自己内嵌定义，语义重复。
    - 更根本的：canal 与 Debezium 的**值表示**不同（canal 是 string 行，Debezium 是 typed struct）。原文自己也承认 Converter/TableUtils 要「通过 instanceof 判断」——一旦引入 instanceof 分派，抽象基类就没有多态价值，只是多一层间接。
-   - **修订建议**：保留「接口 + 工厂」的**选择层**（这是可插拔的关键），但**不做** `KafkaJsonFlatMessage→CanalMessage` 改名（纯 churn、破坏模块命名惯例）、不做 `getSchemaName()`（MySQL 恒 null，无消费方）、不做统一父类上的 instanceof 大杂烩。解析器产出各自的消息类型，流式任务只依赖少量公共 getter。
+   - **修订建议**：保留「接口 + 工厂」的**选择层**（这是可插拔的关键）；`KafkaJsonFlatMessage`→`CanalMessage` 改名**已按用户拍板执行**（canal 与 debezium 消息/解析器平级命名），不做 `getSchemaName()`（MySQL 恒 null，无消费方）、不做统一父类上的 instanceof 大杂烩。解析器产出各自的消息类型，流式任务只依赖少量公共 getter。
 
 2. **阶段四配置项与现状冲突。** 原文提议 `debezium-json.format=standard|ticdc`；现状已有 `scan.message.format=canal|debezium`。新增独立维度无必要——`standard` vs `ticdc` 的差异（commit_ts/cluster_id/op==m）**可由 parser 自动探测**（消息里有 `payload.source.commit_ts` 或 `cluster_id` 即 TiCDC 形状），不需要第二个开关。修订方案不引入该配置。
 
@@ -84,8 +84,8 @@
 - `EventTime` 加 `TIDB_TSO`。
 - `KafkaJsonMessage` 抽象类：`MessageType`（DDL/DML/TIDB_WATERMARK/UNKNOWN）、`getDatabase()`、`getTable()`、`getSql()`、`getEventTimeValue(EventTime)`（复用 `KafkaJsonSourceOptions.EventTime`，不重复定义）。
 - `KafkaJsonMessageParser` 接口（`parse(String)` / `getFormat()`）+ `KafkaJsonParserFactory.create(MessageFormat)`。
-- `KafkaJsonFlatMessage extends KafkaJsonMessage` 实现 getter；空串 db/table → null（注意：flat message 的 db/table 是原始字段，空串归一化只发生在 Debezium 侧，见 S2）。
-- `CanalMessageParser implements KafkaJsonMessageParser<KafkaJsonFlatMessage>` 委托现有解析逻辑（`KafkaJsonFlatMessageParser` 保留为静态工具）。
+- `CanalMessage extends KafkaJsonMessage` 实现 getter；空串 db/table → null（注意：flat message 的 db/table 是原始字段，空串归一化只发生在 Debezium 侧，见 S2）。
+- `CanalMessageParser implements KafkaJsonMessageParser` 持有 flatMessage 解析/归一化逻辑，与 `DebeziumMessageParser` 平级（由 `KafkaJsonParserFactory.create(CANAL)` 返回）。
 - 单测：工厂选择、flat message getter、空串归一。
 
 ### S2 DebeziumMessage 实体 + DebeziumMessageParser

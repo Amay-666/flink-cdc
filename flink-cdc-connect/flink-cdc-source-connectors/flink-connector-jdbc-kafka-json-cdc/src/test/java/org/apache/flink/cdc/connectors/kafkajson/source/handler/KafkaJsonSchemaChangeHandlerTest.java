@@ -23,8 +23,8 @@ import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.fetch.KafkaJsonSourceFetchTaskContext;
-import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonFlatMessage;
-import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonFlatMessageParser;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.CanalMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.CanalMessageParser;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.debezium.history.FlinkJsonTableChangeSerializer;
 
@@ -175,7 +175,7 @@ class KafkaJsonSchemaChangeHandlerTest {
     private static void handle(KafkaJsonSourceFetchTaskContext context, String sql, long es)
             throws Exception {
         KafkaJsonSourceConfig config = context.getSourceConfig();
-        KafkaJsonFlatMessage message = KafkaJsonFlatMessageParser.parse(ddlMessage(sql, es));
+        CanalMessage message = new CanalMessageParser().parse(ddlMessage(sql, es));
         new KafkaJsonSchemaChangeHandler(config)
                 .handle(context, message, new KafkaJsonOffset(es, 0, 2));
     }

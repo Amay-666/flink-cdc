@@ -23,17 +23,18 @@ import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonMessage
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 /** Unit test for the {@link KafkaJsonMessage} abstraction as implemented by {@code
- * KafkaJsonFlatMessage}. */
+ * CanalMessage}. */
 class KafkaJsonMessageTest {
 
     private static final String BASE =
             "{\"database\":\"test\",\"table\":\"users\",\"es\":1000,\"ts\":2000,"
                     + "\"data\":[{\"id\":\"1\"}],\"isDdl\":false,\"type\":\"%s\"}";
 
-    private static KafkaJsonFlatMessage message(String type, boolean isDdl) {
-        return KafkaJsonFlatMessageParser.parse(
+    private static CanalMessage message(String type, boolean isDdl) {
+        return new CanalMessageParser().parse(
                 BASE.replace("%s", type).replace("\"isDdl\":false", "\"isDdl\":" + isDdl));
     }
 
@@ -62,8 +63,8 @@ class KafkaJsonMessageTest {
     void testUnknownType() {
         assertEquals(MessageType.UNKNOWN, message("GTID", false).getMessageType());
         // a message without a type field is UNKNOWN too
-        KafkaJsonFlatMessage noType =
-                KafkaJsonFlatMessageParser.parse(
+        CanalMessage noType =
+                new CanalMessageParser().parse(
                         "{\"database\":\"test\",\"table\":\"users\",\"es\":1000,"
                                 + "\"data\":[{\"id\":\"1\"}],\"isDdl\":false}");
         assertEquals(MessageType.UNKNOWN, noType.getMessageType());
@@ -71,10 +72,10 @@ class KafkaJsonMessageTest {
 
     @Test
     void testEventTimeValues() {
-        KafkaJsonFlatMessage message = message("INSERT", false);
+        CanalMessage message = message("INSERT", false);
         assertEquals(1000L, message.getEventTimeValue(EventTime.ES));
         assertEquals(2000L, message.getEventTimeValue(EventTime.TS));
-        // a canal flatMessage carries no TSO; TIDB_TSO degrades to the commit-time equivalent es
-        assertEquals(1000L, message.getEventTimeValue(EventTime.TIDB_TSO));
+        // a canal flatMessage carries no `_tidb`; TIDB_TSO yields null (no usable TSO)
+        assertNull(message.getEventTimeValue(EventTime.TIDB_TSO));
     }
 }

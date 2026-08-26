@@ -1,0 +1,45 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.flink.cdc.connectors.kafkajson.source;
+
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.DatabaseType;
+
+/**
+ * Creates the {@link KafkaJsonDialect} for a configured {@link DatabaseType}.
+ *
+ * <p>This is the pluggable seam of the database-dialect layer, mirroring {@link
+ * org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonParserFactory} on the message
+ * format: the source builder selects the dialect once (from {@code scan.database.type}) instead of
+ * hard-coding the MySQL dialect everywhere (see docs/ARCHITECTURE.md).
+ */
+public class KafkaJsonDialectFactory {
+
+    private KafkaJsonDialectFactory() {}
+
+    /** Returns the dialect for the given database type. */
+    public static KafkaJsonDialect create(DatabaseType databaseType, KafkaJsonSourceConfig config) {
+        switch (databaseType) {
+            case TIDB:
+                return new KafkaJsonTiDBDialect(config);
+            case MYSQL:
+            default:
+                return new KafkaJsonDialect(config);
+        }
+    }
+}

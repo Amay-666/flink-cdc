@@ -20,13 +20,14 @@ package org.apache.flink.cdc.connectors.kafkajson.source.kafka;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.MessageFormat;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.CanalMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.CanalMessageParser;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.DebeziumMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.DebeziumMessageParser;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonRecordConverter;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonKafkaUtils;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -57,8 +58,6 @@ import java.util.Properties;
  * the stream side while the JDBC read has already captured their effect, duplicating them.)
  */
 public class KafkaJsonKafkaOffsetUtils {
-
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private KafkaJsonKafkaOffsetUtils() {}
 
@@ -156,20 +155,15 @@ public class KafkaJsonKafkaOffsetUtils {
                 Long value = dbz.getEventTimeValue(eventTime);
                 return value == null ? -1L : value;
             }
-            JsonNode root = OBJECT_MAPPER.readTree(message);
-            switch (eventTime) {
-                case ES:
-                    return root.get("es").asLong(-1L);
-                case TS:
-                    return root.get("ts").asLong(-1L);
-                case TIDB_TSO:
-                    // TiCDC's canal-json carries the commit TSO in the `_tidb` object; the sampled
-                    // watermark then uses the real TSO physical millis instead of degrading to es.
-                    // A missing `_tidb` (plain canal) NPEs and falls into the catch → -1L.
-                    return root.get("_tidb").get("commitTs").asLong(-1L) >> 18;
-                default:
-                    return -1L;
+            // canal: the message layer is the single source of truth for the extraction semantics
+            // (es / ts / TIDB_TSO, incl. the watermarkTs of a watermark event), applied through
+            // KafkaJsonRecordConverter#eventTime
+            CanalMessage canalMessage = new CanalMessageParser().parse(message);
+            if (canalMessage == null) {
+                return -1L;
             }
+            Long value = KafkaJsonRecordConverter.eventTime(canalMessage, eventTime);
+            return value == null ? -1L : value;
         } catch (Exception e) {
             return -1L;
         }

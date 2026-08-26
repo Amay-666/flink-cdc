@@ -21,16 +21,14 @@ import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceCo
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.DatabaseType;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
-import org.apache.flink.cdc.connectors.kafkajson.source.connection.KafkaJsonJdbcConnection;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 
 import org.junit.jupiter.api.Test;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** Unit test for {@link KafkaJsonDialect} (the MySQL dialect). */
-class KafkaJsonDialectTest {
+/** Unit test for {@link KafkaJsonTiDBDialect}. */
+class KafkaJsonTiDBDialectTest {
 
     private static KafkaJsonSourceConfig config(DatabaseType databaseType, EventTime eventTime) {
         return new KafkaJsonSourceConfigFactory()
@@ -47,23 +45,25 @@ class KafkaJsonDialectTest {
     }
 
     @Test
-    void testOpenJdbcConnectionReturnsKafkaJsonJdbcConnection() {
-        // The KafkaJsonJdbcConnection drops the column default that the MySQL driver reports as a
-        // literal string (e.g. `0x` for a BINARY default), which would otherwise fail Debezium's
-        // TableSchemaBuilder during the snapshot schema read.
-        KafkaJsonSourceConfig config = config(DatabaseType.MYSQL, EventTime.ES);
-        KafkaJsonDialect dialect = new KafkaJsonDialect(config);
-        // openJdbcConnection only constructs the lazy connection; no socket is opened here.
-        assertThat(dialect.openJdbcConnection(config)).isInstanceOf(KafkaJsonJdbcConnection.class);
+    void testTidbEsUsesTidbOffsetSource() {
+        KafkaJsonSourceConfig config = config(DatabaseType.TIDB, EventTime.ES);
+        KafkaJsonTiDBDialect dialect = new KafkaJsonTiDBDialect(config);
+        KafkaJsonOffset tidb =
+                new KafkaJsonOffset(1_693_310_000_000L, Integer.MAX_VALUE, Long.MAX_VALUE);
+        dialect.setTidbOffsetSupplierForTesting(() -> tidb);
+        // TiDB + es: the boundary comes from the database TSO, not from Kafka.
+        assertEquals(tidb, dialect.displayCurrentOffset(config));
     }
 
     @Test
-    void testMySqlUsesKafkaSampledBoundary() {
-        // MySQL has no TSO: the snapshot boundary always comes from the Kafka-sampled position.
-        KafkaJsonSourceConfig config = config(DatabaseType.MYSQL, EventTime.ES);
-        KafkaJsonDialect dialect = new KafkaJsonDialect(config);
+    void testTidbTsUsesKafkaSampledBoundary() {
+        // TSO is the commit clock; with `ts` (producer send time) the boundary must stay on the
+        // Kafka-sampled value even for TiDB, otherwise the two clock domains would be mixed.
+        KafkaJsonSourceConfig config = config(DatabaseType.TIDB, EventTime.TS);
+        KafkaJsonTiDBDialect dialect = new KafkaJsonTiDBDialect(config);
         KafkaJsonOffset kafka = new KafkaJsonOffset(42, 0, 0);
         dialect.setCurrentOffsetSupplierForTesting(() -> kafka);
+        dialect.setTidbOffsetSupplierForTesting(() -> new KafkaJsonOffset(999, -1, -1));
         assertEquals(kafka, dialect.displayCurrentOffset(config));
     }
 }

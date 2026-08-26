@@ -24,7 +24,19 @@
 > 兼容的 JDBC/dialect 路径）；其他组合（如 debezium 消息、PG 快照）在
 > `KafkaJsonSourceConfigFactory.create()` 里 **fail-fast**（`IllegalArgumentException`），不会跑到深层报错。
 > 后续加 PG：把 `KafkaJsonSourceConfigFactory` 的 JDBC driver/port 默认/dialect 按 `DatabaseType` 分支即可；
-> 加 debezium 格式：新增 `MessageFormat.DEBEZIUM` 分支的消息解析路径（对应 `KafkaJsonFlatMessageParser`）。
+> 加 debezium 格式：新增 `MessageFormat.DEBEZIUM` 分支的消息解析路径（对应 `CanalMessageParser`）。
+
+> **方言层 + 快照回填策略（`scan.database.type` 的真正作用点）**：
+> `KafkaJsonDialectFactory.create(databaseType, config)` 选 `KafkaJsonDialect`（MySQL 默认）或
+> `KafkaJsonTiDBDialect`（extends MySQL 方言）。两者共享 MySQL 兼容的 JDBC 路径，唯一差异是快照边界取值
+> `displayCurrentOffset`：TiDB 在 `es` 模式用数据库侧 TSO（物理毫秒），`ts` 模式与 MySQL 一样退回 Kafka 采样值，
+> 避免混用两个时钟域（§3.1 的事件时间只影响位移排序，不影响这里的边界来源）。
+>
+> 快照切增量时的**有界回填**（(low, high] 重读）结束条件是**每个分区都读到一条严格晚于 ending offset 的消息**
+> （`partitionsPastEnding`，无 drain 到 log-end 的兜底）。TiDB 由 TiCDC 持续写 `TIDB_WATERMARK` 水印事件
+> （携带 `_tidb.watermarkTs`，见 §3.1），即使快照期间无变更也有消息跨越边界，所以 **TiDB 默认开启回填**；
+> MySQL 没有这种持续边界信号——无变更时 topic 静默、有界回填会永久 poll 不到跨越消息，所以 **MySQL 强制跳过
+> 回填**（`KafkaJsonSourceConfig#isSkipSnapshotBackfill`；快照期间的变更靠流阶段回放，语义降级为 at-least-once）。
 
 ---
 
@@ -68,7 +80,7 @@ KafkaJsonSourceBuilder<T> ──new──> KafkaJsonSource<T>
                                  │                     └─ new KafkaJsonStreamFetchTask / KafkaJsonScanFetchTask (base 工厂回调)
                                  ├─ createEnumerator (base IncrementalSourceEnumerator)
                                  └─ createSourceSplitSerializer
-KafkaJsonStreamFetchTask ──uses──> KafkaJsonFlatMessageParser（parse flatMessage JSON）
+KafkaJsonStreamFetchTask ──uses──> CanalMessageParser（parse flatMessage JSON）
                               ├─ KafkaJsonRecordConverter（flatMessage → List<SourceRecord>）
                               └─ KafkaJsonSchemaChangeHandler（DDL 分支）
                                     ├─ KafkaJsonDdlParser（接口）→ KafkaJsonDruidDdlParser（默认）| KafkaJsonDebeziumDdlParser（ANTLR）
@@ -114,7 +126,7 @@ example/KafkaJsonRenameStateOperator（ProcessFunction<Event,Event>，参考下�
                      │                ▼                                            │
                      │      ChangeEventQueue（共享队列）                           │
                      │                │                                            │
-Kafka(canal 写入) ──增量──> KafkaJsonStreamFetchTask ──poll──> KafkaJsonFlatMessageParser  │
+Kafka(canal 写入) ──增量──> KafkaJsonStreamFetchTask ──poll──> CanalMessageParser  │
                      │      │                                                      │
                      │      ├─ 数据消息 → KafkaJsonRecordConverter → SourceRecord ──────┤
                      │      │                                                      │
@@ -148,7 +160,7 @@ Kafka(canal 写入) ──增量──> KafkaJsonStreamFetchTask ──poll─�
 
 ```
 for each ConsumerRecord:
-    KafkaJsonFlatMessage message = KafkaJsonFlatMessageParser.parse(record.value())
+    CanalMessage message = new CanalMessageParser().parse(record.value())
     offset = new KafkaJsonOffset(eventTime(message), partition, offset)
     if message.isDdl():
         ──> KafkaJsonSchemaChangeHandler.handle(context, message, offset)     // 无数据记录
@@ -157,10 +169,19 @@ for each ConsumerRecord:
         for each sourceRecord: queue.enqueue(new DataChangeEvent(sourceRecord))
 ```
 
+> **事件时间与水印（统一由 `KafkaJsonRecordConverter.eventTime(message, eventTime)` 提取）**：
+> `TIDB_WATERMARK` 水印事件**不再被过滤**，作为普通消息推进位移——其 `_tidb.watermarkTs`（TSO）在
+> `tidb_tso` 模式下经 `TidbInfo#getCommitTimeStamp(type)` 解码成物理毫秒（`watermarkTs >> 18`），所以即使
+> 快照期间没有 DML，位移也在前进；`es`/`ts` 模式用水印自身的 `es`/`ts`。普通 DML 的 `_tidb.commitTs` 同样
+> `>> 18`；无 `_tidb` 的普通 canal 消息在 `tidb_tso` 模式下无可用 TSO（返回 null → 位移 -1）。
+> **有界回填的完成条件**：`processRecords` 只在「所有 assigned 分区都已读到一条严格晚于 ending offset 的
+> 消息」时返回完成，不再有 drain 兜底。TiDB 靠水印持续跨越，MySQL 靠 `isSkipSnapshotBackfill` 跳过回填
+> （见上节）。
+
 ### 3.1 数据消息路径
 
 ```
-KafkaJsonFlatMessage（JSON：data/old/type/database/table/es/ts/isDdl/sql/columns...）
+CanalMessage（JSON：data/old/type/database/table/es/ts/isDdl/sql/columns...）
   → KafkaJsonRecordConverter.convert
   → Debezium 形状的 SourceRecord（envelope：before/after/source/op/ts_ms）
   → KafkaJsonEventDeserializer.isDataChangeRecord（op 字段非空）
@@ -171,7 +192,7 @@ KafkaJsonFlatMessage（JSON：data/old/type/database/table/es/ts/isDdl/sql/colum
 ### 3.2 DDL 消息路径
 
 ```
-KafkaJsonFlatMessage(isDdl=true, sql, database, table)
+CanalMessage(isDdl=true, sql, database, table)
   → KafkaJsonSchemaChangeHandler.handle
        ├─ ddlParser.parse(db, tableId, currentTable, sql)     // currentTable = KafkaJsonSchema.tableFor
        ├─ 返回 null → 跳过（不改变 schema 的 DDL）

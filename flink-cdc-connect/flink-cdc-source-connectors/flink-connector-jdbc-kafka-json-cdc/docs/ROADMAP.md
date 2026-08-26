@@ -128,7 +128,7 @@ min 水位只保证"不丢"，靠 HIGH 去重；但排他上界 + min 水位恰�
 ### P2-1 TiDB canal 消息额外处理
 
 **目标（TiCDC canal-json 消费侧适配）：**
-1. **剔除 `TIDB_WATERMARK` 类型消息**（`isDdl=false` 且 `type=TIDB_WATERMARK` 时不是 DML）——否则会被当成伪 DML 数据下发。当前 `KafkaJsonFlatMessageParser` 需要识别并过滤。参考：https://docs.pingcap.com/tidb/dev/ticdc-canal-json.md
+1. **剔除 `TIDB_WATERMARK` 类型消息**（`isDdl=false` 且 `type=TIDB_WATERMARK` 时不是 DML）——否则会被当成伪 DML 数据下发。当前 `CanalMessageParser` 需要识别并过滤。参考：https://docs.pingcap.com/tidb/dev/ticdc-canal-json.md
 2. **DELETE 事件兼容**：v5.4.0 起 TiCDC 的 DELETE 事件 `old` 为 `null`、被删数据在 `data` 里（早期版本 `old` 内容与 `data` 相同）。我们的 DELETE 处理读的是 `data`（`canal puts the (before) row into data for DELETE`），需确认对"old=null"路径无副作用。
 
 **验收标准：** `TiDBCdcChainITCase` 或新增单测覆盖一条真实 `TIDB_WATERMARK` 消息 + 一条 TiCDC DELETE（old=null）消息。

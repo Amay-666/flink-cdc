@@ -149,7 +149,9 @@ class KafkaJsonStreamFetchTaskTest {
     void testBoundedReadKeepsMessagesBeforeEndingAndWaitsForLaggingPartition() throws Exception {
         // Partition 0 crosses the ending offset (es 4000) while partition 1 still has messages
         // before it (es 3400) that have not been polled yet. The bounded read must emit every
-        // message before the ending offset from both partitions and only then dispatch END.
+        // message before the ending offset from both partitions, and it does not finish on
+        // partition 0's crossing alone: it keeps polling until partition 1 also delivers a message
+        // strictly after the ending offset (Eve, es 3600) and only then dispatches END.
         TopicPartition p0 = new TopicPartition("t", 0);
         TopicPartition p1 = new TopicPartition("t", 1);
         List<ConsumerRecord<String, String>> log0 = new ArrayList<>();
@@ -158,6 +160,7 @@ class KafkaJsonStreamFetchTaskTest {
         List<ConsumerRecord<String, String>> log1 = new ArrayList<>();
         log1.add(insertRecord("3", "Carol", 3100, p1, 0));
         log1.add(insertRecord("4", "Dave", 3400, p1, 1));
+        log1.add(insertRecord("5", "Eve", 3600, p1, 2));
 
         Map<TopicPartition, List<ConsumerRecord<String, String>>> log = new HashMap<>();
         log.put(p0, log0);
@@ -196,8 +199,27 @@ class KafkaJsonStreamFetchTaskTest {
         // backfill; only messages strictly after the ending offset are left to the stream phase.
         // (With a minimum-event-time watermark the same boundary message fell through to the stream
         // phase and was emitted again, on top of a JDBC snapshot that already contained its
-        // effect.)
-        FakeKafkaConsumer consumer = consumer(INSERT, UPDATE); // es 3000 then es 3005
+        // effect.) A later message strictly after the ending offset (Carol, es 3400) completes the
+        // bounded read and is dropped — it belongs to the stream phase.
+        TopicPartition p0 = new TopicPartition("t", 0);
+        List<ConsumerRecord<String, String>> log0 = new ArrayList<>();
+        log0.add(insertRecord("1", "Alice", 3000, p0, 0)); // es 3000
+        log0.add(
+                new ConsumerRecord<>(
+                        p0.topic(),
+                        p0.partition(),
+                        1,
+                        3005L,
+                        TimestampType.CREATE_TIME,
+                        -1L,
+                        -1,
+                        -1,
+                        null,
+                        UPDATE)); // the boundary UPDATE, es == 3005
+        log0.add(insertRecord("2", "Carol", 3400, p0, 2)); // strictly after ending: dropped
+        Map<TopicPartition, List<ConsumerRecord<String, String>>> log = new HashMap<>();
+        log.put(p0, log0);
+        FakeKafkaConsumer consumer = new FakeKafkaConsumer(log, null);
         KafkaJsonSourceFetchTaskContext context = context(consumer);
         StreamSplit split =
                 backfillSplit(
@@ -235,6 +257,9 @@ class KafkaJsonStreamFetchTaskTest {
         log0.add(
                 insertRecord(
                         "3", "Carol", 3400, 3400, p0, 2)); // inside the backfill window: emitted
+        log0.add(
+                insertRecord(
+                        "4", "Diana", 3600, 3600, p0, 3)); // strictly after ending: dropped
 
         Map<TopicPartition, List<ConsumerRecord<String, String>>> log = new HashMap<>();
         log.put(p0, log0);
@@ -251,7 +276,10 @@ class KafkaJsonStreamFetchTaskTest {
 
         List<SourceRecord> records = drain(context.getQueue(), 3);
         assertEquals(
-                3, records.size(), "Bob + Carol inside the window + END watermark; Alice dropped");
+                3,
+                records.size(),
+                "Bob + Carol inside the window + END watermark; Alice below the low watermark and "
+                        + "Diana after the ending offset are dropped");
         Set<String> names = new HashSet<>();
         for (SourceRecord record : records) {
             if (!WatermarkEvent.isEndWatermarkEvent(record)) {

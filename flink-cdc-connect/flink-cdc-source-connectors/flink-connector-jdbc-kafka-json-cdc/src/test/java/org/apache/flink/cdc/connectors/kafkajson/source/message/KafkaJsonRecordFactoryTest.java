@@ -78,7 +78,7 @@ class KafkaJsonRecordFactoryTest {
         for (String col : mysqlType.keySet()) {
             row.put(col, "");
         }
-        KafkaJsonFlatMessage message = new KafkaJsonFlatMessage();
+        CanalMessage message = new CanalMessage();
         message.setDatabase("test");
         message.setTable("users");
         message.setPkNames(Arrays.asList(pkNames));

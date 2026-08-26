@@ -77,15 +77,13 @@ public class KafkaJsonRecordConverter {
 
     /**
      * Returns the ordering event time (millis) of a message for the configured {@link EventTime}
-     * mode, or {@code -1} when the message carries no usable time. For a canal flatMessage it is
-     * the binlog execution time {@code es} / the canal send time {@code ts} (a canal flatMessage
-     * carries no TSO, so {@code TIDB_TSO} degrades to {@code es}, which canal-json already reports
-     * as the commit time); for a Debezium message it is {@code source.ts_ms} / {@code payload.ts_ms}
-     * / the decoded commit TSO.
+     * mode, or {@code null} when the message carries no usable time. For a canal flatMessage it is
+     * the binlog execution time {@code es} / the canal send time {@code ts} / the decoded TiDB
+     * commit TSO ({@code _tidb.commitTs}, or {@code _tidb.watermarkTs} for a watermark event); for a
+     * Debezium message it is {@code source.ts_ms} / {@code payload.ts_ms} / the decoded commit TSO.
      */
-    public static long eventTime(KafkaJsonMessage message, EventTime eventTimeMode) {
-        Long value = message.getEventTimeValue(eventTimeMode);
-        return value == null ? -1L : value;
+    public static Long eventTime(KafkaJsonMessage message, EventTime eventTimeMode) {
+        return message.getEventTimeValue(eventTimeMode);
     }
 
     /**
@@ -100,14 +98,19 @@ public class KafkaJsonRecordConverter {
      */
     public List<SourceRecord> convert(
             KafkaJsonMessage message, String topic, int partition, long kafkaOffset) {
-        if (message instanceof DebeziumMessage) {
-            return convertDebezium((DebeziumMessage) message, topic, partition, kafkaOffset);
+        switch (message.getFormat()) {
+            case CANAL:
+                return convertCanal((CanalMessage) message, topic, partition, kafkaOffset);
+            case DEBEZIUM:
+                return convertDebezium((DebeziumMessage) message, topic, partition, kafkaOffset);
+            default:
+                throw new UnsupportedOperationException(
+                        "Unsupported message format: " + message.getFormat());
         }
-        return convertFlat((KafkaJsonFlatMessage) message, topic, partition, kafkaOffset);
     }
 
-    private List<SourceRecord> convertFlat(
-            KafkaJsonFlatMessage message, String topic, int partition, long kafkaOffset) {
+    private List<SourceRecord> convertCanal(
+            CanalMessage message, String topic, int partition, long kafkaOffset) {
         if (message.isDdl()) {
             return Collections.emptyList();
         }
@@ -163,7 +166,8 @@ public class KafkaJsonRecordConverter {
                     message.getTable());
             return Collections.emptyList();
         }
-        long eventTime = eventTime(message, eventTimeMode);
+        Long eventTimeValue = eventTime(message, eventTimeMode);
+        long eventTime = eventTimeValue == null ? -1L : eventTimeValue;
         KafkaJsonSourceInfo sourceInfo =
                 new KafkaJsonSourceInfo(
                         dbzConfig,
@@ -208,7 +212,7 @@ public class KafkaJsonRecordConverter {
     }
 
     private List<SourceRecord> convertRows(
-            KafkaJsonFlatMessage message,
+            CanalMessage message,
             String topic,
             int partition,
             long kafkaOffset,
@@ -217,7 +221,8 @@ public class KafkaJsonRecordConverter {
         if (table == null) {
             return Collections.emptyList();
         }
-        long eventTime = eventTime(message, eventTimeMode);
+        Long eventTimeValue = eventTime(message, eventTimeMode);
+        long eventTime = eventTimeValue == null ? -1L : eventTimeValue;
         KafkaJsonSourceInfo sourceInfo =
                 new KafkaJsonSourceInfo(
                         dbzConfig,
@@ -301,7 +306,7 @@ public class KafkaJsonRecordConverter {
     }
 
     /** Returns the registered (JDBC) schema, or rebuilds one from the message {@code mysqlType}. */
-    private Table resolveTable(KafkaJsonFlatMessage message) {
+    private Table resolveTable(CanalMessage message) {
         TableId tableId =
                 new TableId(
                         message.getDatabase() == null ? "" : message.getDatabase(),

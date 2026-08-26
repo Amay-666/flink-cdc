@@ -18,6 +18,7 @@
 package org.apache.flink.cdc.connectors.kafkajson.source.message;
 
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.MessageFormat;
 
 import javax.annotation.Nullable;
 
@@ -28,12 +29,11 @@ import java.io.Serializable;
  * that produced it (canal flatMessage JSON, standard Debezium envelope, TiCDC's Debezium-compatible
  * format).
  *
- * <p>The abstraction carries only what the stream pipeline needs uniformly: the message kind ({@link
- * MessageType}), the affected table and the event-time value. Everything that genuinely differs
- * between the formats — most notably how the DML rows are represented (canal carries string rows,
- * Debezium carries typed structs) — stays on the concrete subclasses, which the pipeline dispatches
- * on via {@code instanceof} rather than forcing one row model onto both (see
- * docs/DEBEZIUM_PLAN.md §2.3-1).
+ * <p>The abstraction carries only what the stream pipeline needs uniformly: the message format
+ * ({@link #getFormat()}), the message kind ({@link MessageType}), the affected table and the
+ * event-time value. Everything that genuinely differs between the formats — most notably how the DML
+ * rows are represented (canal carries string rows, Debezium carries typed structs) — stays on the
+ * concrete subclasses, which the pipeline dispatches on by format (see docs/DEBEZIUM_PLAN.md §2.3-1).
  */
 public abstract class KafkaJsonMessage implements Serializable {
 
@@ -50,6 +50,9 @@ public abstract class KafkaJsonMessage implements Serializable {
         /** Anything else (GTID / SAVEPOINT / XACOMPLETE / unknown op ...). */
         UNKNOWN
     }
+
+    /** The wire format that produced this message. */
+    public abstract MessageFormat getFormat();
 
     /** Returns the kind of change this message carries. */
     public abstract MessageType getMessageType();

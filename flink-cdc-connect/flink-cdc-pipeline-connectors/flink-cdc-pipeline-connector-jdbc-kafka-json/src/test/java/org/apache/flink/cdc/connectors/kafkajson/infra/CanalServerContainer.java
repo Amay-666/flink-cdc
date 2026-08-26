@@ -26,13 +26,14 @@ import org.testcontainers.containers.output.Slf4jLogConsumer;
 import java.time.Duration;
 
 /**
- * A {@code canal/canal-server:v1.1.8} container that tails the binlog of the MySQL container and
- * writes canal flatMessage JSON to a Kafka topic.
+ * A {@code canal/canal-server:v1.1.8} container that tails the binlog of a MySQL-compatible source
+ * (MySQL or PolarDB-X, whose GalaxyCDC serves a MySQL-compatible binlog) and writes canal flatMessage
+ * JSON to a Kafka topic.
  *
  * <p>The image's entrypoint script rewrites {@code canal.*} environment variables into {@code
  * canal.properties} and {@code instance.properties}, so the whole configuration is expressed
  * through environment variables. The container joins the test network as {@code canal} and reaches
- * MySQL as {@code mysql:3306} and Kafka as {@code kafka:9092} via docker network aliases.
+ * the source and Kafka ({@code kafka:9092}) via docker network aliases.
  *
  * <p>Only tables matching {@code <databaseName>\..*} are captured (the database name carries the
  * unique per-run suffix), and only messages for the configured topic are produced.
@@ -45,8 +46,24 @@ public class CanalServerContainer extends GenericContainer<CanalServerContainer>
 
     private static final int STARTUP_TIMEOUT_SECONDS = 90;
 
+    /** Defaults for the MySQL source ({@code flinkuser}/{@code flinkpw} on {@code mysql:3306}). */
     public CanalServerContainer(
             String databaseName, String kafkaTopic, Network network, Logger logger) {
+        this(databaseName, kafkaTopic, "mysql:3306", "flinkuser", "flinkpw", network, logger);
+    }
+
+    /**
+     * Tails the binlog of a MySQL-compatible source reachable at {@code masterAddress} (e.g. {@code
+     * mysql:3306} or {@code polardbx:8527}) with the given credentials.
+     */
+    public CanalServerContainer(
+            String databaseName,
+            String kafkaTopic,
+            String masterAddress,
+            String dbUsername,
+            String dbPassword,
+            Network network,
+            Logger logger) {
         super(IMAGE);
         withNetwork(network);
         withNetworkAliases("canal");
@@ -55,11 +72,11 @@ public class CanalServerContainer extends GenericContainer<CanalServerContainer>
         withEnv("canal.mq.servers", "kafka:9092");
         withEnv("canal.mq.topic", kafkaTopic);
         withEnv("canal.mq.flatMessage", "true");
-        // instance: replicate from the MySQL container with a slave id distinct from its server-id
+        // instance: replicate from the source with a slave id distinct from its server-id
         withEnv("canal.instance.mysql.slaveId", "123456");
-        withEnv("canal.instance.master.address", "mysql:3306");
-        withEnv("canal.instance.dbUsername", "flinkuser");
-        withEnv("canal.instance.dbPassword", "flinkpw");
+        withEnv("canal.instance.master.address", masterAddress);
+        withEnv("canal.instance.dbUsername", dbUsername);
+        withEnv("canal.instance.dbPassword", dbPassword);
         withEnv("canal.instance.connectionCharset", "UTF-8");
         withEnv("canal.instance.filter.regex", databaseName + "\\..*");
         withEnv("canal.instance.tsdb.enable", "false");

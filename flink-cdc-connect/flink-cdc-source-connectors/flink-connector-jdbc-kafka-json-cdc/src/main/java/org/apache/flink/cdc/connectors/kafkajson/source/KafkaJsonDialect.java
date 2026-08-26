@@ -27,8 +27,6 @@ import org.apache.flink.cdc.connectors.base.source.meta.offset.Offset;
 import org.apache.flink.cdc.connectors.base.source.meta.split.SourceSplitBase;
 import org.apache.flink.cdc.connectors.base.source.reader.external.FetchTask;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
-import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.DatabaseType;
-import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
 import org.apache.flink.cdc.connectors.kafkajson.source.connection.KafkaJsonConnectionPoolFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.connection.KafkaJsonJdbcConnection;
 import org.apache.flink.cdc.connectors.kafkajson.source.fetch.KafkaJsonScanFetchTask;
@@ -37,7 +35,6 @@ import org.apache.flink.cdc.connectors.kafkajson.source.fetch.KafkaJsonStreamFet
 import org.apache.flink.cdc.connectors.kafkajson.source.kafka.KafkaJsonKafkaOffsetUtils;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTableDiscoveryUtils;
-import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTidbOffsetUtils;
 import org.apache.flink.util.FlinkRuntimeException;
 
 import io.debezium.connector.mysql.MySqlConnectorConfig;
@@ -45,8 +42,6 @@ import io.debezium.jdbc.JdbcConnection;
 import io.debezium.relational.TableId;
 import io.debezium.relational.Tables;
 import io.debezium.relational.history.TableChanges.TableChange;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -57,19 +52,20 @@ import java.util.Map;
 import java.util.function.Supplier;
 
 /**
- * The dialect for the Canal source.
+ * The MySQL dialect for the Canal source — the default selection of {@code scan.database.type}.
  *
  * <p>The snapshot data is read directly from MySQL through JDBC (using the incremental snapshot
  * algorithm of flink-cdc-base), while the change-log data is consumed from Kafka where canal has
  * written the binlog change events. The {@code displayCurrentOffset} therefore queries the current
- * Kafka position instead of the binlog position — except for TiDB, where the current TSO is queried
- * from the database (see {@link KafkaJsonTidbOffsetUtils}).
+ * Kafka position instead of the binlog position.
+ *
+ * <p>TiDB speaks the same wire protocol and shares this implementation; its TiDB-specific behavior
+ * (the TSO snapshot boundary) lives in {@link KafkaJsonTiDBDialect}, selected by {@code
+ * scan.database.type=tidb} through {@link KafkaJsonDialectFactory}.
  */
 public class KafkaJsonDialect implements JdbcDataSourceDialect {
 
     private static final long serialVersionUID = 1L;
-
-    private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonDialect.class);
 
     private final KafkaJsonSourceConfig sourceConfig;
 
@@ -81,7 +77,6 @@ public class KafkaJsonDialect implements JdbcDataSourceDialect {
     private transient volatile KafkaJsonSchema schema;
     private transient volatile Tables.TableFilter filters;
     @Nullable private transient Supplier<KafkaJsonOffset> currentOffsetSupplier;
-    @Nullable private transient Supplier<KafkaJsonOffset> tidbOffsetSupplier;
     @Nullable private KafkaJsonStreamFetchTask streamFetchTask;
 
     public KafkaJsonDialect(KafkaJsonSourceConfig sourceConfig) {
@@ -113,43 +108,13 @@ public class KafkaJsonDialect implements JdbcDataSourceDialect {
         if (currentOffsetSupplier != null) {
             return currentOffsetSupplier.get();
         }
-        KafkaJsonSourceConfig canalSourceConfig = (KafkaJsonSourceConfig) sourceConfig;
-        // For TiDB the boundary is queried from the database instead of Kafka: the current TSO is
-        // an
-        // authoritative commit-clock value (an upper bound on the `es` of every change already
-        // visible
-        // to the JDBC read), whereas the Kafka-sampled boundary trails the database by the publish
-        // lag
-        // and is empty before the first change is published. TSO is a valid boundary for every
-        // commit-clock mode (`es`, and `tidb_tso` which degrades to `es`); with `ts` (producer send
-        // time) the boundary stays on the Kafka-sampled value so the two clock domains are never
-        // mixed.
-        EventTime eventTime = canalSourceConfig.getEventTime();
-        if (canalSourceConfig.getDatabaseType() == DatabaseType.TIDB
-                && (eventTime == EventTime.ES || eventTime == EventTime.TIDB_TSO)) {
-            KafkaJsonOffset tidbOffset =
-                    tidbOffsetSupplier != null
-                            ? tidbOffsetSupplier.get()
-                            : KafkaJsonTidbOffsetUtils.queryCurrentOffset(canalSourceConfig);
-            if (tidbOffset != null) {
-                return tidbOffset;
-            }
-            LOG.warn(
-                    "TiDB current TSO boundary is unavailable; falling back to the Kafka-sampled boundary");
-        }
-        return KafkaJsonKafkaOffsetUtils.queryCurrentOffset(canalSourceConfig);
+        return KafkaJsonKafkaOffsetUtils.queryCurrentOffset((KafkaJsonSourceConfig) sourceConfig);
     }
 
     /** Injects a supplier of the current stream offset (used in unit tests). */
     @VisibleForTesting
     public void setCurrentOffsetSupplierForTesting(Supplier<KafkaJsonOffset> supplier) {
         this.currentOffsetSupplier = supplier;
-    }
-
-    /** Injects a supplier of the current TiDB TSO boundary (used in unit tests). */
-    @VisibleForTesting
-    public void setTidbOffsetSupplierForTesting(Supplier<KafkaJsonOffset> supplier) {
-        this.tidbOffsetSupplier = supplier;
     }
 
     @Override

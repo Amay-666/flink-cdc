@@ -23,7 +23,9 @@ import java.util.Collections;
 import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Unit test for {@link KafkaJsonSourceConfigFactory} and {@link KafkaJsonSourceConfig}. */
 class KafkaJsonSourceConfigFactoryTest {
@@ -128,6 +130,34 @@ class KafkaJsonSourceConfigFactoryTest {
                 buildFactory().databaseType(KafkaJsonSourceOptions.DatabaseType.TIDB).create(0);
         assertEquals(KafkaJsonSourceOptions.DatabaseType.TIDB, config.getDatabaseType());
         assertEquals("com.mysql.cj.jdbc.Driver", config.getDriverClassName());
+    }
+
+    /**
+     * MySQL must always skip the snapshot backfill: its bounded read completes only when every
+     * partition crosses the ending offset, and with no change during the snapshot no such message
+     * ever arrives (a quiet topic makes the consumer poll forever). TiDB keeps the backfill on, so
+     * changes racing with the snapshot are caught in the (low, high] window — its TSO watermark
+     * events keep crossing the ending offset.
+     */
+    @Test
+    void testBackfillPolicyByDatabaseType() {
+        assertTrue(
+                buildFactory()
+                        .databaseType(KafkaJsonSourceOptions.DatabaseType.MYSQL)
+                        .create(0)
+                        .isSkipSnapshotBackfill());
+        assertFalse(
+                buildFactory()
+                        .databaseType(KafkaJsonSourceOptions.DatabaseType.TIDB)
+                        .create(0)
+                        .isSkipSnapshotBackfill());
+        // the explicit flag still lets TiDB opt out of the backfill
+        assertTrue(
+                buildFactory()
+                        .databaseType(KafkaJsonSourceOptions.DatabaseType.TIDB)
+                        .skipSnapshotBackfill(true)
+                        .create(0)
+                        .isSkipSnapshotBackfill());
     }
 
     @Test

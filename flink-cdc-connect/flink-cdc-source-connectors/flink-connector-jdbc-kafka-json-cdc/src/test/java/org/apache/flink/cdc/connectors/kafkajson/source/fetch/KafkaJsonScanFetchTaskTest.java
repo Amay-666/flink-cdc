@@ -20,8 +20,10 @@ package org.apache.flink.cdc.connectors.kafkajson.source.fetch;
 import org.apache.flink.cdc.connectors.base.source.meta.split.SnapshotSplit;
 import org.apache.flink.cdc.connectors.base.source.meta.wartermark.WatermarkEvent;
 import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDialect;
+import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonTiDBDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.FakeKafkaConsumer;
 import org.apache.flink.table.types.logical.BigIntType;
@@ -92,8 +94,12 @@ class KafkaJsonScanFetchTaskTest {
                         new Object[] {2000L, ddlMessage(2000)},
                         new Object[] {3000L, insertMessage(3000, "2", "C")});
 
-        KafkaJsonSourceConfig config = config();
-        KafkaJsonDialect dialect = new KafkaJsonDialect(config);
+        // The full pipeline (LOW -> snapshot -> HIGH -> backfill -> END) only runs when the
+        // backfill is enabled, which is now the TiDB default (MySQL skips it, see
+        // KafkaJsonSourceConfig#isSkipSnapshotBackfill). The boundary messages are TiDB-style
+        // canal-json flatMessages (the `_tidb` extension is not needed for the offset order).
+        KafkaJsonSourceConfig config = tidbConfig();
+        KafkaJsonTiDBDialect dialect = new KafkaJsonTiDBDialect(config);
         AtomicInteger watermarkCalls = new AtomicInteger();
         dialect.setCurrentOffsetSupplierForTesting(
                 () ->
@@ -229,6 +235,24 @@ class KafkaJsonScanFetchTaskTest {
                 .kafkaBootstrapServers("bootstrap")
                 .kafkaTopics("t")
                 .serverTimeZone("UTC")
+                .create(0);
+    }
+
+    /**
+     * A TiDB config: the only database type whose snapshot backfill is enabled by default (MySQL
+     * always skips it), so the full incremental-snapshot pipeline can be exercised.
+     */
+    private static KafkaJsonSourceConfig tidbConfig() {
+        return new KafkaJsonSourceConfigFactory()
+                .hostname("localhost")
+                .username("root")
+                .password("x")
+                .databaseList("test")
+                .tableList("test.users")
+                .kafkaBootstrapServers("bootstrap")
+                .kafkaTopics("t")
+                .serverTimeZone("UTC")
+                .databaseType(KafkaJsonSourceOptions.DatabaseType.TIDB)
                 .create(0);
     }
 

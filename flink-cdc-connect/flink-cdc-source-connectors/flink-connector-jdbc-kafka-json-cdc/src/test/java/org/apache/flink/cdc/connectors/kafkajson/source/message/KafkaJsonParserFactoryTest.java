@@ -36,15 +36,15 @@ class KafkaJsonParserFactoryTest {
     }
 
     @Test
-    void testCanalParserDelegatesToFlatMessageParser() {
+    void testCanalParserParsesFlatMessage() {
         KafkaJsonMessage message =
                 KafkaJsonParserFactory.create(MessageFormat.CANAL)
                         .parse(
                                 "{\"database\":\"test\",\"table\":\"users\",\"es\":1,\"ts\":2,"
                                         + "\"isDdl\":false,\"type\":\"INSERT\","
                                         + "\"data\":[{\"id\":\"1\"}]}");
-        assertTrue(message instanceof KafkaJsonFlatMessage);
-        KafkaJsonFlatMessage flatMessage = (KafkaJsonFlatMessage) message;
+        assertTrue(message instanceof CanalMessage);
+        CanalMessage flatMessage = (CanalMessage) message;
         assertEquals("test", flatMessage.getDatabase());
         assertEquals("users", flatMessage.getTable());
         assertEquals(1, flatMessage.getData().size());

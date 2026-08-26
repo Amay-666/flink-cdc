@@ -17,6 +17,8 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.message;
 
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -29,13 +31,13 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Unit test for {@link KafkaJsonFlatMessageParser}. */
-class KafkaJsonFlatMessageParserTest {
+/** Unit test for {@link CanalMessageParser}. */
+class CanalMessageParserTest {
 
     @Test
     void testParseInsert() {
-        KafkaJsonFlatMessage message =
-                KafkaJsonFlatMessageParser.parse(
+        CanalMessage message =
+                new CanalMessageParser().parse(
                         "{"
                                 + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
                                 + "\"database\":\"test\",\"es\":1598752886000,\"id\":1,"
@@ -61,8 +63,8 @@ class KafkaJsonFlatMessageParserTest {
 
     @Test
     void testParseUpdateWithOld() {
-        KafkaJsonFlatMessage message =
-                KafkaJsonFlatMessageParser.parse(
+        CanalMessage message =
+                new CanalMessageParser().parse(
                         "{"
                                 + "\"data\":[{\"id\":\"1\",\"name\":\"Bob\"}],"
                                 + "\"database\":\"test\",\"es\":1598752886000,\"id\":2,"
@@ -76,8 +78,8 @@ class KafkaJsonFlatMessageParserTest {
 
     @Test
     void testParseDelete() {
-        KafkaJsonFlatMessage message =
-                KafkaJsonFlatMessageParser.parse(
+        CanalMessage message =
+                new CanalMessageParser().parse(
                         "{"
                                 + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
                                 + "\"database\":\"test\",\"es\":1598752886000,\"id\":3,"
@@ -90,8 +92,8 @@ class KafkaJsonFlatMessageParserTest {
 
     @Test
     void testParseDdl() {
-        KafkaJsonFlatMessage message =
-                KafkaJsonFlatMessageParser.parse(
+        CanalMessage message =
+                new CanalMessageParser().parse(
                         "{"
                                 + "\"data\":null,\"database\":\"test\",\"es\":1598752886000,"
                                 + "\"id\":4,\"isDdl\":true,\"mysqlType\":null,\"old\":null,"
@@ -109,8 +111,8 @@ class KafkaJsonFlatMessageParserTest {
     @Test
     void testMissingFieldsAreTolerated() {
         // A minimal message missing most fields must not fail parsing
-        KafkaJsonFlatMessage message =
-                KafkaJsonFlatMessageParser.parse("{\"data\":[{\"id\":\"1\"}]}");
+        CanalMessage message =
+                new CanalMessageParser().parse("{\"data\":[{\"id\":\"1\"}]}");
         assertEquals(0, message.getId());
         assertNull(message.getDatabase());
         assertNull(message.getTable());
@@ -125,8 +127,8 @@ class KafkaJsonFlatMessageParserTest {
     @Test
     void testEmptyDataWithTypeAndTable() {
         // canal emits such messages for GTID / QUERY / TRUNCATE events
-        KafkaJsonFlatMessage message =
-                KafkaJsonFlatMessageParser.parse(
+        CanalMessage message =
+                new CanalMessageParser().parse(
                         "{\"data\":[],\"database\":\"test\",\"es\":1598752886000,"
                                 + "\"id\":5,\"isDdl\":false,\"mysqlType\":{},\"old\":null,"
                                 + "\"pkNames\":null,\"sql\":\"\",\"sqlType\":{},"
@@ -137,16 +139,16 @@ class KafkaJsonFlatMessageParserTest {
 
     @Test
     void testNullAndEmptyJson() {
-        assertNull(KafkaJsonFlatMessageParser.parse(null));
-        assertNull(KafkaJsonFlatMessageParser.parse(""));
-        assertNull(KafkaJsonFlatMessageParser.parse("  "));
+        assertNull(new CanalMessageParser().parse(null));
+        assertNull(new CanalMessageParser().parse(""));
+        assertNull(new CanalMessageParser().parse("  "));
     }
 
     @Test
     void testInvalidJsonThrows() {
         assertThrows(
                 org.apache.flink.util.FlinkRuntimeException.class,
-                () -> KafkaJsonFlatMessageParser.parse("not-a-json"));
+                () -> new CanalMessageParser().parse("not-a-json"));
     }
 
     @Test
@@ -156,8 +158,8 @@ class KafkaJsonFlatMessageParserTest {
         row1.put("id", "1");
         Map<String, String> row2 = new HashMap<>();
         row2.put("id", "2");
-        KafkaJsonFlatMessage message =
-                KafkaJsonFlatMessageParser.parse(
+        CanalMessage message =
+                new CanalMessageParser().parse(
                         "{"
                                 + "\"data\":[{\"id\":\"1\"},{\"id\":\"2\"}],"
                                 + "\"database\":\"test\",\"es\":1,\"id\":6,"
@@ -167,5 +169,55 @@ class KafkaJsonFlatMessageParserTest {
                                 + "\"ts\":2,\"type\":\"INSERT\"}");
         assertEquals(2, message.getData().size());
         assertEquals("2", message.getData().get(1).get("id"));
+    }
+
+    @Test
+    void testTidbCommitTsEventTime() {
+        // A TiDB DML carries the commit TSO in `_tidb.commitTs`; >> 18 gives the physical millis.
+        CanalMessage message =
+                new CanalMessageParser().parse(
+                        "{"
+                                + "\"data\":[{\"id\":\"1\"}],\"database\":\"test\","
+                                + "\"es\":1598752886000,\"isDdl\":false,\"table\":\"users\","
+                                + "\"ts\":1598752887000,\"type\":\"INSERT\","
+                                + "\"_tidb\":{\"commitTs\":4398046511104}}");
+        assertEquals(4398046511104L, message.getTidbInfo().getCommitTs());
+        assertEquals(
+                Long.valueOf(16777216L),
+                message.getEventTimeValue(KafkaJsonSourceOptions.EventTime.TIDB_TSO));
+    }
+
+    @Test
+    void testTidbWatermarkTsEventTime() {
+        // A TiCDC watermark event carries `_tidb.watermarkTs` (not `commitTs`): the TSO at which
+        // every transaction with a smaller commit TSO has been published. It yields a real event
+        // time in tidb_tso mode, so the offset advances even when no DML arrives.
+        CanalMessage message =
+                new CanalMessageParser().parse(
+                        "{"
+                                + "\"data\":null,\"database\":\"\",\"es\":1656559521880,"
+                                + "\"isDdl\":false,\"table\":\"\","
+                                + "\"ts\":1656559524120,\"type\":\"TIDB_WATERMARK\","
+                                + "\"_tidb\":{\"watermarkTs\":4398046511104}}");
+        assertEquals(4398046511104L, message.getTidbInfo().getWatermarkTs());
+        assertEquals(
+                Long.valueOf(16777216L),
+                message.getEventTimeValue(KafkaJsonSourceOptions.EventTime.TIDB_TSO));
+        // in es mode the watermark's own es (its commit time in millis) is the event time
+        assertEquals(
+                Long.valueOf(1656559521880L),
+                message.getEventTimeValue(KafkaJsonSourceOptions.EventTime.ES));
+    }
+
+    @Test
+    void testPlainCanalMessageHasNoTso() {
+        // A plain canal flatMessage carries no `_tidb`; tidb_tso yields null (no usable TSO).
+        CanalMessage message =
+                new CanalMessageParser().parse(
+                        "{\"data\":[{\"id\":\"1\"}],\"database\":\"test\","
+                                + "\"es\":1,\"isDdl\":false,\"table\":\"users\","
+                                + "\"ts\":2,\"type\":\"INSERT\"}");
+        assertNull(message.getTidbInfo());
+        assertNull(message.getEventTimeValue(KafkaJsonSourceOptions.EventTime.TIDB_TSO));
     }
 }

@@ -18,6 +18,7 @@
 package org.apache.flink.cdc.connectors.kafkajson.source.message;
 
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.MessageFormat;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -79,6 +80,11 @@ public class DebeziumMessage extends KafkaJsonMessage {
             default:
                 return MessageType.UNKNOWN;
         }
+    }
+
+    @Override
+    public MessageFormat getFormat() {
+        return MessageFormat.DEBEZIUM;
     }
 
     @Override

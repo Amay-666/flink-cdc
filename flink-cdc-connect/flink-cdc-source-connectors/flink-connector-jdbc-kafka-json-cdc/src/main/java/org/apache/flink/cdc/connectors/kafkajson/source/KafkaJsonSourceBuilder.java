@@ -19,6 +19,7 @@ package org.apache.flink.cdc.connectors.kafkajson.source;
 
 import org.apache.flink.cdc.common.annotation.Experimental;
 import org.apache.flink.cdc.connectors.base.options.StartupOptions;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffsetFactory;
@@ -238,7 +239,9 @@ public class KafkaJsonSourceBuilder<T> {
      */
     public KafkaJsonSource<T> build() {
         KafkaJsonOffsetFactory offsetFactory = new KafkaJsonOffsetFactory();
-        KafkaJsonDialect dialect = new KafkaJsonDialect(configFactory.create(0));
+        KafkaJsonSourceConfig sourceConfig = configFactory.create(0);
+        KafkaJsonDialect dialect =
+                KafkaJsonDialectFactory.create(sourceConfig.getDatabaseType(), sourceConfig);
         return new KafkaJsonSource<>(
                 configFactory, checkNotNull(deserializer), offsetFactory, dialect);
     }

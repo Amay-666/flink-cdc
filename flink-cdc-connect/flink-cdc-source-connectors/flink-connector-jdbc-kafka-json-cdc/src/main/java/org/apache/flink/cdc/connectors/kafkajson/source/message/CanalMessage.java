@@ -18,6 +18,7 @@
 package org.apache.flink.cdc.connectors.kafkajson.source.message;
 
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.MessageFormat;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -28,6 +29,7 @@ import java.io.Serializable;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * The flat message emitted by canal to Kafka when {@code canal.instance.memory.batch.mode} is
@@ -44,7 +46,7 @@ import java.util.Map;
  *
  * <p>See https://github.com/alibaba/canal/wiki/ClientExample for the canonical JSON layout.
  */
-public class KafkaJsonFlatMessage extends KafkaJsonMessage {
+public class CanalMessage extends KafkaJsonMessage {
 
     private static final long serialVersionUID = 1L;
 
@@ -92,6 +94,7 @@ public class KafkaJsonFlatMessage extends KafkaJsonMessage {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class TidbInfo implements Serializable {
         private Long commitTs;
+        private Long watermarkTs;
 
         public Long getCommitTs() {
             return commitTs;
@@ -101,9 +104,24 @@ public class KafkaJsonFlatMessage extends KafkaJsonMessage {
             this.commitTs = commitTs;
         }
 
-        // The commit time of the TiDB transaction.
+        public Long getWatermarkTs() {
+            return watermarkTs;
+        }
+
+        public void setWatermarkTs(Long watermarkTs) {
+            this.watermarkTs = watermarkTs;
+        }
+
+        /**
+         * The commit time of the TiDB transaction. A watermark event carries {@code watermarkTs}
+         * (the TSO at which every transaction with a smaller commit TSO has already been published)
+         * instead of {@code commitTs}; both are shifted to physical millis.
+         */
         @JsonProperty("commit-ts")
-        public Long getCommitTimeStamp() {
+        public Long getCommitTimeStamp(String type) {
+            if (Objects.equals(type, "TIDB_WATERMARK")) {
+                return watermarkTs != null ? watermarkTs >> 18 : null;
+            }
             return commitTs != null ? commitTs >> 18 : null;
         }
 
@@ -111,6 +129,7 @@ public class KafkaJsonFlatMessage extends KafkaJsonMessage {
         public String toString() {
             return "{" +
                     "commitTs=" + commitTs +
+                    ", watermarkTs=" + watermarkTs +
                     '}';
         }
     }
@@ -221,6 +240,11 @@ public class KafkaJsonFlatMessage extends KafkaJsonMessage {
     }
 
     @Override
+    public MessageFormat getFormat() {
+        return MessageFormat.CANAL;
+    }
+
+    @Override
     @Nullable
     public Long getEventTimeValue(EventTime mode) {
         switch (mode) {
@@ -229,13 +253,12 @@ public class KafkaJsonFlatMessage extends KafkaJsonMessage {
             case TS:
                 return ts;
             case TIDB_TSO:
-                // Prefer the real commit TSO (physical millis) when TiCDC's `_tidb` extension is
-                // present; a plain canal flatMessage carries no TSO, so TIDB_TSO degrades to es
-                // (the commit-time equivalent, which TiCDC's canal-json already reports in `es`).
+                // The commit TSO (physical millis) carried by TiCDC's `_tidb` extension: `commitTs`
+                // for a transaction, `watermarkTs` for a watermark event. Both are handled by
+                // TidbInfo#getCommitTimeStamp; a plain canal flatMessage carries no `_tidb` and
+                // yields null.
                 TidbInfo tidb = tidbInfo;
-                return tidb != null && tidb.getCommitTimeStamp() != null
-                        ? tidb.getCommitTimeStamp()
-                        : es;
+                return tidb != null ? tidb.getCommitTimeStamp(type) : null;
             default:
                 return null;
         }
@@ -289,7 +312,7 @@ public class KafkaJsonFlatMessage extends KafkaJsonMessage {
 
     @Override
     public String toString() {
-        return "KafkaJsonFlatMessage{"
+        return "CanalMessage{"
                 + "id="
                 + id
                 + ", database='"

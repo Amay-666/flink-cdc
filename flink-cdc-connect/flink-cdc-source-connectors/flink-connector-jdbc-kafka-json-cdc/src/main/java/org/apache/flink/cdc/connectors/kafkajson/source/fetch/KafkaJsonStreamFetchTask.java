@@ -25,7 +25,6 @@ import org.apache.flink.cdc.connectors.base.source.meta.wartermark.WatermarkKind
 import org.apache.flink.cdc.connectors.base.source.reader.external.FetchTask;
 import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
-import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
 import org.apache.flink.cdc.connectors.kafkajson.source.handler.KafkaJsonSchemaChangeHandler;
 import org.apache.flink.cdc.connectors.kafkajson.source.kafka.KafkaJsonKafkaOffsetUtils;
 import org.apache.flink.cdc.connectors.kafkajson.source.kafka.KafkaJsonOffsetSupplier;
@@ -74,8 +73,8 @@ import java.util.Set;
  *
  * <p>When the split is a bounded read (its ending offset is a real event time rather than {@link
  * KafkaJsonOffset#NO_STOPPING_OFFSET}) the task dispatches the {@link WatermarkKind#END} watermark
- * once every partition has delivered a message at-or-after the ending offset (or is drained to its
- * end), which finalizes the incremental snapshot of the split. Messages <em>strictly after</em> the
+ * once every partition has delivered a message strictly after the ending offset, which finalizes
+ * the incremental snapshot of the split. Messages <em>strictly after</em> the
  * ending offset are not emitted: the stream split that follows reads only event times strictly
  * after its starting offset (its high-watermark watermark), so emitting them here would duplicate
  * the stream-phase emission. The ending offset itself is <em>not</em> after the ending offset (the
@@ -122,17 +121,10 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
 
     private volatile KafkaJsonOffset lastCommittedOffset;
 
-    /**
-     * Partitions that have already delivered a message at-or-after the ending offset (bounded
-     * reads).
-     */
+    /** Partitions that have already delivered a message strictly after the ending offset. */
     private final Set<TopicPartition> partitionsPastEnding = new HashSet<>();
     /** The partitions the consumer was assigned to (populated by {@link #assignAndSeek}). */
     private volatile List<TopicPartition> assignedPartitions = new ArrayList<>();
-    /**
-     * Partition log ends captured when the bounded read starts; a drained partition counts as done.
-     */
-    private volatile Map<TopicPartition, Long> partitionEndOffsets = new HashMap<>();
 
     /** Applies the DDL messages to the shared schema; built once per execute. */
     private volatile KafkaJsonSchemaChangeHandler schemaChangeHandler;
@@ -191,14 +183,6 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
         try {
             this.consumer = sourceFetchContext.getKafkaConsumer();
             assignAndSeek(consumer, sourceConfig);
-            if (isBoundedRead()) {
-                // capture the partition log ends once the consumer is positioned: the bounded read
-                // is
-                // over when every partition has delivered a message at-or-after the ending offset
-                // or
-                // has been drained to its end (e.g. an empty partition, which has nothing to read)
-                this.partitionEndOffsets = consumer.endOffsets(this.assignedPartitions);
-            }
             while (taskRunning && !stopped) {
                 ConsumerRecords<String, String> records;
                 try {
@@ -229,7 +213,7 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
     /**
      * Consumes one poll batch: parses each message, converts it into the data records and enqueues
      * them. Returns {@code true} when the bounded read is over — that is, every assigned partition
-     * has delivered a message at-or-after the ending offset, or has been drained to its end.
+     * has delivered a message strictly after the ending offset.
      */
     private boolean processRecords(
             KafkaJsonSourceFetchTaskContext sourceFetchContext,
@@ -250,19 +234,12 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                         record.offset());
                 continue;
             }
-            if (sourceFetchContext.getSourceConfig().getDatabaseType()
-                            == KafkaJsonSourceOptions.DatabaseType.TIDB
-                    && sourceFetchContext.getSourceConfig().getEventTime()
-                            == KafkaJsonSourceOptions.EventTime.TIDB_TSO
-                    && message.getMessageType() == KafkaJsonMessage.MessageType.TIDB_WATERMARK) {
-                // A TiDB watermark message carries no TSO; in TIDB_TSO mode it would pollute the
-                // offset bookkeeping with a meaningless time, so skip it before any processing.
-                continue;
-            }
+            Long eventTimeValue =
+                    KafkaJsonRecordConverter.eventTime(
+                            message, sourceFetchContext.getSourceConfig().getEventTime());
             lastOffset =
                     new KafkaJsonOffset(
-                            KafkaJsonRecordConverter.eventTime(
-                                    message, sourceFetchContext.getSourceConfig().getEventTime()),
+                            eventTimeValue == null ? -1L : eventTimeValue,
                             record.partition(),
                             record.offset());
 
@@ -346,14 +323,14 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
             // unbounded stream read: never finishes on its own
             return false;
         }
-        // Only when every partition has crossed the ending offset (or is drained to its end) is the
+        // Only when every partition has delivered a message strictly after the ending offset is the
         // bounded read complete. Terminating on the first crossing record would silently drop the
         // still-unread messages of a lagging partition, so the loop keeps polling until they
-        // arrive.
+        // arrive. (No drain escape hatch: the ending offset is a TSO boundary for TiDB, whose
+        // watermark events keep crossing it even during quiet periods, and MySQL never runs the
+        // bounded backfill at all — see KafkaJsonSourceConfig#isSkipSnapshotBackfill.)
         for (TopicPartition partition : assignedPartitions) {
-            if (!partitionsPastEnding.contains(partition)
-                    && consumer.position(partition)
-                            < partitionEndOffsets.getOrDefault(partition, 0L)) {
+            if (!partitionsPastEnding.contains(partition)) {
                 return false;
             }
         }

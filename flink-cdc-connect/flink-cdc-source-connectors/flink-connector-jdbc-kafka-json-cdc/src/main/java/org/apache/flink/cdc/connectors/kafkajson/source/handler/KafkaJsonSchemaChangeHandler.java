@@ -25,8 +25,8 @@ import org.apache.flink.cdc.connectors.kafkajson.source.ddl.KafkaJsonDebeziumDdl
 import org.apache.flink.cdc.connectors.kafkajson.source.ddl.KafkaJsonDruidDdlParser;
 import org.apache.flink.cdc.connectors.kafkajson.source.ddl.KafkaJsonTableChangeType;
 import org.apache.flink.cdc.connectors.kafkajson.source.fetch.KafkaJsonSourceFetchTaskContext;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.CanalMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.DebeziumMessage;
-import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonFlatMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonPartition;
@@ -178,7 +178,7 @@ public class KafkaJsonSchemaChangeHandler {
             DebeziumMessage dbz = (DebeziumMessage) message;
             return new long[] {dbz.getEs(), dbz.getTs()};
         }
-        KafkaJsonFlatMessage flat = (KafkaJsonFlatMessage) message;
+        CanalMessage flat = (CanalMessage) message;
         return new long[] {flat.getEs(), flat.getTs()};
     }
 

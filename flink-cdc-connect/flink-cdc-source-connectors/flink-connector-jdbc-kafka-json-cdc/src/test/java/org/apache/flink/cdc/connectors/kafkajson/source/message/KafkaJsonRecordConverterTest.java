@@ -61,7 +61,7 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        KafkaJsonFlatMessageParser.parse(
+                        new CanalMessageParser().parse(
                                 "{"
                                         + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"},"
                                         + "{\"id\":\"2\",\"name\":\"Bob\"}],"
@@ -104,7 +104,7 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(true);
         List<SourceRecord> records =
                 converter.convert(
-                        KafkaJsonFlatMessageParser.parse(
+                        new CanalMessageParser().parse(
                                 "{"
                                         + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
                                         + "\"database\":\"test\",\"es\":1598752886000,\"id\":1,"
@@ -127,7 +127,7 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        KafkaJsonFlatMessageParser.parse(
+                        new CanalMessageParser().parse(
                                 "{"
                                         + "\"data\":[{\"id\":\"1\",\"name\":\"Bob\"}],"
                                         + "\"database\":\"test\",\"es\":1598752886000,\"id\":2,"
@@ -153,7 +153,7 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        KafkaJsonFlatMessageParser.parse(
+                        new CanalMessageParser().parse(
                                 "{"
                                         + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
                                         + "\"database\":\"test\",\"es\":1598752886000,\"id\":3,"
@@ -179,7 +179,7 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        KafkaJsonFlatMessageParser.parse(
+                        new CanalMessageParser().parse(
                                 "{"
                                         + "\"data\":null,\"database\":\"test\","
                                         + "\"es\":1598752886000,\"id\":4,\"isDdl\":true,"
@@ -198,7 +198,7 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        KafkaJsonFlatMessageParser.parse(
+                        new CanalMessageParser().parse(
                                 "{"
                                         + "\"data\":[],\"database\":\"test\","
                                         + "\"es\":1598752886000,\"id\":5,\"isDdl\":false,"
@@ -219,7 +219,7 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        KafkaJsonFlatMessageParser.parse(
+                        new CanalMessageParser().parse(
                                 "{"
                                         + "\"data\":null,\"database\":\"\",\"es\":1656559521880,"
                                         + "\"id\":0,\"isDdl\":false,\"mysqlType\":null,"
@@ -240,7 +240,7 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        KafkaJsonFlatMessageParser.parse(
+                        new CanalMessageParser().parse(
                                 "{"
                                         + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
                                         + "\"database\":\"test\",\"es\":1656559521880,\"id\":3,"
@@ -278,11 +278,11 @@ class KafkaJsonRecordConverterTest {
                         + "\"ts\":1598752887000,\"type\":\"INSERT\"}";
         SourceRecord first =
                 converter
-                        .convert(KafkaJsonFlatMessageParser.parse(insert), "test.users", 0, 0L)
+                        .convert(new CanalMessageParser().parse(insert), "test.users", 0, 0L)
                         .get(0);
         SourceRecord second =
                 converter
-                        .convert(KafkaJsonFlatMessageParser.parse(insert), "test.users", 1, 1L)
+                        .convert(new CanalMessageParser().parse(insert), "test.users", 1, 1L)
                         .get(0);
         // the TableSchema (and hence the value schema) is registered once and reused
         assertEquals(first.valueSchema(), second.valueSchema());
@@ -294,7 +294,7 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        KafkaJsonFlatMessageParser.parse(
+                        new CanalMessageParser().parse(
                                 "{"
                                         + "\"data\":[{\"id\":\"1\"}],"
                                         + "\"database\":\"test\",\"es\":1,\"id\":6,"

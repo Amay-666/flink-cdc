@@ -17,7 +17,7 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.utils;
 
-import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonFlatMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.CanalMessage;
 import org.apache.flink.util.FlinkRuntimeException;
 
 import io.debezium.relational.Column;
@@ -87,7 +87,7 @@ public class KafkaJsonTableUtils {
      * @return the reconstructed table, or {@code null} if the message carries no column metadata at
      *     all
      */
-    public static Table buildTable(KafkaJsonFlatMessage message) {
+    public static Table buildTable(CanalMessage message) {
         TableId tableId =
                 new TableId(
                         message.getDatabase() == null ? "" : message.getDatabase(),
@@ -115,7 +115,7 @@ public class KafkaJsonTableUtils {
         return table.create();
     }
 
-    private static List<String> columnNames(KafkaJsonFlatMessage message) {
+    private static List<String> columnNames(CanalMessage message) {
         if (message.getData() != null && !message.getData().isEmpty()) {
             return new ArrayList<>(message.getData().get(0).keySet());
         }
