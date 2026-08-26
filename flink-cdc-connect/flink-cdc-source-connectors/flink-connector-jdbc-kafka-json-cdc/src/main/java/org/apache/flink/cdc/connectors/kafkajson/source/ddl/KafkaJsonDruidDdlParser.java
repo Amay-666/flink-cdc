@@ -35,6 +35,7 @@ import com.alibaba.druid.sql.ast.statement.SQLColumnDefinition;
 import com.alibaba.druid.sql.ast.statement.SQLCreateTableStatement;
 import com.alibaba.druid.sql.ast.statement.SQLDropTableStatement;
 import com.alibaba.druid.sql.ast.statement.SQLTableElement;
+import com.alibaba.druid.sql.ast.statement.SQLTruncateStatement;
 import com.alibaba.druid.sql.dialect.mysql.ast.statement.MySqlAlterTableChangeColumn;
 import com.alibaba.druid.sql.dialect.mysql.ast.statement.MySqlAlterTableModifyColumn;
 import com.alibaba.druid.sql.dialect.mysql.ast.statement.MySqlRenameTableStatement;
@@ -48,6 +49,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.stream.Collectors;
@@ -57,12 +59,12 @@ import java.util.stream.Collectors;
  *
  * <p>Handles {@code CREATE TABLE} (columns + primary key), {@code ALTER TABLE} ({@code ADD}/{@code
  * DROP}/{@code MODIFY}/{@code CHANGE} column, applied on top of the current schema), {@code DROP
- * TABLE} and the {@code RENAME TABLE}/{@code ALTER TABLE ... RENAME} table renames. A single-column
- * rename ({@code RENAME COLUMN}/{@code CHANGE}) is classified as {@link
+ * TABLE}, {@code TRUNCATE TABLE} and the {@code RENAME TABLE}/{@code ALTER TABLE ... RENAME} table
+ * renames. A single-column rename ({@code RENAME COLUMN}/{@code CHANGE}) is classified as {@link
  * KafkaJsonTableChangeType#RENAME_COLUMN}. Statements that do not change the column model ({@code ADD
- * INDEX}, {@code TRUNCATE}, {@code USE}, ...) yield {@code null} and are ignored. The column type
- * mapping delegates to {@link KafkaJsonTableUtils} so that a DDL-derived schema and a
- * canal-message-derived schema are identical.
+ * INDEX}, {@code USE}, ...) yield {@code null} and are ignored. The column type mapping delegates to
+ * {@link KafkaJsonTableUtils} so that a DDL-derived schema and a canal-message-derived schema are
+ * identical.
  */
 public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
 
@@ -85,6 +87,11 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
             }
             if (statement instanceof SQLDropTableStatement) {
                 return KafkaJsonDdlParsedResult.drop(tableId, currentTable);
+            }
+            if (statement instanceof SQLTruncateStatement) {
+                return currentTable != null
+                        ? KafkaJsonDdlParsedResult.truncate(tableId, currentTable)
+                        : null;
             }
             LOG.debug("Ignoring DDL statement that does not change the table schema: {}", ddl);
             return null;
@@ -146,6 +153,8 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
         }
         TableEditor table = currentTable.edit();
         TableId effectiveTableId = tableId;
+        // Track column-level changes for detailed ALTER classification
+        List<ColumnChangeInfo> columnChanges = new ArrayList<>();
         for (SQLAlterTableItem item : statement.getItems()) {
             if (item instanceof SQLAlterTableRename) {
                 // ALTER TABLE t RENAME [TO|AS] newname
@@ -174,25 +183,65 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
                 }
             } else if (item instanceof SQLAlterTableAddColumn) {
                 for (SQLColumnDefinition column : ((SQLAlterTableAddColumn) item).getColumns()) {
+                    String columnName = unquote(column.getColumnName());
+                    columnChanges.add(
+                            new ColumnChangeInfo(
+                                    columnName,
+                                    KafkaJsonTableChangeType.ADD_COLUMN,
+                                    null,
+                                    columnName));
                     table.addColumn(buildColumn(column, table.columns().size() + 1).create());
                 }
             } else if (item instanceof SQLAlterTableDropColumnItem) {
                 for (SQLName column : ((SQLAlterTableDropColumnItem) item).getColumns()) {
-                    table.removeColumn(unquote(column.getSimpleName()));
+                    String columnName = unquote(column.getSimpleName());
+                    columnChanges.add(
+                            new ColumnChangeInfo(
+                                    columnName,
+                                    KafkaJsonTableChangeType.DROP_COLUMN,
+                                    columnName,
+                                    null));
+                    table.removeColumn(columnName);
                 }
             } else if (item instanceof MySqlAlterTableModifyColumn) {
-                SQLColumnDefinition column =
-                        ((MySqlAlterTableModifyColumn) item).getNewColumnDefinition();
+                // ALTER TABLE t MODIFY COLUMN ... (change type/length/nullable, no rename)
+                MySqlAlterTableModifyColumn modify = (MySqlAlterTableModifyColumn) item;
+                SQLColumnDefinition newColDef = modify.getNewColumnDefinition();
+                String columnName = unquote(newColDef.getColumnName());
+                Column oldColumn = table.columnWithName(columnName);
+                if (oldColumn != null) {
+                    // Compare old and new column to detect specific changes
+                    compareColumnChanges(
+                            columnChanges,
+                            oldColumn,
+                            buildColumn(newColDef, oldColumn.position()).create());
+                }
                 table.updateColumn(
-                        buildColumn(column, positionOf(table, unquote(column.getColumnName())))
-                                .create());
+                        buildColumn(newColDef, positionOf(table, columnName)).create());
             } else if (item instanceof MySqlAlterTableChangeColumn) {
+                // ALTER TABLE t CHANGE COLUMN ... (change + potential rename)
                 MySqlAlterTableChangeColumn change = (MySqlAlterTableChangeColumn) item;
                 String oldName = unquote(change.getColumnName().getSimpleName());
-                SQLColumnDefinition newColumn = change.getNewColumnDefinition();
-                int position = positionOf(table, oldName);
-                table.removeColumn(oldName);
-                table.addColumn(buildColumn(newColumn, position).create());
+                SQLColumnDefinition newColDef = change.getNewColumnDefinition();
+                String newName = unquote(newColDef.getColumnName());
+                Column oldColumn = table.columnWithName(oldName);
+                if (oldColumn != null) {
+                    int position = positionOf(table, oldName);
+                    Column newColumn = buildColumn(newColDef, position).create();
+                    // Compare old and new column to detect specific changes
+                    compareColumnChanges(columnChanges, oldColumn, newColumn);
+                    // If column name changed, record it
+                    if (!oldName.equals(newName)) {
+                        columnChanges.add(
+                                new ColumnChangeInfo(
+                                        oldName,
+                                        KafkaJsonTableChangeType.RENAME_COLUMN,
+                                        oldName,
+                                        newName));
+                    }
+                    table.removeColumn(oldName);
+                    table.addColumn(newColumn);
+                }
             }
             // other items (indexes, primary key, ...) are not modeled by the Debezium
             // Table and are intentionally ignored
@@ -205,7 +254,67 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
         if (KafkaJsonDdlParsedResult.isPureColumnRename(currentTable, newTable)) {
             return KafkaJsonDdlParsedResult.renameColumn(tableId, currentTable, newTable);
         }
-        return KafkaJsonDdlParsedResult.alter(tableId, currentTable, newTable);
+        return KafkaJsonDdlParsedResult.alter(tableId, currentTable, newTable, columnChanges);
+    }
+
+    /**
+     * Compares two column definitions and adds {@link ColumnChangeInfo} entries for each detected
+     * change (type, comment, position).
+     *
+     * <p>Note: default value changes are intentionally ignored because Debezium cannot reliably
+     * parse expressions like {@code CURRENT_TIMESTAMP}, leading to false positives.
+     */
+    private static void compareColumnChanges(
+            List<ColumnChangeInfo> columnChanges, Column oldColumn, Column newColumn) {
+        String columnName = newColumn.name();
+        // Check type change
+        if (!sameColumnType(oldColumn, newColumn)) {
+            columnChanges.add(
+                    new ColumnChangeInfo(
+                            columnName,
+                            KafkaJsonTableChangeType.ALTER_COLUMN_TYPE,
+                            oldColumn.typeName() + "(" + oldColumn.length() + ")",
+                            newColumn.typeName() + "(" + newColumn.length() + ")"));
+        }
+        // Check comment change
+        String oldComment = oldColumn.comment();
+        String newComment = newColumn.comment();
+        if (!equalsSafe(oldComment, newComment)) {
+            columnChanges.add(
+                    new ColumnChangeInfo(
+                            columnName,
+                            KafkaJsonTableChangeType.ALTER_COLUMN_COMMENT,
+                            oldComment,
+                            newComment));
+        }
+        // Check position change
+        if (oldColumn.position() != newColumn.position()) {
+            columnChanges.add(
+                    new ColumnChangeInfo(
+                            columnName,
+                            KafkaJsonTableChangeType.ALTER_COLUMN_POSITION,
+                            String.valueOf(oldColumn.position()),
+                            String.valueOf(newColumn.position())));
+        }
+    }
+
+    private static boolean equalsSafe(String a, String b) {
+        if (a == null && b == null) {
+            return true;
+        }
+        if (a == null || b == null) {
+            return false;
+        }
+        return a.equals(b);
+    }
+
+    /** Checks if two columns have the same type definition (type name, length, scale, optional). */
+    private static boolean sameColumnType(Column a, Column b) {
+        return a.jdbcType() == b.jdbcType()
+                && a.length() == b.length()
+                && a.scale() == b.scale()
+                && a.isOptional() == b.isOptional()
+                && a.typeName().equals(b.typeName());
     }
 
     private static int positionOf(TableEditor table, String columnName) {

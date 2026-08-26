@@ -95,6 +95,19 @@ class KafkaJsonDebeziumDdlParserTest {
         assertEquals(2, result.getNewTable().columns().size());
     }
 
+    @Test
+    void testParseTruncateTable() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test", TABLE_ID, baseTable(), "TRUNCATE TABLE `test`.`users`");
+
+        assertEquals(KafkaJsonTableChangeType.TRUNCATE, result.getType());
+        assertEquals(TABLE_ID, result.getTableId());
+        // a truncate does not change the schema: the table is preserved as-is
+        assertEquals(baseTable(), result.getOldTable());
+        assertEquals(baseTable(), result.getNewTable());
+    }
+
     private static Table baseTable() {
         return Table.editor()
                 .tableId(TABLE_ID)

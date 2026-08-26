@@ -76,6 +76,9 @@ public class KafkaJsonDebeziumDdlParser implements KafkaJsonDdlParser {
                 }
                 return KafkaJsonDdlParsedResult.drop(tableId, currentTable);
             }
+            if (isTruncateStatement(ddl, parsed, currentTable)) {
+                return KafkaJsonDdlParsedResult.truncate(tableId, currentTable);
+            }
             if (KafkaJsonDdlParsedResult.isPureColumnRename(currentTable, parsed)) {
                 return KafkaJsonDdlParsedResult.renameColumn(tableId, currentTable, parsed);
             }
@@ -84,6 +87,12 @@ public class KafkaJsonDebeziumDdlParser implements KafkaJsonDdlParser {
             LOG.warn("Failed to parse DDL with the Debezium ANTLR parser: {}", ddl, e);
             return null;
         }
+    }
+
+    /** Returns whether the DDL is a TRUNCATE statement and the schema is unchanged. */
+    private static boolean isTruncateStatement(String ddl, Table parsed, Table currentTable) {
+        return parsed.equals(currentTable)
+                && ddl.trim().toUpperCase(java.util.Locale.ROOT).startsWith("TRUNCATE");
     }
 
     /**

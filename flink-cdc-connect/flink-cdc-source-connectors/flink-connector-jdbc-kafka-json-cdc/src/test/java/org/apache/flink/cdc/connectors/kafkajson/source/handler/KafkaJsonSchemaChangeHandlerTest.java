@@ -148,6 +148,26 @@ class KafkaJsonSchemaChangeHandlerTest {
         assertNull(context.getDatabaseSchema().tableFor(TABLE_ID));
     }
 
+    @Test
+    void testTruncateKeepsSchemaAndCarriesTypeMarker() throws Exception {
+        KafkaJsonSourceFetchTaskContext context = context(true);
+
+        handle(context, "TRUNCATE TABLE `test`.`users`", 2000);
+
+        // a truncate does not change the schema: the shared schema keeps the table as-is
+        Table table = context.getDatabaseSchema().tableFor(TABLE_ID);
+        assertEquals(2, table.columns().size());
+        assertEquals("id", table.primaryKeyColumnNames().get(0));
+
+        // the schema-change record carries the truncate in the custom history-record fields
+        List<SourceRecord> records = drain(context.getQueue(), 1);
+        assertEquals(1, records.size());
+        HistoryRecord historyRecord = SourceRecordUtils.getHistoryRecord(records.get(0));
+        assertEquals(
+                KafkaJsonSchemaChangeHandler.TABLE_CHANGE_TYPE_TRUNCATE_TABLE,
+                historyRecord.document().getString(KafkaJsonSchemaChangeHandler.TABLE_CHANGE_TYPE));
+    }
+
     private static void handle(KafkaJsonSourceFetchTaskContext context, String sql, long es)
             throws Exception {
         KafkaJsonSourceConfig config = context.getSourceConfig();

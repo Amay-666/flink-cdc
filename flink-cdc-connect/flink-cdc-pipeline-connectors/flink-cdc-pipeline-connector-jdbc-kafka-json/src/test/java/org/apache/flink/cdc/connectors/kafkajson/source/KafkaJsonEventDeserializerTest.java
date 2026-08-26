@@ -28,6 +28,7 @@ import org.apache.flink.cdc.common.event.RenameColumnEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.types.DataType;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
+import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.source.handler.KafkaJsonSchemaChangeHandler;
 import org.apache.flink.cdc.debezium.history.FlinkJsonTableChangeSerializer;
 import org.apache.flink.cdc.debezium.table.DebeziumChangelogMode;
@@ -246,6 +247,24 @@ public class KafkaJsonEventDeserializerTest {
     }
 
     @Test
+    public void testTruncateTable() throws Exception {
+        deserializer.deserialize(createRecord(BASE_TABLE));
+
+        List<? extends Event> events =
+                deserializer.deserialize(
+                        truncateTableRecord("TRUNCATE TABLE `test`.`users`"));
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0)).isInstanceOf(TruncateTableEvent.class);
+        TruncateTableEvent truncate = (TruncateTableEvent) events.get(0);
+        assertThat(truncate.tableId()).isEqualTo(TABLE_ID);
+        // the schema is preserved by a truncate: the registry keeps the pre-truncate table
+        assertThat(truncate.getSchema().getColumns()).hasSize(2);
+        assertThat(truncate.getSchema().primaryKeys()).containsExactly("id");
+        assertThat(truncate.getSql()).contains("TRUNCATE TABLE");
+    }
+
+    @Test
     public void testAlterRenameColumn() throws Exception {
         deserializer.deserialize(createRecord(BASE_TABLE));
 
@@ -373,6 +392,54 @@ public class KafkaJsonEventDeserializerTest {
                                     KafkaJsonSchemaChangeHandler.TABLE_CHANGE_TYPE,
                                     KafkaJsonSchemaChangeHandler.TABLE_CHANGE_TYPE_RENAME_TABLE)
                             .set(KafkaJsonSchemaChangeHandler.NEW_TABLE_ID, newTableId)
+                            .set(HistoryRecord.Fields.DDL_STATEMENTS, sql);
+            String historyRecordStr = DocumentWriter.defaultWriter().write(historyDoc);
+
+            Schema keySchema =
+                    SchemaBuilder.struct()
+                            .name(KafkaJsonEventDeserializer.SCHEMA_CHANGE_EVENT_KEY_NAME)
+                            .build();
+            Schema sourceSchema =
+                    SchemaBuilder.struct()
+                            .field("db", Schema.STRING_SCHEMA)
+                            .field("table", Schema.STRING_SCHEMA)
+                            .build();
+            Schema valueSchema =
+                    SchemaBuilder.struct()
+                            .field("source", sourceSchema)
+                            .field("historyRecord", Schema.STRING_SCHEMA)
+                            .build();
+            Struct value =
+                    new Struct(valueSchema)
+                            .put(
+                                    "source",
+                                    new Struct(sourceSchema).put("db", "test").put("table", "users"))
+                            .put("historyRecord", historyRecordStr);
+            return new SourceRecord(
+                    Collections.emptyMap(),
+                    Collections.emptyMap(),
+                    "test",
+                    keySchema,
+                    new Struct(keySchema),
+                    valueSchema,
+                    value);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * Builds a schema-change record for a {@code TRUNCATE TABLE}: the canal DDL handler attaches the
+     * custom {@code tableChangeType} field to the history record and carries no table change (a
+     * truncate leaves the schema unchanged).
+     */
+    private static SourceRecord truncateTableRecord(String sql) {
+        try {
+            Document historyDoc =
+                    Document.create()
+                            .set(
+                                    KafkaJsonSchemaChangeHandler.TABLE_CHANGE_TYPE,
+                                    KafkaJsonSchemaChangeHandler.TABLE_CHANGE_TYPE_TRUNCATE_TABLE)
                             .set(HistoryRecord.Fields.DDL_STATEMENTS, sql);
             String historyRecordStr = DocumentWriter.defaultWriter().write(historyDoc);
 

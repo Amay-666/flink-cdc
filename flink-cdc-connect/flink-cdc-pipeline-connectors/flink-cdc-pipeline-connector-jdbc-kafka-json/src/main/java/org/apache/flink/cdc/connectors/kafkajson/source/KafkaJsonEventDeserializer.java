@@ -29,6 +29,7 @@ import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.types.DataType;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
+import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.serializer.KafkaJsonEventTypeInfo;
 import org.apache.flink.cdc.connectors.kafkajson.source.handler.KafkaJsonSchemaChangeHandler;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonColumnMeta;
@@ -100,6 +101,9 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
                 if (isRenameTableChange(historyRecord)) {
                     return handleRenameTable(record, historyRecord);
                 }
+                if (isTruncateTableChange(historyRecord)) {
+                    return handleTruncateTable(record, historyRecord);
+                }
                 Array tableChanges =
                         historyRecord.document().getArray(HistoryRecord.Fields.TABLE_CHANGES);
                 TableChanges changes = TABLE_CHANGE_SERIALIZER.deserialize(tableChanges, true);
@@ -149,8 +153,9 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
     /**
      * The produced type carries the connector's own {@link KafkaJsonEventTypeInfo}, so the stream is
      * (de)serialized by {@link org.apache.flink.cdc.connectors.kafkajson.serializer.KafkaJsonEventSerializer}
-     * which knows how to handle {@link RenameTableEvent}. Without this override the stream would use
-     * the released {@code EventTypeInfo}/{@code EventSerializer}, which reject the new event type.
+     * which knows how to handle {@link RenameTableEvent} and {@link TruncateTableEvent}. Without this
+     * override the stream would use the released {@code EventTypeInfo}/{@code EventSerializer}, which
+     * reject the new event types.
      */
     @Override
     public TypeInformation<Event> getProducedType() {
@@ -210,6 +215,32 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
             }
         }
         return null;
+    }
+
+    /** Returns whether the schema-change record announces a table truncate (a {@code TRUNCATE_TABLE}). */
+    private static boolean isTruncateTableChange(HistoryRecord historyRecord) {
+        return KafkaJsonSchemaChangeHandler.TABLE_CHANGE_TYPE_TRUNCATE_TABLE.equals(
+                historyRecord
+                        .document()
+                        .getString(KafkaJsonSchemaChangeHandler.TABLE_CHANGE_TYPE));
+    }
+
+    /**
+     * Rebuilds the {@link TruncateTableEvent} of a {@code TRUNCATE_TABLE} schema-change record. The
+     * table id comes from the record's {@code source}; the table schema is retrieved from the
+     * internal registry so that downstream consumers can clear per-table state associated with the
+     * truncated table.
+     */
+    private List<SchemaChangeEvent> handleTruncateTable(
+            SourceRecord record, HistoryRecord historyRecord) {
+        TableId tableId = getTableId(record);
+        io.debezium.relational.Table table = tables.forTable(KafkaJsonSchemaUtils.toDbzTableId(tableId));
+        org.apache.flink.cdc.common.schema.Schema schema =
+                table == null
+                        ? org.apache.flink.cdc.common.schema.Schema.newBuilder().build()
+                        : KafkaJsonSchemaUtils.toSchema(table);
+        String sql = historyRecord.document().getString(HistoryRecord.Fields.DDL_STATEMENTS);
+        return Collections.singletonList(new TruncateTableEvent(tableId, schema, sql));
     }
 
     private List<SchemaChangeEvent> convertTableChange(

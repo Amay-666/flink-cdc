@@ -79,14 +79,16 @@ public class KafkaJsonSchemaChangeHandler {
             "io.debezium.connector.canal.SchemaChangeValue";
 
     /**
-     * The custom fields set on the history-record document of a rename schema change. They are read
-     * by {@code KafkaJsonEventDeserializer} (in the pipeline module) to rebuild the rename that the
-     * Debezium {@code TableChanges.TableChangeType} cannot express: {@code RENAME_TABLE} carries the
-     * {@link #NEW_TABLE_ID} of the renamed table, {@code RENAME_COLUMN} only the type marker.
+     * The custom fields set on the history-record document of a rename/truncate schema change. They
+     * are read by {@code KafkaJsonEventDeserializer} (in the pipeline module) to rebuild the rename
+     * or truncate that the Debezium {@code TableChanges.TableChangeType} cannot express: {@code
+     * RENAME_TABLE} carries the {@link #NEW_TABLE_ID} of the renamed table, {@code RENAME_COLUMN}
+     * only the type marker, {@code TRUNCATE_TABLE} only the type marker.
      */
     public static final String TABLE_CHANGE_TYPE = "tableChangeType";
     public static final String TABLE_CHANGE_TYPE_RENAME_TABLE = "RENAME_TABLE";
     public static final String TABLE_CHANGE_TYPE_RENAME_COLUMN = "RENAME_COLUMN";
+    public static final String TABLE_CHANGE_TYPE_TRUNCATE_TABLE = "TRUNCATE_TABLE";
     public static final String NEW_TABLE_ID = "newTableId";
 
     private static final DocumentWriter DOCUMENT_WRITER = DocumentWriter.defaultWriter();
@@ -208,7 +210,11 @@ public class KafkaJsonSchemaChangeHandler {
             if (result.getNewTable() != null) {
                 tableChanges.create(result.getNewTable());
             }
-        } else {
+        } else if (type == KafkaJsonTableChangeType.TRUNCATE) {
+            // TRUNCATE does not change the schema: the type marker below is what announces the
+            // truncate to the pipeline deserializer, which reads the (unchanged) table schema from
+            // its own registry and attaches it to the TruncateTableEvent.
+        } else if (type == KafkaJsonTableChangeType.DROP) {
             // the serializer requires a (possibly empty) table for a DROP change
             tableChanges.drop(Table.editor().tableId(result.getTableId()).create());
         }
@@ -242,6 +248,8 @@ public class KafkaJsonSchemaChangeHandler {
             }
         } else if (type == KafkaJsonTableChangeType.RENAME_COLUMN) {
             historyDocument.set(TABLE_CHANGE_TYPE, TABLE_CHANGE_TYPE_RENAME_COLUMN);
+        } else if (type == KafkaJsonTableChangeType.TRUNCATE) {
+            historyDocument.set(TABLE_CHANGE_TYPE, TABLE_CHANGE_TYPE_TRUNCATE_TABLE);
         }
         String historyStr = DOCUMENT_WRITER.write(historyDocument);
 

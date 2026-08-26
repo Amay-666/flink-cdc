@@ -152,9 +152,27 @@ class KafkaJsonDruidDdlParserTest {
                         TABLE_ID,
                         baseTable(),
                         "CREATE INDEX `idx_name` ON `test`.`users` (`name`)"));
-        assertNull(
+    }
+
+    @Test
+    void testParseTruncateTable() {
+        KafkaJsonDdlParsedResult result =
                 parser.parse(
-                        "test", TABLE_ID, baseTable(), "TRUNCATE TABLE `test`.`users`"));
+                        "test", TABLE_ID, baseTable(), "TRUNCATE TABLE `test`.`users`");
+
+        assertEquals(KafkaJsonTableChangeType.TRUNCATE, result.getType());
+        assertEquals(TABLE_ID, result.getTableId());
+        // a truncate does not change the schema: the table is preserved as-is
+        assertEquals(baseTable(), result.getOldTable());
+        assertEquals(baseTable(), result.getNewTable());
+    }
+
+    @Test
+    void testTruncateWithoutCurrentTableIsIgnored() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse("test", TABLE_ID, null, "TRUNCATE TABLE `test`.`users`");
+
+        assertNull(result);
     }
 
     @Test

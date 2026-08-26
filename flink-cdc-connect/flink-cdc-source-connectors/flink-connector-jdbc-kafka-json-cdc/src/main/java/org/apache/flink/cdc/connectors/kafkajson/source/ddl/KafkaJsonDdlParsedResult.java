@@ -23,6 +23,7 @@ import io.debezium.relational.TableId;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -32,7 +33,8 @@ import java.util.List;
  * <p>Unlike Debezium's {@code TableChanges.TableChangeType} — which only knows {@code CREATE}/{@code
  * ALTER}/{@code DROP} — the {@link KafkaJsonTableChangeType} also models {@code RENAME_TABLE} and {@code
  * RENAME_COLUMN}, so a rename is carried with both the old and the new table id / schema instead of
- * being flattened into a {@code DROP}+{@code CREATE} pair.
+ * being flattened into a {@code DROP}+{@code CREATE} pair. Likewise a truncate is carried with the
+ * preserved schema (the truncated table is not dropped).
  */
 public class KafkaJsonDdlParsedResult {
 
@@ -45,6 +47,11 @@ public class KafkaJsonDdlParsedResult {
     @Nullable private final Table oldTable;
     /** The schema after the change, or {@code null} for a {@link KafkaJsonTableChangeType#DROP}. */
     @Nullable private final Table newTable;
+    /**
+     * The list of column-level changes for {@code ALTER} operations, or an empty list if not
+     * applicable (e.g., when parsed by the Debezium ANTLR parser).
+     */
+    private final List<ColumnChangeInfo> columnChanges;
 
     public KafkaJsonDdlParsedResult(
             KafkaJsonTableChangeType type,
@@ -52,11 +59,22 @@ public class KafkaJsonDdlParsedResult {
             @Nullable TableId newTableId,
             @Nullable Table oldTable,
             @Nullable Table newTable) {
+        this(type, tableId, newTableId, oldTable, newTable, Collections.emptyList());
+    }
+
+    public KafkaJsonDdlParsedResult(
+            KafkaJsonTableChangeType type,
+            TableId tableId,
+            @Nullable TableId newTableId,
+            @Nullable Table oldTable,
+            @Nullable Table newTable,
+            List<ColumnChangeInfo> columnChanges) {
         this.type = type;
         this.tableId = tableId;
         this.newTableId = newTableId;
         this.oldTable = oldTable;
         this.newTable = newTable;
+        this.columnChanges = columnChanges != null ? columnChanges : Collections.emptyList();
     }
 
     public static KafkaJsonDdlParsedResult create(TableId tableId, Table newTable) {
@@ -67,6 +85,25 @@ public class KafkaJsonDdlParsedResult {
             TableId tableId, @Nullable Table oldTable, Table newTable) {
         return new KafkaJsonDdlParsedResult(
                 KafkaJsonTableChangeType.ALTER, tableId, null, oldTable, newTable);
+    }
+
+    /**
+     * Returns an ALTER result with column change details.
+     *
+     * @param columnChanges the list of column-level changes.
+     */
+    public static KafkaJsonDdlParsedResult alter(
+            TableId tableId,
+            @Nullable Table oldTable,
+            Table newTable,
+            List<ColumnChangeInfo> columnChanges) {
+        return new KafkaJsonDdlParsedResult(
+                KafkaJsonTableChangeType.ALTER,
+                tableId,
+                null,
+                oldTable,
+                newTable,
+                columnChanges);
     }
 
     public static KafkaJsonDdlParsedResult drop(TableId tableId, @Nullable Table oldTable) {
@@ -86,6 +123,12 @@ public class KafkaJsonDdlParsedResult {
             TableId tableId, Table oldTable, Table newTable) {
         return new KafkaJsonDdlParsedResult(
                 KafkaJsonTableChangeType.RENAME_COLUMN, tableId, null, oldTable, newTable);
+    }
+
+    /** Returns a truncate result: the schema is preserved, so {@code oldTable == newTable}. */
+    public static KafkaJsonDdlParsedResult truncate(TableId tableId, Table table) {
+        return new KafkaJsonDdlParsedResult(
+                KafkaJsonTableChangeType.TRUNCATE, tableId, tableId, table, table);
     }
 
     public KafkaJsonTableChangeType getType() {
@@ -112,6 +155,14 @@ public class KafkaJsonDdlParsedResult {
     @Nullable
     public Table getNewTable() {
         return newTable;
+    }
+
+    /**
+     * Returns the list of column-level changes for {@code ALTER} operations, or an empty list if not
+     * applicable.
+     */
+    public List<ColumnChangeInfo> getColumnChanges() {
+        return columnChanges;
     }
 
     /**
