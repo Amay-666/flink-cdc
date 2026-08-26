@@ -18,6 +18,8 @@
 package org.apache.flink.cdc.connectors.kafkajson.source.message;
 
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.MessageFormat;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessageParser;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessageParser;
 
 /**
  * Creates the {@link KafkaJsonMessageParser} for a configured {@link MessageFormat}.

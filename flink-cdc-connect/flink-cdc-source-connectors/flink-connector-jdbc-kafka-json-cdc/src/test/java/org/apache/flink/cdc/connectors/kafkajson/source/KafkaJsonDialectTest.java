@@ -22,6 +22,7 @@ import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceCo
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.DatabaseType;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
 import org.apache.flink.cdc.connectors.kafkajson.source.connection.KafkaJsonJdbcConnection;
+import org.apache.flink.cdc.connectors.kafkajson.source.dialect.KafkaJsonDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 
 import org.junit.jupiter.api.Test;

@@ -34,7 +34,7 @@ import java.time.Duration;
  * <p>The fork embeds Debezium {@code 1.9.8.Final} (root pom {@code <debezium.version>}), so the 1.9
  * series image is used to keep the wire format aligned. The JsonConverter has schemas enabled, so
  * every record carries the {@code {schema, payload}} envelope that {@link
- * org.apache.flink.cdc.connectors.kafkajson.source.message.DebeziumMessageParser} unwraps — the
+ * org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessageParser} unwraps — the
  * exact wire format the real chain must prove the connector consumes.
  *
  * <p>The image entrypoint maps {@code CONNECT_*}-prefixed environment variables into {@code

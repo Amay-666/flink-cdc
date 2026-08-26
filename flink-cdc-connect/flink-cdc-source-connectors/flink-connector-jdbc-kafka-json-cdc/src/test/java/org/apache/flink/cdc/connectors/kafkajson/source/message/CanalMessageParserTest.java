@@ -18,6 +18,8 @@
 package org.apache.flink.cdc.connectors.kafkajson.source.message;
 
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessageParser;
 
 import org.junit.jupiter.api.Test;
 

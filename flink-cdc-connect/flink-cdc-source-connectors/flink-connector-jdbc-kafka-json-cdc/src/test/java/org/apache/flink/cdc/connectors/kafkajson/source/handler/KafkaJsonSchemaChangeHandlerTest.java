@@ -19,12 +19,12 @@ package org.apache.flink.cdc.connectors.kafkajson.source.handler;
 
 import org.apache.flink.cdc.connectors.base.source.meta.split.StreamSplit;
 import org.apache.flink.cdc.connectors.base.utils.SourceRecordUtils;
-import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
+import org.apache.flink.cdc.connectors.kafkajson.source.dialect.KafkaJsonDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.fetch.KafkaJsonSourceFetchTaskContext;
-import org.apache.flink.cdc.connectors.kafkajson.source.message.CanalMessage;
-import org.apache.flink.cdc.connectors.kafkajson.source.message.CanalMessageParser;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessageParser;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.debezium.history.FlinkJsonTableChangeSerializer;
 

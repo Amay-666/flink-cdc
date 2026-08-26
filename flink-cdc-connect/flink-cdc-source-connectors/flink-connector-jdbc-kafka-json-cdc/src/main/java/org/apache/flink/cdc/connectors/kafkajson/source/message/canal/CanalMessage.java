@@ -15,10 +15,11 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.source.message;
+package org.apache.flink.cdc.connectors.kafkajson.source.message.canal;
 
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.MessageFormat;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonMessage;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;

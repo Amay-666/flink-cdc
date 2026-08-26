@@ -20,6 +20,8 @@ package org.apache.flink.cdc.connectors.kafkajson.source.message;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessageParser;
 
 import io.debezium.relational.Column;
 import io.debezium.relational.Table;

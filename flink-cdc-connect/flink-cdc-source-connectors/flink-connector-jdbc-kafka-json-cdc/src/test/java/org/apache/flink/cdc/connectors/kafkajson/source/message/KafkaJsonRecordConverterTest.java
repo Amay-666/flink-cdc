@@ -20,6 +20,7 @@ package org.apache.flink.cdc.connectors.kafkajson.source.message;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessageParser;
 
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;

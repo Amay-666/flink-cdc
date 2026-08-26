@@ -19,11 +19,11 @@ package org.apache.flink.cdc.connectors.kafkajson.source.fetch;
 
 import org.apache.flink.cdc.connectors.base.source.meta.split.SnapshotSplit;
 import org.apache.flink.cdc.connectors.base.source.meta.wartermark.WatermarkEvent;
-import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDialect;
-import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonTiDBDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
+import org.apache.flink.cdc.connectors.kafkajson.source.dialect.KafkaJsonDialect;
+import org.apache.flink.cdc.connectors.kafkajson.source.dialect.KafkaJsonTiDBDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.FakeKafkaConsumer;
 import org.apache.flink.table.types.logical.BigIntType;

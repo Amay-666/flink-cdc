@@ -22,6 +22,8 @@ import org.apache.flink.cdc.connectors.base.options.StartupOptions;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
+import org.apache.flink.cdc.connectors.kafkajson.source.dialect.KafkaJsonDialect;
+import org.apache.flink.cdc.connectors.kafkajson.source.dialect.KafkaJsonDialectFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffsetFactory;
 import org.apache.flink.cdc.debezium.DebeziumDeserializationSchema;
 

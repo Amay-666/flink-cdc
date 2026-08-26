@@ -20,6 +20,7 @@ package org.apache.flink.cdc.connectors.kafkajson.source;
 import org.apache.flink.cdc.common.annotation.Internal;
 import org.apache.flink.cdc.connectors.base.config.JdbcSourceConfig;
 import org.apache.flink.cdc.connectors.base.source.assigner.splitter.JdbcSourceChunkSplitter;
+import org.apache.flink.cdc.connectors.kafkajson.source.dialect.KafkaJsonDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonQueryUtils;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTypeUtils;
 import org.apache.flink.table.types.DataType;

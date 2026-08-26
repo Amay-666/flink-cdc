@@ -20,11 +20,11 @@ package org.apache.flink.cdc.connectors.kafkajson.source.kafka;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.MessageFormat;
-import org.apache.flink.cdc.connectors.kafkajson.source.message.CanalMessage;
-import org.apache.flink.cdc.connectors.kafkajson.source.message.CanalMessageParser;
-import org.apache.flink.cdc.connectors.kafkajson.source.message.DebeziumMessage;
-import org.apache.flink.cdc.connectors.kafkajson.source.message.DebeziumMessageParser;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonRecordConverter;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessageParser;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessageParser;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonKafkaUtils;
 

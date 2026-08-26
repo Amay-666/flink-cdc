@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.source;
+package org.apache.flink.cdc.connectors.kafkajson.source.dialect;
 
 import org.apache.flink.cdc.common.annotation.VisibleForTesting;
 import org.apache.flink.cdc.connectors.base.config.JdbcSourceConfig;
@@ -26,6 +26,8 @@ import org.apache.flink.cdc.connectors.base.source.assigner.splitter.ChunkSplitt
 import org.apache.flink.cdc.connectors.base.source.meta.offset.Offset;
 import org.apache.flink.cdc.connectors.base.source.meta.split.SourceSplitBase;
 import org.apache.flink.cdc.connectors.base.source.reader.external.FetchTask;
+import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonChunkSplitter;
+import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonSchema;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.connection.KafkaJsonConnectionPoolFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.connection.KafkaJsonJdbcConnection;

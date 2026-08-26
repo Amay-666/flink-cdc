@@ -25,9 +25,9 @@ import org.apache.flink.cdc.connectors.kafkajson.source.ddl.KafkaJsonDebeziumDdl
 import org.apache.flink.cdc.connectors.kafkajson.source.ddl.KafkaJsonDruidDdlParser;
 import org.apache.flink.cdc.connectors.kafkajson.source.ddl.KafkaJsonTableChangeType;
 import org.apache.flink.cdc.connectors.kafkajson.source.fetch.KafkaJsonSourceFetchTaskContext;
-import org.apache.flink.cdc.connectors.kafkajson.source.message.CanalMessage;
-import org.apache.flink.cdc.connectors.kafkajson.source.message.DebeziumMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonPartition;
 import org.apache.flink.cdc.connectors.kafkajson.source.schema.KafkaJsonSourceInfo;

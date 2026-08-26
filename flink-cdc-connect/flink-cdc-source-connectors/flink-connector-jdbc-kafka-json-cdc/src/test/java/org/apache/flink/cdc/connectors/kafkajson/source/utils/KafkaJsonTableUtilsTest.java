@@ -17,7 +17,7 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.utils;
 
-import org.apache.flink.cdc.connectors.kafkajson.source.message.CanalMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessage;
 
 import io.debezium.relational.Column;
 import io.debezium.relational.Table;

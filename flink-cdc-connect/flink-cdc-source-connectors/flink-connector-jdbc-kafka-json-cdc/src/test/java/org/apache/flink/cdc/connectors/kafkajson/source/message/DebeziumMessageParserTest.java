@@ -19,6 +19,8 @@ package org.apache.flink.cdc.connectors.kafkajson.source.message;
 
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonMessage.MessageType;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessageParser;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.Test;
