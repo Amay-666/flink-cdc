@@ -19,12 +19,11 @@ package org.apache.flink.cdc.connectors.kafkajson.source;
 
 import org.apache.flink.cdc.common.event.CreateTableEvent;
 import org.apache.flink.cdc.common.event.Event;
+import org.apache.flink.cdc.connectors.kafkajson.infra.KafkaJsonSourceTestBase;
+import org.apache.flink.cdc.connectors.kafkajson.infra.KafkaUtil;
+import org.apache.flink.cdc.connectors.kafkajson.infra.TiDBCluster;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
-import org.apache.flink.cdc.connectors.kafkajson.testutils.KafkaJsonSourceTestBase;
-import org.apache.flink.cdc.connectors.kafkajson.testutils.KafkaUtil;
-import org.apache.flink.cdc.connectors.mysql.testutils.MySqlContainer;
-import org.apache.flink.cdc.connectors.mysql.testutils.MySqlVersion;
-import org.apache.flink.cdc.connectors.mysql.testutils.UniqueDatabase;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.util.CloseableIterator;
 
@@ -44,28 +43,28 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Simulated-producer baseline for the MySQL chain: a real MySQL snapshot is read by the source,
- * then canal flatMessage JSON (INSERT/UPDATE/DELETE) is written to Kafka by a test-side producer
- * and consumed as the incremental stream.
+ * Simulated-producer baseline for the TiDB chain: the connector snapshots a real TiDB v8.5 cluster
+ * over the MySQL wire protocol ({@code scan.database.type=tidb}) and consumes canal flatMessage
+ * JSON written by a test-side producer as the incremental stream.
  *
- * <p>This is the deterministic reference for the {@link MySqlCanalChainITCase}: it exercises the
- * same wire format and the same snapshot-to-stream transition, without depending on canal-server's
- * startup timing. Messages are produced only <em>after</em> the snapshot events have been
- * collected, so every message survives the exactly-once boundary (empty topic at snapshot start →
- * high watermark {@code -1}).
+ * <p>This empirically validates the assumption that the snapshot path (JDBC metadata discovery +
+ * MySQL-compatible chunk queries) works against TiDB. The incremental half is identical to the
+ * {@link MySqlCanalSimulatedChainITCase} baseline, so a green run proves the only difference between
+ * the two chains — the TiDB snapshot — behaves exactly like MySQL.
  */
-public class KafkaJsonSimulatedChainITCase extends KafkaJsonSourceTestBase {
+public class TiDBSimulatedChainITCase extends KafkaJsonSourceTestBase {
 
-    private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonSimulatedChainITCase.class);
+    private static final Logger LOG = LoggerFactory.getLogger(TiDBSimulatedChainITCase.class);
 
-    protected static final MySqlContainer MYSQL8 = createMySqlContainer(MySqlVersion.V8_0);
+    protected static final TiDBCluster TIDB = new TiDBCluster(NETWORK, LOG);
     protected static final KafkaContainer KAFKA = KafkaUtil.createKafkaContainer(LOG, NETWORK);
 
     @BeforeClass
     public static void startContainers() {
         checkDockerAvailable();
-        LOG.info("Starting containers...");
-        Startables.deepStart(Stream.of(MYSQL8, KAFKA)).join();
+        LOG.info("Starting TiDB cluster and Kafka...");
+        TIDB.start();
+        Startables.deepStart(Stream.of(KAFKA)).join();
         LOG.info("Containers are started.");
     }
 
@@ -73,29 +72,31 @@ public class KafkaJsonSimulatedChainITCase extends KafkaJsonSourceTestBase {
     public static void stopContainers() {
         LOG.info("Stopping containers...");
         KAFKA.stop();
-        MYSQL8.stop();
+        TIDB.stop();
         LOG.info("Containers are stopped.");
     }
 
-    @Test(timeout = 240_000)
-    public void testSimulatedCanalMessages() throws Exception {
-        UniqueDatabase database = new UniqueDatabase(MYSQL8, "customers", TEST_USER, TEST_PASSWORD);
-        database.createAndInitialize();
-        String topic = "canal-simulated-" + UUID.randomUUID();
+    @Test(timeout = 300_000)
+    public void testTiDBSnapshotWithSimulatedMessages() throws Exception {
+        String dbName = "tidb_sim_" + UUID.randomUUID().toString().replace("-", "");
+        initDatabase(dbName);
+
+        String topic = "tidb-simulated-" + UUID.randomUUID();
         String bootstrapServers = KAFKA.getBootstrapServers();
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         configureEnv(env);
         KafkaJsonSourceConfigFactory configFactory =
                 buildConfigFactory(
-                        database.getHost(),
-                        database.getDatabasePort(),
-                        TEST_USER,
-                        TEST_PASSWORD,
-                        database.getDatabaseName(),
+                        TIDB.getHost(),
+                        TIDB.getMappedPort(),
+                        TiDBCluster.TIDB_USER,
+                        TiDBCluster.TIDB_PASSWORD,
+                        dbName,
                         "customers",
                         bootstrapServers,
-                        topic);
+                        topic,
+                        KafkaJsonSourceOptions.DatabaseType.TIDB);
         CloseableIterator<Event> events = runSource(configFactory, env);
 
         List<CreateTableEvent> createTables = new ArrayList<>();
@@ -108,17 +109,37 @@ public class KafkaJsonSimulatedChainITCase extends KafkaJsonSourceTestBase {
         Thread.sleep(5_000);
 
         // 2) simulated canal incremental messages, written after the snapshot
-        KafkaUtil.produce(
-                bootstrapServers, topic, simulatedCanalMessages(database.getDatabaseName()));
+        KafkaUtil.produce(bootstrapServers, topic, simulatedCanalMessages(dbName));
 
         // 3) stream: the 3 messages, in order
         List<Event> stream = fetchDataEvents(events, 3, createTables);
 
         assertThat(createTables).isNotEmpty();
-
-        String dbName = database.getDatabaseName();
         assertThat(snapshot)
                 .containsExactlyInAnyOrder(expectedSnapshotEvents(dbName).toArray(new Event[0]));
         assertThat(stream).containsExactly(expectedStreamEvents(dbName).toArray(new Event[0]));
+    }
+
+    /** Creates {@code customers} with the same 4 rows as the MySQL baseline, on TiDB. */
+    private static void initDatabase(String dbName) throws Exception {
+        TIDB.execute("CREATE DATABASE IF NOT EXISTS `" + dbName + "`");
+        TIDB.execute(
+                String.format(
+                        "CREATE TABLE `%s`.`customers` ("
+                                + "id INT NOT NULL, name VARCHAR(255) NOT NULL, "
+                                + "address VARCHAR(255), PRIMARY KEY (id))",
+                        dbName));
+        for (Object[] row :
+                new Object[][] {
+                    {101, "user_1", "Shanghai"},
+                    {102, "user_2", "Beijing"},
+                    {103, "user_3", "Hangzhou"},
+                    {104, "user_4", "Shenzhen"}
+                }) {
+            TIDB.execute(
+                    String.format(
+                            "INSERT INTO `%s`.`customers` (id, name, address) VALUES (%d, '%s', '%s')",
+                            dbName, row[0], row[1], row[2]));
+        }
     }
 }

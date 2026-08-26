@@ -120,10 +120,13 @@ public class KafkaJsonDialect implements JdbcDataSourceDialect {
         // visible
         // to the JDBC read), whereas the Kafka-sampled boundary trails the database by the publish
         // lag
-        // and is empty before the first change is published. TSO is only a valid boundary for
-        // `es` (commit time); with `ts` the boundary stays on the Kafka-sampled value.
+        // and is empty before the first change is published. TSO is a valid boundary for every
+        // commit-clock mode (`es`, and `tidb_tso` which degrades to `es`); with `ts` (producer send
+        // time) the boundary stays on the Kafka-sampled value so the two clock domains are never
+        // mixed.
+        EventTime eventTime = canalSourceConfig.getEventTime();
         if (canalSourceConfig.getDatabaseType() == DatabaseType.TIDB
-                && canalSourceConfig.getEventTime() == EventTime.ES) {
+                && (eventTime == EventTime.ES || eventTime == EventTime.TIDB_TSO)) {
             KafkaJsonOffset tidbOffset =
                     tidbOffsetSupplier != null
                             ? tidbOffsetSupplier.get()

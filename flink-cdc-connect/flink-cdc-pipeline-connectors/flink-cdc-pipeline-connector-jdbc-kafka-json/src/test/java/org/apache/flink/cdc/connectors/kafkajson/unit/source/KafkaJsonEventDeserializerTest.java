@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.source;
+package org.apache.flink.cdc.connectors.kafkajson.unit.source;
 
 import org.apache.flink.cdc.common.event.AddColumnEvent;
 import org.apache.flink.cdc.common.event.AlterColumnTypeEvent;
@@ -29,6 +29,7 @@ import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.types.DataType;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
+import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonEventDeserializer;
 import org.apache.flink.cdc.connectors.kafkajson.source.handler.KafkaJsonSchemaChangeHandler;
 import org.apache.flink.cdc.debezium.history.FlinkJsonTableChangeSerializer;
 import org.apache.flink.cdc.debezium.table.DebeziumChangelogMode;

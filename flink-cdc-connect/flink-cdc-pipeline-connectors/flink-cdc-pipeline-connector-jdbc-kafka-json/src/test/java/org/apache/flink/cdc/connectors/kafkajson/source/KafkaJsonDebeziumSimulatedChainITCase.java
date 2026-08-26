@@ -19,10 +19,10 @@ package org.apache.flink.cdc.connectors.kafkajson.source;
 
 import org.apache.flink.cdc.common.event.CreateTableEvent;
 import org.apache.flink.cdc.common.event.Event;
+import org.apache.flink.cdc.connectors.kafkajson.infra.KafkaJsonSourceTestBase;
+import org.apache.flink.cdc.connectors.kafkajson.infra.KafkaUtil;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
-import org.apache.flink.cdc.connectors.kafkajson.testutils.KafkaJsonSourceTestBase;
-import org.apache.flink.cdc.connectors.kafkajson.testutils.KafkaUtil;
 import org.apache.flink.cdc.connectors.mysql.testutils.MySqlContainer;
 import org.apache.flink.cdc.connectors.mysql.testutils.MySqlVersion;
 import org.apache.flink.cdc.connectors.mysql.testutils.UniqueDatabase;

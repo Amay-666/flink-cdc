@@ -157,26 +157,19 @@ public class KafkaJsonKafkaOffsetUtils {
                 return value == null ? -1L : value;
             }
             JsonNode root = OBJECT_MAPPER.readTree(message);
-            String field;
             switch (eventTime) {
                 case ES:
-                case TIDB_TSO:
-                    // A canal flatMessage carries no top-level TSO; the sampled watermark degrades
-                    // to es (the commit-time equivalent). TiDB+TIDB_TSO uses the TSO query path of
-                    // KafkaJsonTidbOffsetUtils instead of the Kafka sampling, so this branch is
-                    // only a fallback for exotic canal shapes.
-                    field = "es";
-                    break;
+                    return root.get("es").asLong(-1L);
                 case TS:
+                    return root.get("ts").asLong(-1L);
+                case TIDB_TSO:
+                    // TiCDC's canal-json carries the commit TSO in the `_tidb` object; the sampled
+                    // watermark then uses the real TSO physical millis instead of degrading to es.
+                    // A missing `_tidb` (plain canal) NPEs and falls into the catch → -1L.
+                    return root.get("_tidb").get("commitTs").asLong(-1L) >> 18;
                 default:
-                    field = "ts";
-                    break;
+                    return -1L;
             }
-            JsonNode node = root.get(field);
-            if (node == null || node.isNull()) {
-                return -1L;
-            }
-            return node.asLong(-1L);
         } catch (Exception e) {
             return -1L;
         }

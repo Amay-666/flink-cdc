@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.testutils;
+package org.apache.flink.cdc.connectors.kafkajson.infra;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

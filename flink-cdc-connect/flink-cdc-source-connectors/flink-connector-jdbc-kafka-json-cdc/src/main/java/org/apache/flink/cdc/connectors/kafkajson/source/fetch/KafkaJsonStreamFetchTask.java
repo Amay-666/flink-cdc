@@ -23,8 +23,12 @@ import org.apache.flink.cdc.connectors.base.source.meta.split.SourceSplitBase;
 import org.apache.flink.cdc.connectors.base.source.meta.split.StreamSplit;
 import org.apache.flink.cdc.connectors.base.source.meta.wartermark.WatermarkKind;
 import org.apache.flink.cdc.connectors.base.source.reader.external.FetchTask;
+import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
 import org.apache.flink.cdc.connectors.kafkajson.source.handler.KafkaJsonSchemaChangeHandler;
+import org.apache.flink.cdc.connectors.kafkajson.source.kafka.KafkaJsonKafkaOffsetUtils;
+import org.apache.flink.cdc.connectors.kafkajson.source.kafka.KafkaJsonOffsetSupplier;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonMessage.MessageType;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonMessageParser;
@@ -244,6 +248,15 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                         record.topic(),
                         record.partition(),
                         record.offset());
+                continue;
+            }
+            if (sourceFetchContext.getSourceConfig().getDatabaseType()
+                            == KafkaJsonSourceOptions.DatabaseType.TIDB
+                    && sourceFetchContext.getSourceConfig().getEventTime()
+                            == KafkaJsonSourceOptions.EventTime.TIDB_TSO
+                    && message.getMessageType() == KafkaJsonMessage.MessageType.TIDB_WATERMARK) {
+                // A TiDB watermark message carries no TSO; in TIDB_TSO mode it would pollute the
+                // offset bookkeeping with a meaningless time, so skip it before any processing.
                 continue;
             }
             lastOffset =

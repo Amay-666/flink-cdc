@@ -19,10 +19,12 @@ package org.apache.flink.cdc.connectors.kafkajson.source.message;
 
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import javax.annotation.Nullable;
 
+import java.io.Serializable;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -82,6 +84,36 @@ public class KafkaJsonFlatMessage extends KafkaJsonMessage {
 
     /** The {@code before} image, present for UPDATE (and only for the updated columns). */
     @JsonProperty private List<Map<String, String>> old;
+
+    @JsonProperty("_tidb")
+    private TidbInfo tidbInfo;
+
+    /** The {@code _tidb} extension object carried by TiCDC canal-json messages. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class TidbInfo implements Serializable {
+        private Long commitTs;
+
+        public Long getCommitTs() {
+            return commitTs;
+        }
+
+        public void setCommitTs(Long commitTs) {
+            this.commitTs = commitTs;
+        }
+
+        // The commit time of the TiDB transaction.
+        @JsonProperty("commit-ts")
+        public Long getCommitTimeStamp() {
+            return commitTs != null ? commitTs >> 18 : null;
+        }
+
+        @Override
+        public String toString() {
+            return "{" +
+                    "commitTs=" + commitTs +
+                    '}';
+        }
+    }
 
     public long getId() {
         return id;
@@ -197,9 +229,13 @@ public class KafkaJsonFlatMessage extends KafkaJsonMessage {
             case TS:
                 return ts;
             case TIDB_TSO:
-                // A canal flatMessage carries no commit TSO. TiCDC's canal-json already reports the
-                // commit time in `es`, which is the closest equivalent, so TIDB_TSO degrades to ES.
-                return es;
+                // Prefer the real commit TSO (physical millis) when TiCDC's `_tidb` extension is
+                // present; a plain canal flatMessage carries no TSO, so TIDB_TSO degrades to es
+                // (the commit-time equivalent, which TiCDC's canal-json already reports in `es`).
+                TidbInfo tidb = tidbInfo;
+                return tidb != null && tidb.getCommitTimeStamp() != null
+                        ? tidb.getCommitTimeStamp()
+                        : es;
             default:
                 return null;
         }
@@ -241,6 +277,16 @@ public class KafkaJsonFlatMessage extends KafkaJsonMessage {
         this.old = old;
     }
 
+    @JsonProperty("_tidb")
+    public TidbInfo getTidbInfo() {
+        return this.tidbInfo;
+    }
+
+    @JsonProperty("_tidb")
+    public void setTidbInfo(TidbInfo tidbInfo) {
+        this.tidbInfo = tidbInfo;
+    }
+
     @Override
     public String toString() {
         return "KafkaJsonFlatMessage{"
@@ -268,6 +314,8 @@ public class KafkaJsonFlatMessage extends KafkaJsonMessage {
                 + (data == null ? 0 : data.size())
                 + ", oldSize="
                 + (old == null ? 0 : old.size())
+                + ", tidbInfo="
+                + tidbInfo
                 + '}';
     }
 }

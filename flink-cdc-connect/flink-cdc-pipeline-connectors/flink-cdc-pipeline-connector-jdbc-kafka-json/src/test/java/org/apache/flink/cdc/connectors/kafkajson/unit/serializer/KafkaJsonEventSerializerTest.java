@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.serializer;
+package org.apache.flink.cdc.connectors.kafkajson.unit.serializer;
 
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
@@ -26,6 +26,8 @@ import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.common.types.DataTypes;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
+import org.apache.flink.cdc.connectors.kafkajson.serializer.KafkaJsonEventSerializer;
+import org.apache.flink.cdc.connectors.kafkajson.serializer.KafkaJsonEventTypeInfo;
 import org.apache.flink.core.memory.DataInputViewStreamWrapper;
 import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
 

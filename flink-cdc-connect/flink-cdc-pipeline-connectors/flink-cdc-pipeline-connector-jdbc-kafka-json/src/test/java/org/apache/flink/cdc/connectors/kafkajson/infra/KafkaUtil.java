@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.testutils;
+package org.apache.flink.cdc.connectors.kafkajson.infra;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -98,6 +98,11 @@ public class KafkaUtil {
         container
                 .withNetwork(network)
                 .withNetworkAliases("kafka")
+                // The bundled JDK of cp-kafka:7.2.2 throws an NPE while detecting cgroup v2 on
+                // WSL2/Docker hosts where the cgroup hierarchy is partial or hybrid; the JMX agent
+                // start fails and the Kafka process cannot reach "[KafkaServer id=...] started".
+                // Container-aware metrics are irrelevant to these tests, so disable the detection.
+                .withEnv("KAFKA_OPTS", "-XX:-UseContainerSupport")
                 .withEnv("KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR", "1")
                 .withEnv("KAFKA_TRANSACTION_STATE_LOG_MIN_ISR", "1")
                 .withEnv("KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR", "1")

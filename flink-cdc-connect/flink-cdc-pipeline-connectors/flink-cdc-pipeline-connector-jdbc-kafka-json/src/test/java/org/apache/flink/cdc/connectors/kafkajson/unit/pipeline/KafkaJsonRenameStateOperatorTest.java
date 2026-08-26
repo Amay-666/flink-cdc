@@ -15,12 +15,13 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.example;
+package org.apache.flink.cdc.connectors.kafkajson.unit.pipeline;
 
 import org.apache.flink.cdc.common.event.Event;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
+import org.apache.flink.cdc.connectors.kafkajson.example.KafkaJsonRenameStateOperator;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.util.Collector;
 

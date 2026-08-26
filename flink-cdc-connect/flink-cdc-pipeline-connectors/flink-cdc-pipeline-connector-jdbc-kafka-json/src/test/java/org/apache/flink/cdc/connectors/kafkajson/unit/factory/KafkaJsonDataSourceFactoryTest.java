@@ -15,11 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.factory;
+package org.apache.flink.cdc.connectors.kafkajson.unit.factory;
 
 import org.apache.flink.cdc.common.configuration.ConfigOption;
 import org.apache.flink.cdc.common.configuration.Configuration;
 import org.apache.flink.cdc.common.factories.Factory;
+import org.apache.flink.cdc.connectors.kafkajson.factory.KafkaJsonDataSourceFactory;
 import org.apache.flink.table.api.ValidationException;
 
 import org.junit.Test;

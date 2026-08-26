@@ -22,12 +22,12 @@ import org.apache.flink.cdc.common.event.CreateTableEvent;
 import org.apache.flink.cdc.common.event.DataChangeEvent;
 import org.apache.flink.cdc.common.event.Event;
 import org.apache.flink.cdc.common.event.TableId;
+import org.apache.flink.cdc.connectors.kafkajson.infra.KafkaJsonSourceTestBase;
+import org.apache.flink.cdc.connectors.kafkajson.infra.KafkaUtil;
+import org.apache.flink.cdc.connectors.kafkajson.infra.TiCDCServer;
+import org.apache.flink.cdc.connectors.kafkajson.infra.TiDBCluster;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
-import org.apache.flink.cdc.connectors.kafkajson.testutils.KafkaJsonSourceTestBase;
-import org.apache.flink.cdc.connectors.kafkajson.testutils.KafkaUtil;
-import org.apache.flink.cdc.connectors.kafkajson.testutils.TiCDCServer;
-import org.apache.flink.cdc.connectors.kafkajson.testutils.TiDBCluster;
 import org.apache.flink.cdc.runtime.typeutils.BinaryRecordDataGenerator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.util.CloseableIterator;
@@ -57,7 +57,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>This is the empirical test for the open compatibility risk: whether TiCDC's {@code canal-json}
  * envelope matches the parser's contract. The snapshot half is validated by {@link
- * TiDBSnapshotSimulatedITCase}; here the focus is the live TiCDC stream. DML is executed only after
+ * TiDBSimulatedChainITCase}; here the focus is the live TiCDC stream. DML is executed only after
  * the snapshot phase has finished, so the incremental messages survive the exactly-once boundary.
  *
  * <p>Note on the UPDATE before image: canal's {@code old} carries only the changed columns, while
