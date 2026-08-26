@@ -32,10 +32,11 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Unit test for {@link KafkaJsonRenameStateOperator}: a {@link RenameTableEvent} is dispatched by the
- * {@code instanceof} check and forwarded downstream while the operator migrates its per-table state
- * from the old table id to the new one. The operator is driven directly ({@code open} needs no
- * runtime context and {@code processElement} ignores it) so the test needs no Flink test harness.
+ * Unit test for {@link KafkaJsonRenameStateOperator}: a {@link RenameTableEvent} is dispatched by
+ * the {@code instanceof} check and forwarded downstream while the operator migrates its per-table
+ * state from the old table id to the new one. The operator is driven directly ({@code open} needs
+ * no runtime context and {@code processElement} ignores it) so the test needs no Flink test
+ * harness.
  */
 public class KafkaJsonRenameStateOperatorTest {
 

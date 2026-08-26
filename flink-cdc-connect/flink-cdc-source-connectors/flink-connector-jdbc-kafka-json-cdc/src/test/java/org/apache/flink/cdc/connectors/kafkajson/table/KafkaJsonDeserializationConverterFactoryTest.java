@@ -70,8 +70,7 @@ class KafkaJsonDeserializationConverterFactoryTest {
                         .name(EnumSet.LOGICAL_NAME)
                         .field("data", Schema.OPTIONAL_STRING_SCHEMA)
                         .build();
-        GenericArrayData result =
-                (GenericArrayData) converter.convert("a,b,c", enumSetSchema);
+        GenericArrayData result = (GenericArrayData) converter.convert("a,b,c", enumSetSchema);
 
         assertEquals(3, result.size());
         assertEquals(StringData.fromString("a"), result.getString(0));

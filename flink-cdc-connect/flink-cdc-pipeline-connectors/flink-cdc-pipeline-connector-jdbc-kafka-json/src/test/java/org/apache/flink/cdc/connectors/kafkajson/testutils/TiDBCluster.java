@@ -38,8 +38,8 @@ import java.util.stream.Stream;
  * <p>Unlike the tidb-cdc base, no host port is mapped for PD/TiKV: they only need to be reachable
  * from inside the docker network. Only TiDB's 4000 port is exposed so the Flink MiniCluster (on the
  * host JVM) can reach it over the MySQL-compatible wire protocol, which is exactly the path the
- * {@code scan.database.type=tidb} alias reuses. The {@code DnsCacheManipulator} hack of the original
- * is not needed here: nothing on the host resolves the internal aliases.
+ * {@code scan.database.type=tidb} alias reuses. The {@code DnsCacheManipulator} hack of the
+ * original is not needed here: nothing on the host resolves the internal aliases.
  */
 public class TiDBCluster {
 

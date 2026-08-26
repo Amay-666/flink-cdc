@@ -40,12 +40,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Unit test for {@link KafkaJsonJdbcConnection}.
  *
  * <p>The base {@link io.debezium.jdbc.JdbcConnection#readTableColumn} reads the column default
- * ({@code COLUMN_DEF}, {@code getString(13)}) and hands it to Debezium's {@code TableSchemaBuilder} as
- * the {@code defaultValueExpression}. For binary-typed columns the MySQL driver reports that default as
- * a literal string (e.g. {@code 0x}), which {@code SchemaBuilder.defaultValue} refuses to convert to a
- * {@code BYTES} default and the snapshot schema read aborts with {@code DebeziumException: Failed to
- * set field default value ...}. The override must therefore read the column metadata without ever
- * touching column 13.
+ * ({@code COLUMN_DEF}, {@code getString(13)}) and hands it to Debezium's {@code TableSchemaBuilder}
+ * as the {@code defaultValueExpression}. For binary-typed columns the MySQL driver reports that
+ * default as a literal string (e.g. {@code 0x}), which {@code SchemaBuilder.defaultValue} refuses
+ * to convert to a {@code BYTES} default and the snapshot schema read aborts with {@code
+ * DebeziumException: Failed to set field default value ...}. The override must therefore read the
+ * column metadata without ever touching column 13.
  */
 class KafkaJsonJdbcConnectionTest {
 
@@ -63,9 +63,7 @@ class KafkaJsonJdbcConnectionTest {
 
         KafkaJsonJdbcConnection connection =
                 new KafkaJsonJdbcConnection(
-                        JdbcConfiguration.create()
-                                .with("database.hostname", "localhost")
-                                .build(),
+                        JdbcConfiguration.create().with("database.hostname", "localhost").build(),
                         (ConnectionFactory) config -> null,
                         "`",
                         "`");

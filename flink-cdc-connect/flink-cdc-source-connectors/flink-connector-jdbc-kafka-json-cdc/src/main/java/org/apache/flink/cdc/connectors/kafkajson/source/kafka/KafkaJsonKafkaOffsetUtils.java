@@ -48,10 +48,10 @@ import java.util.Properties;
  * ordered <em>before</em> it: the bounded backfill of a snapshot split owns the boundary message
  * (inclusive at the high watermark) and the stream phase emits only event times strictly after the
  * watermark. A change committed while the snapshot split's JDBC read is running therefore has its
- * event time inside the split's {@code (low, high]} backfill window, is replayed exactly once by the
- * backfill, and is never re-emitted by the stream — the full-&gt;incremental switch is exactly-once
- * for those changes. (A minimum event time, by contrast, would leave such changes on the stream side
- * while the JDBC read has already captured their effect, duplicating them.)
+ * event time inside the split's {@code (low, high]} backfill window, is replayed exactly once by
+ * the backfill, and is never re-emitted by the stream — the full-&gt;incremental switch is
+ * exactly-once for those changes. (A minimum event time, by contrast, would leave such changes on
+ * the stream side while the JDBC read has already captured their effect, duplicating them.)
  */
 public class KafkaJsonKafkaOffsetUtils {
 
@@ -65,8 +65,10 @@ public class KafkaJsonKafkaOffsetUtils {
      * javadoc). Returns {@link KafkaJsonOffset#INITIAL_OFFSET} when no message is available yet.
      */
     public static KafkaJsonOffset queryCurrentOffset(KafkaJsonSourceConfig sourceConfig) {
-        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(buildConsumerProps(sourceConfig))) {
-            return queryCurrentOffset(consumer, sourceConfig.getKafkaTopics(), sourceConfig.getEventTime());
+        try (KafkaConsumer<String, String> consumer =
+                new KafkaConsumer<>(buildConsumerProps(sourceConfig))) {
+            return queryCurrentOffset(
+                    consumer, sourceConfig.getKafkaTopics(), sourceConfig.getEventTime());
         }
     }
 
@@ -111,9 +113,11 @@ public class KafkaJsonKafkaOffsetUtils {
         if (!found) {
             return KafkaJsonOffset.INITIAL_OFFSET;
         }
-        // The watermark is the maximum event time of the partitions' newest messages, stamped onto a
+        // The watermark is the maximum event time of the partitions' newest messages, stamped onto
+        // a
         // sentinel partition/offset. Real messages (partition < Integer.MAX_VALUE) with the same
-        // event time therefore order BEFORE the watermark: the bounded backfill owns them (inclusive
+        // event time therefore order BEFORE the watermark: the bounded backfill owns them
+        // (inclusive
         // at the high watermark) and the stream phase emits only event times strictly after it.
         return new KafkaJsonOffset(maxEventTime, Integer.MAX_VALUE, Long.MAX_VALUE);
     }

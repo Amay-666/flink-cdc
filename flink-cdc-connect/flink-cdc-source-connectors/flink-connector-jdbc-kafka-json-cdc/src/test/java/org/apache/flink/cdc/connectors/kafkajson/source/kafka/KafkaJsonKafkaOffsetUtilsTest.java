@@ -34,12 +34,16 @@ class KafkaJsonKafkaOffsetUtilsTest {
 
     @Test
     void testExtractExecuteTime() {
-        assertEquals(1598752886000L, KafkaJsonKafkaOffsetUtils.extractEventTime(FLAT_MESSAGE, EventTime.ES));
+        assertEquals(
+                1598752886000L,
+                KafkaJsonKafkaOffsetUtils.extractEventTime(FLAT_MESSAGE, EventTime.ES));
     }
 
     @Test
     void testExtractSendTime() {
-        assertEquals(1598752887000L, KafkaJsonKafkaOffsetUtils.extractEventTime(FLAT_MESSAGE, EventTime.TS));
+        assertEquals(
+                1598752887000L,
+                KafkaJsonKafkaOffsetUtils.extractEventTime(FLAT_MESSAGE, EventTime.TS));
     }
 
     @Test

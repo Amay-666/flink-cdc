@@ -69,8 +69,8 @@ public class KafkaUtil {
     }
 
     /**
-     * Creates a Kafka container like {@link #createKafkaContainer(Logger, Network)}, and if
-     * {@code fixedHostPort} is positive pins the Kafka listener (container port {@value
+     * Creates a Kafka container like {@link #createKafkaContainer(Logger, Network)}, and if {@code
+     * fixedHostPort} is positive pins the Kafka listener (container port {@value
      * KafkaContainer#KAFKA_PORT}) to that host port, so clients outside the test JVM (e.g. a
      * Windows Kafka console) can reach it at a stable {@code localhost:&lt;fixedHostPort&gt;}.
      */
@@ -110,16 +110,18 @@ public class KafkaUtil {
                 .withEnv("KAFKA_LOG4J_TOOLS_ROOT_LOGLEVEL", logLevel)
                 .withLogConsumer(new Slf4jLogConsumer(logger));
         if (pinPort) {
-            ((FixedPortKafkaContainer) container).pinHostPort(fixedHostPort, KafkaContainer.KAFKA_PORT);
+            ((FixedPortKafkaContainer) container)
+                    .pinHostPort(fixedHostPort, KafkaContainer.KAFKA_PORT);
         }
         return container;
     }
 
     /**
      * A {@link KafkaContainer} that can pin its Kafka listener to a fixed host port. testcontainers
-     * 1.18.3 keeps the fluent {@code withFixedExposedPort} only on {@code FixedHostPortGenericContainer}
-     * (not on {@link KafkaContainer}), and the equivalent {@code addFixedExposedPort} on {@code
-     * GenericContainer} is protected, so it is surfaced through this subclass.
+     * 1.18.3 keeps the fluent {@code withFixedExposedPort} only on {@code
+     * FixedHostPortGenericContainer} (not on {@link KafkaContainer}), and the equivalent {@code
+     * addFixedExposedPort} on {@code GenericContainer} is protected, so it is surfaced through this
+     * subclass.
      */
     private static final class FixedPortKafkaContainer extends KafkaContainer {
 

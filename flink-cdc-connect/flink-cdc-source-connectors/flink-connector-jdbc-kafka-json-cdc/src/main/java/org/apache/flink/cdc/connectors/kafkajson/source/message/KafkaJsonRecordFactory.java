@@ -59,8 +59,8 @@ import java.util.Set;
  * {@code after}/{@code before}/{@code key} structs, the {@code source} struct and the envelope stay
  * byte-identical across the two phases.
  *
- * <p>The table schema (columns → Kafka Connect structs, using the {@link MySqlValueConverters})
- * is registered per {@link TableId} and cached; it is refreshed on DDL events.
+ * <p>The table schema (columns → Kafka Connect structs, using the {@link MySqlValueConverters}) is
+ * registered per {@link TableId} and cached; it is refreshed on DDL events.
  */
 public class KafkaJsonRecordFactory implements Serializable {
 
@@ -90,7 +90,8 @@ public class KafkaJsonRecordFactory implements Serializable {
                         sourceInfoSchema,
                         false,
                         false);
-        this.valueConverter = new KafkaJsonValueConverter(ZoneId.of(sourceConfig.getServerTimeZone()));
+        this.valueConverter =
+                new KafkaJsonValueConverter(ZoneId.of(sourceConfig.getServerTimeZone()));
         this.serverName = dbzConfig.getLogicalName();
     }
 
@@ -123,8 +124,7 @@ public class KafkaJsonRecordFactory implements Serializable {
     }
 
     private TableSchema createTableSchema(Table table) {
-        String envelopSchemaName =
-                "io.debezium.connector.mysql." + serverName + ".Envelope";
+        String envelopSchemaName = "io.debezium.connector.mysql." + serverName + ".Envelope";
         return schemaBuilder.create("", envelopSchemaName, table, null, null, null);
     }
 
@@ -187,9 +187,7 @@ public class KafkaJsonRecordFactory implements Serializable {
         // tables without a primary key have no key schema/generator
         Object[] keyData = afterData != null ? afterData : beforeData;
         Struct key =
-                tableSchema.keySchema() == null
-                        ? null
-                        : tableSchema.keyFromColumnData(keyData);
+                tableSchema.keySchema() == null ? null : tableSchema.keyFromColumnData(keyData);
         Struct source = sourceInfoStructMaker.struct(sourceInfo);
 
         Envelope envelope = tableSchema.getEnvelopeSchema();
@@ -216,7 +214,8 @@ public class KafkaJsonRecordFactory implements Serializable {
 
         Map<String, ?> sourcePartition = new KafkaJsonPartition(serverName).getSourcePartition();
         Map<String, ?> sourceOffset =
-                new KafkaJsonOffset(sourceInfo.getEventTime(), kafkaPartition, kafkaOffset).getOffset();
+                new KafkaJsonOffset(sourceInfo.getEventTime(), kafkaPartition, kafkaOffset)
+                        .getOffset();
         return new SourceRecord(
                 sourcePartition,
                 sourceOffset,
@@ -234,11 +233,10 @@ public class KafkaJsonRecordFactory implements Serializable {
         TemporalPrecisionMode timePrecisionMode = dbzConfig.getTemporalPrecisionMode();
         JdbcValueConverters.DecimalMode decimalMode = dbzConfig.getDecimalMode();
         String bigIntUnsignedHandlingModeStr =
-                dbzConfig
-                        .getConfig()
-                        .getString(MySqlConnectorConfig.BIGINT_UNSIGNED_HANDLING_MODE);
+                dbzConfig.getConfig().getString(MySqlConnectorConfig.BIGINT_UNSIGNED_HANDLING_MODE);
         MySqlConnectorConfig.BigIntUnsignedHandlingMode bigIntUnsignedHandlingMode =
-                MySqlConnectorConfig.BigIntUnsignedHandlingMode.parse(bigIntUnsignedHandlingModeStr);
+                MySqlConnectorConfig.BigIntUnsignedHandlingMode.parse(
+                        bigIntUnsignedHandlingModeStr);
         JdbcValueConverters.BigIntUnsignedMode bigIntUnsignedMode =
                 bigIntUnsignedHandlingMode.asBigIntUnsignedMode();
 

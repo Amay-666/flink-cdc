@@ -22,10 +22,10 @@ import javax.annotation.Nullable;
 /**
  * Information about a column-level change within an {@code ALTER TABLE} statement.
  *
- * <p>Captures which column changed, what kind of change occurred (type, comment, default, position),
- * and the old/new values where applicable. A single {@code MODIFY COLUMN} or {@code CHANGE COLUMN}
- * statement may produce multiple {@link ColumnChangeInfo} entries if it touches more than one aspect
- * of the column.
+ * <p>Captures which column changed, what kind of change occurred (type, comment, default,
+ * position), and the old/new values where applicable. A single {@code MODIFY COLUMN} or {@code
+ * CHANGE COLUMN} statement may produce multiple {@link ColumnChangeInfo} entries if it touches more
+ * than one aspect of the column.
  */
 public class ColumnChangeInfo {
 

@@ -51,9 +51,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Unit test for {@link KafkaJsonSchemaChangeHandler}: the canal DDL message updates the shared schema
- * and, when {@code include.schema.changes} is enabled, produces the Debezium-shaped schema-change
- * {@link SourceRecord} that the base {@code IncrementalSourceRecordEmitter} consumes.
+ * Unit test for {@link KafkaJsonSchemaChangeHandler}: the canal DDL message updates the shared
+ * schema and, when {@code include.schema.changes} is enabled, produces the Debezium-shaped
+ * schema-change {@link SourceRecord} that the base {@code IncrementalSourceRecordEmitter} consumes.
  */
 class KafkaJsonSchemaChangeHandlerTest {
 
@@ -105,11 +105,15 @@ class KafkaJsonSchemaChangeHandlerTest {
         changes.forEach(changeList::add);
         assertEquals(2, changeList.size());
         TableChange oldChange = changeList.get(0);
-        assertEquals(io.debezium.relational.history.TableChanges.TableChangeType.ALTER, oldChange.getType());
+        assertEquals(
+                io.debezium.relational.history.TableChanges.TableChangeType.ALTER,
+                oldChange.getType());
         assertEquals(TABLE_ID, oldChange.getId());
         assertEquals(2, oldChange.getTable().columns().size());
         TableChange newChange = changeList.get(1);
-        assertEquals(io.debezium.relational.history.TableChanges.TableChangeType.ALTER, newChange.getType());
+        assertEquals(
+                io.debezium.relational.history.TableChanges.TableChangeType.ALTER,
+                newChange.getType());
         assertEquals(TABLE_ID, newChange.getId());
         assertEquals(3, newChange.getTable().columns().size());
     }
@@ -171,8 +175,7 @@ class KafkaJsonSchemaChangeHandlerTest {
     private static void handle(KafkaJsonSourceFetchTaskContext context, String sql, long es)
             throws Exception {
         KafkaJsonSourceConfig config = context.getSourceConfig();
-        KafkaJsonFlatMessage message =
-                KafkaJsonFlatMessageParser.parse(ddlMessage(sql, es));
+        KafkaJsonFlatMessage message = KafkaJsonFlatMessageParser.parse(ddlMessage(sql, es));
         new KafkaJsonSchemaChangeHandler(config)
                 .handle(context, message, new KafkaJsonOffset(es, 0, 2));
     }
@@ -206,10 +209,15 @@ class KafkaJsonSchemaChangeHandlerTest {
     }
 
     private static String ddlMessage(String sql, long es) {
-        return "{\"data\":null,\"database\":\"test\",\"es\":" + es + ",\"id\":2,"
+        return "{\"data\":null,\"database\":\"test\",\"es\":"
+                + es
+                + ",\"id\":2,"
                 + "\"isDdl\":true,\"mysqlType\":null,\"old\":null,\"pkNames\":null,"
-                + "\"sql\":\"" + sql + "\",\"sqlType\":null,\"table\":\"users\",\"ts\":"
-                + (es + 500) + ",\"type\":\"ALTER\"}";
+                + "\"sql\":\""
+                + sql
+                + "\",\"sqlType\":null,\"table\":\"users\",\"ts\":"
+                + (es + 500)
+                + ",\"type\":\"ALTER\"}";
     }
 
     private static Table baseTable() {
@@ -238,8 +246,7 @@ class KafkaJsonSchemaChangeHandlerTest {
     }
 
     /** Polls the queue until {@code expected} records have been drained (or a timeout elapses). */
-    private static List<SourceRecord> drain(
-            ChangeEventQueue<DataChangeEvent> queue, int expected)
+    private static List<SourceRecord> drain(ChangeEventQueue<DataChangeEvent> queue, int expected)
             throws InterruptedException {
         List<SourceRecord> records = new ArrayList<>();
         long deadline = System.currentTimeMillis() + 5000L;

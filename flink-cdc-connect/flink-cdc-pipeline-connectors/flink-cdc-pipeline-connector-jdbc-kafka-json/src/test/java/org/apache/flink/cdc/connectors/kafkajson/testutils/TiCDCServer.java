@@ -60,7 +60,8 @@ public class TiCDCServer {
                                 "--addr=0.0.0.0:" + SERVER_PORT,
                                 // TiCDC requires a concrete IP (it rejects 0.0.0.0 and hostnames).
                                 // 127.0.0.1 is sufficient: the only client is the in-container cli
-                                // (see runCli), and in this single-capture setup nothing outside the
+                                // (see runCli), and in this single-capture setup nothing outside
+                                // the
                                 // container needs to reach the advertise address.
                                 "--advertise-addr=127.0.0.1:" + SERVER_PORT,
                                 "--pd=http://pd0:2379",
@@ -113,8 +114,11 @@ public class TiCDCServer {
                                 + sinkUri
                                 + "\" --changefeed-id="
                                 + CHANGEFEED_ID);
-        LOG.info("changefeed create exit={} stdout={} stderr={}", result.getExitCode(),
-                result.getStdout(), result.getStderr());
+        LOG.info(
+                "changefeed create exit={} stdout={} stderr={}",
+                result.getExitCode(),
+                result.getStdout(),
+                result.getStderr());
         if (result.getExitCode() != 0) {
             throw new IllegalStateException(
                     "Failed to create changefeed: " + result.getStdout() + result.getStderr());
@@ -126,8 +130,7 @@ public class TiCDCServer {
     private void waitForServerReady() throws Exception {
         long deadline = System.currentTimeMillis() + 60_000;
         while (System.currentTimeMillis() < deadline) {
-            ExecResult result =
-                    runCli("changefeed list --server=http://127.0.0.1:" + SERVER_PORT);
+            ExecResult result = runCli("changefeed list --server=http://127.0.0.1:" + SERVER_PORT);
             if (result.getExitCode() == 0) {
                 return;
             }

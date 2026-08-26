@@ -57,7 +57,8 @@ public class KafkaJsonRecordConverter {
     private final EventTime eventTimeMode;
     private final MySqlConnectorConfig dbzConfig;
 
-    public KafkaJsonRecordConverter(KafkaJsonRecordFactory factory, KafkaJsonSourceConfig sourceConfig) {
+    public KafkaJsonRecordConverter(
+            KafkaJsonRecordFactory factory, KafkaJsonSourceConfig sourceConfig) {
         this.factory = factory;
         this.eventTimeMode = sourceConfig.getEventTime();
         this.dbzConfig = sourceConfig.getDbzConnectorConfig();
@@ -89,11 +90,14 @@ public class KafkaJsonRecordConverter {
         switch (op) {
             case "INSERT":
             case "QUERY":
-                return convertRows(message, topic, partition, kafkaOffset, Envelope.Operation.CREATE);
+                return convertRows(
+                        message, topic, partition, kafkaOffset, Envelope.Operation.CREATE);
             case "UPDATE":
-                return convertRows(message, topic, partition, kafkaOffset, Envelope.Operation.UPDATE);
+                return convertRows(
+                        message, topic, partition, kafkaOffset, Envelope.Operation.UPDATE);
             case "DELETE":
-                return convertRows(message, topic, partition, kafkaOffset, Envelope.Operation.DELETE);
+                return convertRows(
+                        message, topic, partition, kafkaOffset, Envelope.Operation.DELETE);
             case "TIDB_WATERMARK":
                 // TiCDC emits these marker events (isDdl=false but type=TIDB_WATERMARK, data=null)
                 // when the TiDB extension is enabled; they carry no DML rows and are not DDL.
@@ -180,16 +184,16 @@ public class KafkaJsonRecordConverter {
      * <p>In the canal flatMessage the {@code data} array carries the full row <em>after</em> the
      * change, while the {@code old} array carries only the columns that actually changed. A column
      * that did not change has the same value before and after the {@code UPDATE}, so the before
-     * image is simply the after row with the changed columns overlaid with their {@code old} values:
-     * {@code complete = afterRow ∪ old}.
+     * image is simply the after row with the changed columns overlaid with their {@code old}
+     * values: {@code complete = afterRow ∪ old}.
      *
      * <p>This is not cosmetic: the reconstructed row is what the pipeline exposes to the consumer.
-     * It flows into the Debezium envelope's {@code before} struct of the {@code SourceRecord}
-     * (see {@link KafkaJsonRecordFactory#createRecord}), and the pipeline deserializer reads it as
-     * the {@code DataChangeEvent.before()} image of the emitted update event. Without the merge the
-     * unchanged columns would be {@code null} here, and the schema converters would fill their
-     * NOT NULL schema defaults ({@code 0}/{@code ""}) when building the struct, so the consumer
-     * would receive a fabricated before row instead of the true old row.
+     * It flows into the Debezium envelope's {@code before} struct of the {@code SourceRecord} (see
+     * {@link KafkaJsonRecordFactory#createRecord}), and the pipeline deserializer reads it as the
+     * {@code DataChangeEvent.before()} image of the emitted update event. Without the merge the
+     * unchanged columns would be {@code null} here, and the schema converters would fill their NOT
+     * NULL schema defaults ({@code 0}/{@code ""}) when building the struct, so the consumer would
+     * receive a fabricated before row instead of the true old row.
      */
     private static Map<String, String> completeBeforeRow(
             Map<String, String> afterRow, Map<String, String> beforeRow) {
@@ -201,7 +205,10 @@ public class KafkaJsonRecordConverter {
     /** Returns the registered (JDBC) schema, or rebuilds one from the message {@code mysqlType}. */
     private Table resolveTable(KafkaJsonFlatMessage message) {
         TableId tableId =
-                new TableId(message.getDatabase() == null ? "" : message.getDatabase(), null, message.getTable());
+                new TableId(
+                        message.getDatabase() == null ? "" : message.getDatabase(),
+                        null,
+                        message.getTable());
         Table table = factory.tableFor(tableId);
         if (table == null) {
             table = KafkaJsonTableUtils.buildTable(message);

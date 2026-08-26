@@ -69,13 +69,14 @@ import java.sql.SQLException;
  *
  * <p>It owns the {@link ChangeEventQueue} that both fetch tasks enqueue {@link DataChangeEvent}s
  * into, the {@link JdbcSourceEventDispatcher} used to dispatch the low/high/end watermark events of
- * the incremental-snapshot algorithm, and the shared {@link KafkaJsonSchema}/{@link KafkaJsonRecordFactory}
- * that keep the table schemas. The streaming reader additionally owns a {@link KafkaConsumer} and a
- * {@link KafkaJsonOffsetSupplier}.
+ * the incremental-snapshot algorithm, and the shared {@link KafkaJsonSchema}/{@link
+ * KafkaJsonRecordFactory} that keep the table schemas. The streaming reader additionally owns a
+ * {@link KafkaConsumer} and a {@link KafkaJsonOffsetSupplier}.
  */
 public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext {
 
-    private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonSourceFetchTaskContext.class);
+    private static final Logger LOG =
+            LoggerFactory.getLogger(KafkaJsonSourceFetchTaskContext.class);
 
     private final KafkaJsonSourceConfig canalSourceConfig;
 
@@ -176,7 +177,8 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
     /**
      * Returns (creating on first use) the Kafka consumer used by the streaming reader.
      *
-     * <p>The consumer is created lazily so that snapshot-only readers never open a Kafka connection.
+     * <p>The consumer is created lazily so that snapshot-only readers never open a Kafka
+     * connection.
      */
     public KafkaConsumer<String, String> getKafkaConsumer() {
         if (kafkaConsumer == null) {
@@ -204,7 +206,8 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
     /**
      * Returns (creating on first use) the JDBC connection used to read the snapshot data.
      *
-     * <p>The connection is created lazily so that stream-only readers never open a MySQL connection.
+     * <p>The connection is created lazily so that stream-only readers never open a MySQL
+     * connection.
      */
     public JdbcConnection getConnection() {
         if (jdbcConnection == null) {

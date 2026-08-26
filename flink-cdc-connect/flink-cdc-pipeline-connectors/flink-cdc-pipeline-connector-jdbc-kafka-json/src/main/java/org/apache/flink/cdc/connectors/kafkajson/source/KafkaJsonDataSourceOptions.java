@@ -51,7 +51,8 @@ public class KafkaJsonDataSourceOptions {
             ConfigOptions.key("password")
                     .stringType()
                     .noDefaultValue()
-                    .withDescription("Password to use when connecting to the MySQL database server.");
+                    .withDescription(
+                            "Password to use when connecting to the MySQL database server.");
 
     public static final ConfigOption<String> TABLES =
             ConfigOptions.key("tables")
@@ -161,9 +162,8 @@ public class KafkaJsonDataSourceOptions {
     /**
      * The database type of the source, used to select the JDBC/dialect layer. Declared as a string
      * for the same kebab-case reason as {@link #MESSAGE_FORMAT}; the {@link
-     * KafkaJsonSourceOptions.DatabaseType} enum is resolved in the factory. Only 'mysql' and
-     * 'tidb' are implemented in this version; 'tidb' reuses the MySQL-compatible JDBC/dialect
-     * path.
+     * KafkaJsonSourceOptions.DatabaseType} enum is resolved in the factory. Only 'mysql' and 'tidb'
+     * are implemented in this version; 'tidb' reuses the MySQL-compatible JDBC/dialect path.
      */
     public static final ConfigOption<String> DATABASE_TYPE =
             ConfigOptions.key("scan.database.type")
@@ -181,7 +181,10 @@ public class KafkaJsonDataSourceOptions {
                     .withDescription(
                             "The timestamp used as the offset event time for canal messages: 'es' (binlog execution time, default) or 'ts' (canal send time).");
 
-    /** How to handle the boundary when a stream message timestamp equals the snapshot high watermark. */
+    /**
+     * How to handle the boundary when a stream message timestamp equals the snapshot high
+     * watermark.
+     */
     public static final ConfigOption<String> BOUNDARY_MODE =
             ConfigOptions.key("scan.boundary.mode")
                     .stringType()

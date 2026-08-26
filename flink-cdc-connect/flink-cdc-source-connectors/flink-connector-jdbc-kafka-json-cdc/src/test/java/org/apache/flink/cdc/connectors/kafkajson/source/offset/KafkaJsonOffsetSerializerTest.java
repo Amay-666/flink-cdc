@@ -30,9 +30,9 @@ import java.util.Collections;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Verifies that a {@link KafkaJsonOffset} survives the checkpoint serialization round-trip through the
- * base {@link SourceSplitSerializer}. This is the exact code path used when a {@link StreamSplit}
- * (whose starting offset is a {@link KafkaJsonOffset}) is checkpointed and restored.
+ * Verifies that a {@link KafkaJsonOffset} survives the checkpoint serialization round-trip through
+ * the base {@link SourceSplitSerializer}. This is the exact code path used when a {@link
+ * StreamSplit} (whose starting offset is a {@link KafkaJsonOffset}) is checkpointed and restored.
  */
 class KafkaJsonOffsetSerializerTest {
 
@@ -64,7 +64,8 @@ class KafkaJsonOffsetSerializerTest {
         assertEquals(startingOffset, restoredSplit.getStartingOffset());
         assertEquals(KafkaJsonOffset.NO_STOPPING_OFFSET, restoredSplit.getEndingOffset());
 
-        KafkaJsonOffset restoredStartingOffset = (KafkaJsonOffset) restoredSplit.getStartingOffset();
+        KafkaJsonOffset restoredStartingOffset =
+                (KafkaJsonOffset) restoredSplit.getStartingOffset();
         assertEquals(1598752886000L, restoredStartingOffset.getEventTime());
         assertEquals(0, restoredStartingOffset.getPartition());
         assertEquals(42L, restoredStartingOffset.getOffsetValue());

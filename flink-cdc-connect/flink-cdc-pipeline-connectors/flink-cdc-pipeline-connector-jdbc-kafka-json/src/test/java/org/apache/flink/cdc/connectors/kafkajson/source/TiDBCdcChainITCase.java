@@ -133,8 +133,7 @@ public class TiDBCdcChainITCase extends KafkaJsonSourceTestBase {
                 Statement statement = connection.createStatement()) {
             statement.execute(
                     "INSERT INTO `customers` (id, name, address) VALUES (105, 'user_5', 'Chengdu')");
-            statement.execute(
-                    "UPDATE `customers` SET address='Hangzhou' WHERE id=101");
+            statement.execute("UPDATE `customers` SET address='Hangzhou' WHERE id=101");
             statement.execute("DELETE FROM `customers` WHERE id=102");
         }
         List<Event> stream = fetchDataEvents(events, 3, createTables);

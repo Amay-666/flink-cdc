@@ -44,10 +44,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Unit test for the {@link KafkaJsonSourceBuilder} wiring: the {@link KafkaJsonSource} created by {@code
- * build()} is driven entirely by flink-cdc-base (no custom reader/enumerator), so this test locks
- * the contract the base framework relies on - boundedness, produced type and the split serializer
- * whose offset (de)serialization goes through the wired {@code KafkaJsonOffsetFactory}.
+ * Unit test for the {@link KafkaJsonSourceBuilder} wiring: the {@link KafkaJsonSource} created by
+ * {@code build()} is driven entirely by flink-cdc-base (no custom reader/enumerator), so this test
+ * locks the contract the base framework relies on - boundedness, produced type and the split
+ * serializer whose offset (de)serialization goes through the wired {@code KafkaJsonOffsetFactory}.
  */
 class KafkaJsonSourceBuilderTest {
 
@@ -138,8 +138,7 @@ class KafkaJsonSourceBuilderTest {
                         new Object[] {3L},
                         new KafkaJsonOffset(1000L, 0, 5),
                         Collections.singletonMap(
-                                TABLE_ID,
-                                new TableChange(TableChangeType.CREATE, table())));
+                                TABLE_ID, new TableChange(TableChangeType.CREATE, table())));
 
         SnapshotSplit restored = (SnapshotSplit) roundTrip(source, split);
 

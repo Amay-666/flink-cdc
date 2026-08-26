@@ -47,7 +47,8 @@ public class KafkaJsonOffset extends Offset {
     public static final KafkaJsonOffset INITIAL_OFFSET = new KafkaJsonOffset(-1L, -1, -1L);
 
     /** The offset that is greater than any real offset. */
-    public static final KafkaJsonOffset NO_STOPPING_OFFSET = new KafkaJsonOffset(Long.MAX_VALUE, -1, -1L);
+    public static final KafkaJsonOffset NO_STOPPING_OFFSET =
+            new KafkaJsonOffset(Long.MAX_VALUE, -1, -1L);
 
     // used by KafkaJsonOffsetFactory
     KafkaJsonOffset(Map<String, String> offset) {

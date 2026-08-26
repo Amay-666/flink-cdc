@@ -32,14 +32,14 @@ import java.util.Optional;
 /**
  * A {@link JdbcConnection} whose column-metadata read skips the column default value.
  *
- * <p>{@link JdbcConnection#readTableColumn} fetches {@code COLUMN_DEF} ({@code getString(13)}) first
- * and feeds it into Debezium's {@code TableSchemaBuilder} as the {@code defaultValueExpression}. For
- * binary-typed columns the MySQL driver reports the default as a literal string ({@code 0x} for a
- * {@code BINARY DEFAULT 0x...}, or raw binary bytes on TiDB), which {@code SchemaBuilder.defaultValue}
- * refuses to convert into a {@code BYTES} default and aborts the whole schema read with {@code
- * DebeziumException: Failed to set field default value ...}. This connector resolves column defaults
- * itself (see the DDL parser), so the JDBC-snapshot path never needs the driver-provided default and
- * the fetch is skipped entirely.
+ * <p>{@link JdbcConnection#readTableColumn} fetches {@code COLUMN_DEF} ({@code getString(13)})
+ * first and feeds it into Debezium's {@code TableSchemaBuilder} as the {@code
+ * defaultValueExpression}. For binary-typed columns the MySQL driver reports the default as a
+ * literal string ({@code 0x} for a {@code BINARY DEFAULT 0x...}, or raw binary bytes on TiDB),
+ * which {@code SchemaBuilder.defaultValue} refuses to convert into a {@code BYTES} default and
+ * aborts the whole schema read with {@code DebeziumException: Failed to set field default value
+ * ...}. This connector resolves column defaults itself (see the DDL parser), so the JDBC-snapshot
+ * path never needs the driver-provided default and the fetch is skipped entirely.
  */
 public class KafkaJsonJdbcConnection extends JdbcConnection {
 
@@ -52,9 +52,10 @@ public class KafkaJsonJdbcConnection extends JdbcConnection {
     }
 
     /**
-     * Replicates {@link JdbcConnection#readTableColumn} without reading the {@code COLUMN_DEF} default
-     * value: the MySQL driver returns it as a literal that Debezium cannot convert into a typed schema
-     * default for binary (and some other) types, failing the schema read (see the class javadoc).
+     * Replicates {@link JdbcConnection#readTableColumn} without reading the {@code COLUMN_DEF}
+     * default value: the MySQL driver returns it as a literal that Debezium cannot convert into a
+     * typed schema default for binary (and some other) types, failing the schema read (see the
+     * class javadoc).
      */
     @Override
     protected Optional<ColumnEditor> readTableColumn(

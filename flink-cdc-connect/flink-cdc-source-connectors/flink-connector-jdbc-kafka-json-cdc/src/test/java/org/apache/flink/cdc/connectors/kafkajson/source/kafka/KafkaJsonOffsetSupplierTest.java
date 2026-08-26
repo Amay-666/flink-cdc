@@ -128,9 +128,12 @@ class KafkaJsonOffsetSupplierTest {
     private static ConsumerRecord<String, String> record(
             TopicPartition topicPartition, long offset, long es, long ts) {
         String value =
-                "{\"data\":[],\"database\":\"test\",\"es\":" + es + ",\"id\":1,"
+                "{\"data\":[],\"database\":\"test\",\"es\":"
+                        + es
+                        + ",\"id\":1,"
                         + "\"isDdl\":false,\"mysqlType\":{},\"old\":null,\"pkNames\":null,"
-                        + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\",\"ts\":" + ts
+                        + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\",\"ts\":"
+                        + ts
                         + ",\"type\":\"INSERT\"}";
         return new ConsumerRecord<>(
                 topicPartition.topic(),

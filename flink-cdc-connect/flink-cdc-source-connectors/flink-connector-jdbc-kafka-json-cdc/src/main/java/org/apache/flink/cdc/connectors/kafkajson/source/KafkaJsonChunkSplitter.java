@@ -31,8 +31,8 @@ import io.debezium.relational.TableId;
 import java.sql.SQLException;
 
 /**
- * The splitter to split the MySQL table into chunks using primary-key (by default) or a given
- * split key.
+ * The splitter to split the MySQL table into chunks using primary-key (by default) or a given split
+ * key.
  */
 @Internal
 public class KafkaJsonChunkSplitter extends JdbcSourceChunkSplitter {

@@ -162,12 +162,10 @@ class KafkaJsonColumnMetaTest {
 
     @Test
     void testNullableAndNotNull() {
-        DataType optional =
-                KafkaJsonColumnMeta.fromColumn(column("INT", 11)).toCdcDataType(true);
+        DataType optional = KafkaJsonColumnMeta.fromColumn(column("INT", 11)).toCdcDataType(true);
         assertTrue(optional.isNullable());
 
-        DataType notNull =
-                KafkaJsonColumnMeta.fromColumn(column("INT", 11)).toCdcDataType(false);
+        DataType notNull = KafkaJsonColumnMeta.fromColumn(column("INT", 11)).toCdcDataType(false);
         assertFalse(notNull.isNullable());
     }
 

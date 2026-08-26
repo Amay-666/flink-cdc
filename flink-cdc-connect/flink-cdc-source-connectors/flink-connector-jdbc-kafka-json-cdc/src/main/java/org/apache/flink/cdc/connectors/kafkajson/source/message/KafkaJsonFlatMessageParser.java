@@ -46,7 +46,8 @@ public class KafkaJsonFlatMessageParser {
             return null;
         }
         try {
-            KafkaJsonFlatMessage message = OBJECT_MAPPER.readValue(json, KafkaJsonFlatMessage.class);
+            KafkaJsonFlatMessage message =
+                    OBJECT_MAPPER.readValue(json, KafkaJsonFlatMessage.class);
             if (message == null) {
                 return null;
             }

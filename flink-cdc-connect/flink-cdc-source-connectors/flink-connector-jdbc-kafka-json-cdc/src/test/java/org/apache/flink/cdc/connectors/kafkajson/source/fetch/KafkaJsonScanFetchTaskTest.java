@@ -61,14 +61,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Unit test for {@link KafkaJsonScanFetchTask}: the snapshot read task (JDBC rows -&gt; READ records) and
- * the full incremental-snapshot pipeline (LOW -&gt; snapshot -&gt; HIGH -&gt; backfill -&gt; END) driven by
- * the base framework.
+ * Unit test for {@link KafkaJsonScanFetchTask}: the snapshot read task (JDBC rows -&gt; READ
+ * records) and the full incremental-snapshot pipeline (LOW -&gt; snapshot -&gt; HIGH -&gt; backfill
+ * -&gt; END) driven by the base framework.
  *
- * <p>The JDBC result is faked with {@link java.lang.reflect.Proxy} handlers (the {@link Connection}/
- * {@link PreparedStatement}/{@link ResultSet} interfaces are too large to implement by hand); the
- * Kafka change log is faked with {@link FakeKafkaConsumer}; the two watermark reads of the base
- * algorithm are faked with the dialect's offset supplier.
+ * <p>The JDBC result is faked with {@link java.lang.reflect.Proxy} handlers (the {@link
+ * Connection}/ {@link PreparedStatement}/{@link ResultSet} interfaces are too large to implement by
+ * hand); the Kafka change log is faked with {@link FakeKafkaConsumer}; the two watermark reads of
+ * the base algorithm are faked with the dialect's offset supplier.
  */
 class KafkaJsonScanFetchTaskTest {
 
@@ -100,10 +100,10 @@ class KafkaJsonScanFetchTaskTest {
                         watermarkCalls.getAndIncrement() == 0
                                 ? new KafkaJsonOffset(1000, -1, -1)
                                 : new KafkaJsonOffset(3000, -1, -1));
-        KafkaJsonSourceFetchTaskContext context = new KafkaJsonSourceFetchTaskContext(config, dialect);
+        KafkaJsonSourceFetchTaskContext context =
+                new KafkaJsonSourceFetchTaskContext(config, dialect);
         context.setKafkaConsumerForTesting(consumer);
-        context.setJdbcConnectionForTesting(
-                fakeJdbc(rows, new ArrayList<>(), new ArrayList<>()));
+        context.setJdbcConnectionForTesting(fakeJdbc(rows, new ArrayList<>(), new ArrayList<>()));
 
         // single-chunk split: no WHERE clause, the whole table is one chunk
         SnapshotSplit split = snapshotSplit(null, null);
@@ -131,7 +131,8 @@ class KafkaJsonScanFetchTaskTest {
         assertChangeRecord(records.get(4), 1L, "B");
 
         // the id=2 insert carries es == 3000 == the high watermark: this injected ending offset is
-        // (3000, -1, -1), not the sentinel watermark of queryCurrentOffset, so the record is ordered
+        // (3000, -1, -1), not the sentinel watermark of queryCurrentOffset, so the record is
+        // ordered
         // AFTER it (partition 0 > -1) and dropped by the bounded read — the stream phase emits it
 
         // 6. the end watermark finalizes the split
@@ -149,10 +150,7 @@ class KafkaJsonScanFetchTaskTest {
         List<String> sqlLog = new ArrayList<>();
         List<Object[]> setObjectArgs = new ArrayList<>();
         context.setJdbcConnectionForTesting(
-                fakeJdbc(
-                        Collections.singletonList(new Object[] {2L, "B"}),
-                        sqlLog,
-                        setObjectArgs));
+                fakeJdbc(Collections.singletonList(new Object[] {2L, "B"}), sqlLog, setObjectArgs));
         context.configure(split);
 
         KafkaJsonScanFetchTask.KafkaJsonSnapshotSplitReadTask readTask =
@@ -217,8 +215,7 @@ class KafkaJsonScanFetchTaskTest {
         KafkaJsonSourceConfig config = config();
         KafkaJsonSourceFetchTaskContext context =
                 new KafkaJsonSourceFetchTaskContext(config, new KafkaJsonDialect(config));
-        context.setKafkaConsumerForTesting(
-                new FakeKafkaConsumer(new HashMap<>(), new HashMap<>()));
+        context.setKafkaConsumerForTesting(new FakeKafkaConsumer(new HashMap<>(), new HashMap<>()));
         return context;
     }
 
@@ -237,7 +234,8 @@ class KafkaJsonScanFetchTaskTest {
 
     private static SnapshotSplit snapshotSplit(Object[] splitStart, Object[] splitEnd) {
         Map<TableId, TableChange> tableSchemas =
-                Collections.singletonMap(TABLE_ID, new TableChange(TableChangeType.CREATE, table()));
+                Collections.singletonMap(
+                        TABLE_ID, new TableChange(TableChangeType.CREATE, table()));
         return new SnapshotSplit(
                 TABLE_ID,
                 "users-split-0",
@@ -344,8 +342,7 @@ class KafkaJsonScanFetchTaskTest {
                                             return defaultValue(method.getReturnType());
                                     }
                                 });
-        return new JdbcConnection(
-                JdbcConfiguration.empty(), config -> connection, "`", "`");
+        return new JdbcConnection(JdbcConfiguration.empty(), config -> connection, "`", "`");
     }
 
     private static Object defaultValue(Class<?> type) {
@@ -401,18 +398,30 @@ class KafkaJsonScanFetchTaskTest {
     }
 
     private static String insertMessage(long es, String id, String name) {
-        return "{\"data\":[{\"id\":\"" + id + "\",\"name\":\"" + name + "\"}],"
-                + "\"database\":\"test\",\"es\":" + es + ",\"id\":1,\"isDdl\":false,"
+        return "{\"data\":[{\"id\":\""
+                + id
+                + "\",\"name\":\""
+                + name
+                + "\"}],"
+                + "\"database\":\"test\",\"es\":"
+                + es
+                + ",\"id\":1,\"isDdl\":false,"
                 + "\"mysqlType\":{\"id\":\"bigint(20)\",\"name\":\"varchar(255)\"},"
                 + "\"old\":null,\"pkNames\":[\"id\"],\"sql\":\"\",\"sqlType\":{},"
-                + "\"table\":\"users\",\"ts\":" + (es + 500) + ",\"type\":\"INSERT\"}";
+                + "\"table\":\"users\",\"ts\":"
+                + (es + 500)
+                + ",\"type\":\"INSERT\"}";
     }
 
     private static String ddlMessage(long es) {
-        return "{\"data\":null,\"database\":\"test\",\"es\":" + es + ",\"id\":2,"
+        return "{\"data\":null,\"database\":\"test\",\"es\":"
+                + es
+                + ",\"id\":2,"
                 + "\"isDdl\":true,\"mysqlType\":null,\"old\":null,\"pkNames\":null,"
                 + "\"sql\":\"ALTER TABLE `test`.`users` ADD COLUMN `age` int\","
-                + "\"sqlType\":null,\"table\":\"users\",\"ts\":" + (es + 500) + ",\"type\":\"ALTER\"}";
+                + "\"sqlType\":null,\"table\":\"users\",\"ts\":"
+                + (es + 500)
+                + ",\"type\":\"ALTER\"}";
     }
 
     /** Polls the queue until {@code expected} records have been drained (or a timeout elapses). */

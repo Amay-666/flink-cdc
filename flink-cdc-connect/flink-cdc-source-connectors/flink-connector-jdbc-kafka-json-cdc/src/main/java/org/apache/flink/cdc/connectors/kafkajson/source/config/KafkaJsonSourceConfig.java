@@ -172,10 +172,10 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
     }
 
     /**
-     * Returns the minimal Debezium MySQL connector config used by the {@code JdbcSourceEventDispatcher}
-     * (logical name, schema name adjuster, source info struct maker, table filters). Since canal is
-     * bound to MySQL, we reuse {@link MySqlConnectorConfig} built from the light Debezium
-     * configuration instead of implementing a full connector config.
+     * Returns the minimal Debezium MySQL connector config used by the {@code
+     * JdbcSourceEventDispatcher} (logical name, schema name adjuster, source info struct maker,
+     * table filters). Since canal is bound to MySQL, we reuse {@link MySqlConnectorConfig} built
+     * from the light Debezium configuration instead of implementing a full connector config.
      */
     @Override
     public MySqlConnectorConfig getDbzConnectorConfig() {

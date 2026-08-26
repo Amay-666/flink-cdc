@@ -135,7 +135,8 @@ public class KafkaJsonTidbOffsetUtils {
                         sourceConfig.getHostname(),
                         sourceConfig.getPort(),
                         connectTimeout == null ? 30_000L : connectTimeout.toMillis());
-        return DriverManager.getConnection(url, sourceConfig.getUsername(), sourceConfig.getPassword());
+        return DriverManager.getConnection(
+                url, sourceConfig.getUsername(), sourceConfig.getPassword());
     }
 
     private static void rollbackQuietly(Connection connection) {

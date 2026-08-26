@@ -40,7 +40,8 @@ class KafkaJsonOffsetTest {
         assertTrue(b.compareTo(a) > 0);
         assertTrue(b.compareTo(c) < 0);
         assertTrue(c.compareTo(d) < 0);
-        assertEquals(0, new KafkaJsonOffset(100L, 0, 5L).compareTo(new KafkaJsonOffset(100L, 0, 5L)));
+        assertEquals(
+                0, new KafkaJsonOffset(100L, 0, 5L).compareTo(new KafkaJsonOffset(100L, 0, 5L)));
     }
 
     @Test

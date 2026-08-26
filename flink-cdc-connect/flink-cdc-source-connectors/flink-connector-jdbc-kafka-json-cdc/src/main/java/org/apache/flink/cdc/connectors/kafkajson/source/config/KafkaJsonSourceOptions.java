@@ -28,8 +28,10 @@ public class KafkaJsonSourceOptions extends JdbcSourceOptions {
 
     /** The port of the MySQL server, used for the JDBC snapshot phase. */
     public static final ConfigOption<Integer> CANAL_MYSQL_PORT =
-            ConfigOptions.key("port").intType().defaultValue(3306).withDescription(
-                    "Integer port number of the MySQL database server.");
+            ConfigOptions.key("port")
+                    .intType()
+                    .defaultValue(3306)
+                    .withDescription("Integer port number of the MySQL database server.");
 
     /** The session time zone in the MySQL database server, e.g. "UTC". */
     public static final ConfigOption<String> SERVER_TIME_ZONE =
@@ -99,7 +101,10 @@ public class KafkaJsonSourceOptions extends JdbcSourceOptions {
                     .withDescription(
                             "The timestamp used as the offset event time for canal messages: 'es' (binlog execution time, default) or 'ts' (canal send time).");
 
-    /** How to handle the boundary when a stream message timestamp equals the snapshot high watermark. */
+    /**
+     * How to handle the boundary when a stream message timestamp equals the snapshot high
+     * watermark.
+     */
     public static final ConfigOption<String> BOUNDARY_MODE =
             ConfigOptions.key("scan.boundary.mode")
                     .stringType()

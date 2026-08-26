@@ -139,7 +139,8 @@ class KafkaJsonStreamFetchTaskTest {
 
         List<SourceRecord> records = drain(context.getQueue(), 2);
         assertEquals(2, records.size());
-        assertEquals("c", ((Struct) records.get(0).value()).getString(Envelope.FieldName.OPERATION));
+        assertEquals(
+                "c", ((Struct) records.get(0).value()).getString(Envelope.FieldName.OPERATION));
         assertTrue(WatermarkEvent.isEndWatermarkEvent(records.get(1)));
         assertFalse(task.isRunning());
     }
@@ -175,7 +176,10 @@ class KafkaJsonStreamFetchTaskTest {
         Set<String> names = new HashSet<>();
         for (SourceRecord record : records) {
             if (!WatermarkEvent.isEndWatermarkEvent(record)) {
-                names.add(((Struct) record.value()).getStruct(Envelope.FieldName.AFTER).getString("name"));
+                names.add(
+                        ((Struct) record.value())
+                                .getStruct(Envelope.FieldName.AFTER)
+                                .getString("name"));
             }
         }
         assertEquals(new HashSet<>(Arrays.asList("Alice", "Carol", "Dave")), names);
@@ -191,7 +195,8 @@ class KafkaJsonStreamFetchTaskTest {
         // is ordered BEFORE it (isAfter is false) and is emitted exactly once by this bounded
         // backfill; only messages strictly after the ending offset are left to the stream phase.
         // (With a minimum-event-time watermark the same boundary message fell through to the stream
-        // phase and was emitted again, on top of a JDBC snapshot that already contained its effect.)
+        // phase and was emitted again, on top of a JDBC snapshot that already contained its
+        // effect.)
         FakeKafkaConsumer consumer = consumer(INSERT, UPDATE); // es 3000 then es 3005
         KafkaJsonSourceFetchTaskContext context = context(consumer);
         StreamSplit split =
@@ -222,9 +227,14 @@ class KafkaJsonStreamFetchTaskTest {
         // the consumer actually reads it and the drop is what keeps it out of the backfill.
         TopicPartition p0 = new TopicPartition("t", 0);
         List<ConsumerRecord<String, String>> log0 = new ArrayList<>();
-        log0.add(insertRecord("1", "Alice", 2900, 3000, p0, 0)); // pre-snapshot change, lagged: dropped
-        log0.add(insertRecord("2", "Bob", 3200, 3200, p0, 1)); // inside the backfill window: emitted
-        log0.add(insertRecord("3", "Carol", 3400, 3400, p0, 2)); // inside the backfill window: emitted
+        log0.add(
+                insertRecord(
+                        "1", "Alice", 2900, 3000, p0, 0)); // pre-snapshot change, lagged: dropped
+        log0.add(
+                insertRecord("2", "Bob", 3200, 3200, p0, 1)); // inside the backfill window: emitted
+        log0.add(
+                insertRecord(
+                        "3", "Carol", 3400, 3400, p0, 2)); // inside the backfill window: emitted
 
         Map<TopicPartition, List<ConsumerRecord<String, String>>> log = new HashMap<>();
         log.put(p0, log0);
@@ -240,11 +250,15 @@ class KafkaJsonStreamFetchTaskTest {
         task.execute(context);
 
         List<SourceRecord> records = drain(context.getQueue(), 3);
-        assertEquals(3, records.size(), "Bob + Carol inside the window + END watermark; Alice dropped");
+        assertEquals(
+                3, records.size(), "Bob + Carol inside the window + END watermark; Alice dropped");
         Set<String> names = new HashSet<>();
         for (SourceRecord record : records) {
             if (!WatermarkEvent.isEndWatermarkEvent(record)) {
-                names.add(((Struct) record.value()).getStruct(Envelope.FieldName.AFTER).getString("name"));
+                names.add(
+                        ((Struct) record.value())
+                                .getStruct(Envelope.FieldName.AFTER)
+                                .getString("name"));
             }
         }
         assertEquals(new HashSet<>(Arrays.asList("Bob", "Carol")), names);
@@ -257,7 +271,8 @@ class KafkaJsonStreamFetchTaskTest {
         // F1 regression (see docs/BOUNDARY_AUDIT.md): the newest message at the moment the snapshot
         // split finished carries an event time equal to the split's high watermark, so its event
         // time equals the stream split's starting offset (the high-watermark sentinel). The bounded
-        // backfill emits it exactly once; the base pure-stream threshold is inclusive (isAtOrAfter),
+        // backfill emits it exactly once; the base pure-stream threshold is inclusive
+        // (isAtOrAfter),
         // so without the strict lower bound the stream re-emits it a second time. The stream split
         // reads strictly after its starting offset: the boundary INSERT (es == 3000) is consumed
         // (the read position advances) but not re-emitted, while the UPDATE strictly after it is.
@@ -344,14 +359,12 @@ class KafkaJsonStreamFetchTaskTest {
             Struct first = (Struct) records.get(0).value();
             assertEquals("c", first.getString(Envelope.FieldName.OPERATION));
             assertEquals(
-                    "NewAfterSplit1",
-                    first.getStruct(Envelope.FieldName.AFTER).getString("name"));
+                    "NewAfterSplit1", first.getStruct(Envelope.FieldName.AFTER).getString("name"));
             // then the id=5 es=3200 record (offset 2), in split-0's range but after split-0's HIGH
             Struct second = (Struct) records.get(1).value();
             assertEquals("c", second.getString(Envelope.FieldName.OPERATION));
             assertEquals(
-                    "NewAfterSplit0",
-                    second.getStruct(Envelope.FieldName.AFTER).getString("name"));
+                    "NewAfterSplit0", second.getStruct(Envelope.FieldName.AFTER).getString("name"));
             // the dropped boundary message still advanced the read position and offset tracking
             assertEquals(new KafkaJsonOffset(3200, 0, 2), task.getCurrentOffset());
             assertEquals(3L, consumer.positionOf(PARTITION));
@@ -376,7 +389,8 @@ class KafkaJsonStreamFetchTaskTest {
         try {
             List<SourceRecord> records = drain(context.getQueue(), 1);
             assertEquals(1, records.size());
-            assertEquals("c", ((Struct) records.get(0).value()).getString(Envelope.FieldName.OPERATION));
+            assertEquals(
+                    "c", ((Struct) records.get(0).value()).getString(Envelope.FieldName.OPERATION));
             assertEquals(1L, consumer.positionOf(PARTITION));
         } finally {
             task.close();
@@ -388,7 +402,9 @@ class KafkaJsonStreamFetchTaskTest {
     void testCommitCurrentOffsetTracksLatest() {
         KafkaJsonStreamFetchTask task =
                 new KafkaJsonStreamFetchTask(
-                        streamSplit(KafkaJsonOffset.INITIAL_OFFSET, KafkaJsonOffset.NO_STOPPING_OFFSET));
+                        streamSplit(
+                                KafkaJsonOffset.INITIAL_OFFSET,
+                                KafkaJsonOffset.NO_STOPPING_OFFSET));
         task.commitCurrentOffset(new KafkaJsonOffset(1000, 0, 5));
         assertEquals(new KafkaJsonOffset(1000, 0, 5), task.getLastCommittedOffset());
         // older offsets are not committed backwards
@@ -419,7 +435,8 @@ class KafkaJsonStreamFetchTaskTest {
                 .create(0);
     }
 
-    private static StreamSplit streamSplit(KafkaJsonOffset startingOffset, KafkaJsonOffset endingOffset) {
+    private static StreamSplit streamSplit(
+            KafkaJsonOffset startingOffset, KafkaJsonOffset endingOffset) {
         return new StreamSplit(
                 StreamSplit.STREAM_SPLIT_ID,
                 startingOffset,
@@ -435,7 +452,8 @@ class KafkaJsonStreamFetchTaskTest {
      * split, the backfill keeps inclusive bounds — it must emit the boundary message whose event
      * time equals the ending offset — so the stream-split exclusive lower bound must not apply.
      */
-    private static StreamSplit backfillSplit(KafkaJsonOffset startingOffset, KafkaJsonOffset endingOffset) {
+    private static StreamSplit backfillSplit(
+            KafkaJsonOffset startingOffset, KafkaJsonOffset endingOffset) {
         return new StreamSplit(
                 "snapshot-split-0",
                 startingOffset,
@@ -445,7 +463,9 @@ class KafkaJsonStreamFetchTaskTest {
                 0);
     }
 
-    /** Builds a stream split carrying finished snapshot split infos and the split's table schemas. */
+    /**
+     * Builds a stream split carrying finished snapshot split infos and the split's table schemas.
+     */
     private static StreamSplit streamSplitWithFinishedSplits(
             KafkaJsonOffset startingOffset,
             KafkaJsonOffset endingOffset,
@@ -460,7 +480,9 @@ class KafkaJsonStreamFetchTaskTest {
                 finishedSplits.size());
     }
 
-    /** Builds a finished snapshot split info: the pk range and the high watermark of its backfill. */
+    /**
+     * Builds a finished snapshot split info: the pk range and the high watermark of its backfill.
+     */
     private static FinishedSnapshotSplitInfo finishedSplit(
             TableId tableId,
             String splitId,
@@ -468,7 +490,12 @@ class KafkaJsonStreamFetchTaskTest {
             Object[] splitEnd,
             KafkaJsonOffset highWatermark) {
         return new FinishedSnapshotSplitInfo(
-                tableId, splitId, splitStart, splitEnd, highWatermark, new KafkaJsonOffsetFactory());
+                tableId,
+                splitId,
+                splitStart,
+                splitEnd,
+                highWatermark,
+                new KafkaJsonOffsetFactory());
     }
 
     private static Table table() {
@@ -519,7 +546,9 @@ class KafkaJsonStreamFetchTaskTest {
         return new FakeKafkaConsumer(log, null);
     }
 
-    /** Builds an INSERT record whose canal event time (inside the JSON) equals its Kafka timestamp. */
+    /**
+     * Builds an INSERT record whose canal event time (inside the JSON) equals its Kafka timestamp.
+     */
     private static ConsumerRecord<String, String> insertRecord(
             String id, String name, long eventTime, TopicPartition partition, long offset) {
         return insertRecord(id, name, eventTime, eventTime, partition, offset);
@@ -559,7 +588,8 @@ class KafkaJsonStreamFetchTaskTest {
                 json);
     }
 
-    private static void runQuietly(KafkaJsonStreamFetchTask task, KafkaJsonSourceFetchTaskContext context) {
+    private static void runQuietly(
+            KafkaJsonStreamFetchTask task, KafkaJsonSourceFetchTaskContext context) {
         try {
             task.execute(context);
         } catch (Exception e) {

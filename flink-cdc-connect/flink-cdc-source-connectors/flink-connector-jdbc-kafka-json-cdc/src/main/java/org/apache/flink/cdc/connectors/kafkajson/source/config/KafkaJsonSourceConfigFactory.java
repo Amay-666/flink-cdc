@@ -43,20 +43,27 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
     private String kafkaGroupId;
     private List<String> kafkaTopics;
     private KafkaJsonSourceOptions.MessageFormat messageFormat =
-            enumDefault(KafkaJsonSourceOptions.MESSAGE_FORMAT, KafkaJsonSourceOptions.MessageFormat.class);
+            enumDefault(
+                    KafkaJsonSourceOptions.MESSAGE_FORMAT,
+                    KafkaJsonSourceOptions.MessageFormat.class);
     private KafkaJsonSourceOptions.DatabaseType databaseType =
             enumDefault(
-                    KafkaJsonSourceOptions.DATABASE_TYPE, KafkaJsonSourceOptions.DatabaseType.class);
+                    KafkaJsonSourceOptions.DATABASE_TYPE,
+                    KafkaJsonSourceOptions.DatabaseType.class);
     private KafkaJsonSourceOptions.EventTime eventTime =
             enumDefault(KafkaJsonSourceOptions.EVENT_TIME, KafkaJsonSourceOptions.EventTime.class);
     private KafkaJsonSourceOptions.BoundaryMode boundaryMode =
-            enumDefault(KafkaJsonSourceOptions.BOUNDARY_MODE, KafkaJsonSourceOptions.BoundaryMode.class);
+            enumDefault(
+                    KafkaJsonSourceOptions.BOUNDARY_MODE,
+                    KafkaJsonSourceOptions.BoundaryMode.class);
     private KafkaJsonSourceOptions.KafkaStartupMode kafkaStartupMode =
             enumDefault(
                     KafkaJsonSourceOptions.KAFKA_STARTUP_MODE,
                     KafkaJsonSourceOptions.KafkaStartupMode.class);
     private KafkaJsonSourceOptions.DdlParser ddlParser =
-            enumDefault(KafkaJsonSourceOptions.CANAL_DDL_PARSER, KafkaJsonSourceOptions.DdlParser.class);
+            enumDefault(
+                    KafkaJsonSourceOptions.CANAL_DDL_PARSER,
+                    KafkaJsonSourceOptions.DdlParser.class);
     private Properties kafkaProperties = new Properties();
 
     /**
@@ -66,10 +73,7 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
     private static <T extends Enum<T>> T enumDefault(
             ConfigOption<String> option, Class<T> enumType) {
         return Arrays.stream(enumType.getEnumConstants())
-                .filter(
-                        c ->
-                                c.toString()
-                                        .equalsIgnoreCase(option.defaultValue().replace('-', '_')))
+                .filter(c -> c.toString().equalsIgnoreCase(option.defaultValue().replace('-', '_')))
                 .findFirst()
                 .orElseThrow(
                         () ->
@@ -184,7 +188,8 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
     }
 
     /** The message format of the Kafka messages. */
-    public KafkaJsonSourceConfigFactory messageFormat(KafkaJsonSourceOptions.MessageFormat messageFormat) {
+    public KafkaJsonSourceConfigFactory messageFormat(
+            KafkaJsonSourceOptions.MessageFormat messageFormat) {
         this.messageFormat = messageFormat;
         return this;
     }
@@ -203,7 +208,8 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
     }
 
     /** The boundary handling mode of the full->incremental switch. */
-    public KafkaJsonSourceConfigFactory boundaryMode(KafkaJsonSourceOptions.BoundaryMode boundaryMode) {
+    public KafkaJsonSourceConfigFactory boundaryMode(
+            KafkaJsonSourceOptions.BoundaryMode boundaryMode) {
         this.boundaryMode = boundaryMode;
         return this;
     }
@@ -279,12 +285,14 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
 
     @Override
     public KafkaJsonSourceConfigFactory distributionFactorUpper(double distributionFactorUpper) {
-        return (KafkaJsonSourceConfigFactory) super.distributionFactorUpper(distributionFactorUpper);
+        return (KafkaJsonSourceConfigFactory)
+                super.distributionFactorUpper(distributionFactorUpper);
     }
 
     @Override
     public KafkaJsonSourceConfigFactory distributionFactorLower(double distributionFactorLower) {
-        return (KafkaJsonSourceConfigFactory) super.distributionFactorLower(distributionFactorLower);
+        return (KafkaJsonSourceConfigFactory)
+                super.distributionFactorLower(distributionFactorLower);
     }
 
     @Override
@@ -338,7 +346,8 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
     }
 
     @Override
-    public KafkaJsonSourceConfigFactory scanNewlyAddedTableEnabled(boolean scanNewlyAddedTableEnabled) {
+    public KafkaJsonSourceConfigFactory scanNewlyAddedTableEnabled(
+            boolean scanNewlyAddedTableEnabled) {
         return (KafkaJsonSourceConfigFactory)
                 super.scanNewlyAddedTableEnabled(scanNewlyAddedTableEnabled);
     }

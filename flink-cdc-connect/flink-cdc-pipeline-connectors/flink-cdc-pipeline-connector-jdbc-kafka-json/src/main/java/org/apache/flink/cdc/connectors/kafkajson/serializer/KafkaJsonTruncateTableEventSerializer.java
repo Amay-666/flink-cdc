@@ -35,11 +35,12 @@ import java.io.IOException;
 /**
  * A {@link TypeSerializer} for {@link TruncateTableEvent}.
  *
- * <p>Not part of the released flink-cdc-runtime serialization stack: it serializes the table id, the
- * schema of the truncated table and the raw DDL, and is wired in only via the canal connector's own
- * {@link KafkaJsonEventSerializer} / {@link KafkaJsonSchemaChangeEventSerializer}.
+ * <p>Not part of the released flink-cdc-runtime serialization stack: it serializes the table id,
+ * the schema of the truncated table and the raw DDL, and is wired in only via the canal connector's
+ * own {@link KafkaJsonEventSerializer} / {@link KafkaJsonSchemaChangeEventSerializer}.
  */
-public class KafkaJsonTruncateTableEventSerializer extends TypeSerializerSingleton<TruncateTableEvent> {
+public class KafkaJsonTruncateTableEventSerializer
+        extends TypeSerializerSingleton<TruncateTableEvent> {
 
     private static final long serialVersionUID = 1L;
 
@@ -58,8 +59,7 @@ public class KafkaJsonTruncateTableEventSerializer extends TypeSerializerSinglet
 
     @Override
     public TruncateTableEvent createInstance() {
-        return new TruncateTableEvent(
-                TableId.tableId("unknown"), Schema.newBuilder().build());
+        return new TruncateTableEvent(TableId.tableId("unknown"), Schema.newBuilder().build());
     }
 
     @Override

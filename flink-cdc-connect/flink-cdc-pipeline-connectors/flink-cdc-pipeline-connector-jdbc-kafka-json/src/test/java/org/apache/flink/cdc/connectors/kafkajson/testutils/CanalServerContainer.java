@@ -29,8 +29,8 @@ import java.time.Duration;
  * A {@code canal/canal-server:v1.1.8} container that tails the binlog of the MySQL container and
  * writes canal flatMessage JSON to a Kafka topic.
  *
- * <p>The image's entrypoint script rewrites {@code canal.*} environment variables into
- * {@code canal.properties} and {@code instance.properties}, so the whole configuration is expressed
+ * <p>The image's entrypoint script rewrites {@code canal.*} environment variables into {@code
+ * canal.properties} and {@code instance.properties}, so the whole configuration is expressed
  * through environment variables. The container joins the test network as {@code canal} and reaches
  * MySQL as {@code mysql:3306} and Kafka as {@code kafka:9092} via docker network aliases.
  *

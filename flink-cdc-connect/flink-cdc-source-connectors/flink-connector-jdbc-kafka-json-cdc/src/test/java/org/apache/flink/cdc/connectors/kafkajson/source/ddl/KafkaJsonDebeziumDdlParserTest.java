@@ -64,7 +64,10 @@ class KafkaJsonDebeziumDdlParserTest {
     void testParseAlterAddColumn() {
         KafkaJsonDdlParsedResult result =
                 parser.parse(
-                        "test", TABLE_ID, baseTable(), "ALTER TABLE `test`.`users` ADD COLUMN `age` INT");
+                        "test",
+                        TABLE_ID,
+                        baseTable(),
+                        "ALTER TABLE `test`.`users` ADD COLUMN `age` INT");
 
         assertEquals(KafkaJsonTableChangeType.ALTER, result.getType());
         Table table = result.getNewTable();
@@ -86,8 +89,7 @@ class KafkaJsonDebeziumDdlParserTest {
     @Test
     void testParseRenameTable() {
         KafkaJsonDdlParsedResult result =
-                parser.parse(
-                        "test", TABLE_ID, baseTable(), "RENAME TABLE `users` TO `vip_users`");
+                parser.parse("test", TABLE_ID, baseTable(), "RENAME TABLE `users` TO `vip_users`");
 
         assertEquals(KafkaJsonTableChangeType.RENAME_TABLE, result.getType());
         assertEquals(TABLE_ID, result.getTableId());
@@ -98,8 +100,7 @@ class KafkaJsonDebeziumDdlParserTest {
     @Test
     void testParseTruncateTable() {
         KafkaJsonDdlParsedResult result =
-                parser.parse(
-                        "test", TABLE_ID, baseTable(), "TRUNCATE TABLE `test`.`users`");
+                parser.parse("test", TABLE_ID, baseTable(), "TRUNCATE TABLE `test`.`users`");
 
         assertEquals(KafkaJsonTableChangeType.TRUNCATE, result.getType());
         assertEquals(TABLE_ID, result.getTableId());

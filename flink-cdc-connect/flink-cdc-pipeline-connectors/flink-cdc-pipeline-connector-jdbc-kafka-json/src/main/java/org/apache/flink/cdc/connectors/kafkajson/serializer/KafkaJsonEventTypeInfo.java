@@ -23,13 +23,13 @@ import org.apache.flink.cdc.common.event.Event;
 import org.apache.flink.cdc.runtime.typeutils.EventTypeInfo;
 
 /**
- * A {@link EventTypeInfo} that creates {@link KafkaJsonEventSerializer} instead of the released {@code
- * EventSerializer}, so that a {@link org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent}
- * can be (de)serialized.
+ * A {@link EventTypeInfo} that creates {@link KafkaJsonEventSerializer} instead of the released
+ * {@code EventSerializer}, so that a {@link
+ * org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent} can be (de)serialized.
  *
- * <p>The canal source produces this type via {@code KafkaJsonEventDeserializer.getProducedType()}; in a
- * job that uses the connector's own serialization stack end to end, the whole stream carries this
- * type information and no released serializer is ever asked to see the new event.
+ * <p>The canal source produces this type via {@code KafkaJsonEventDeserializer.getProducedType()};
+ * in a job that uses the connector's own serialization stack end to end, the whole stream carries
+ * this type information and no released serializer is ever asked to see the new event.
  *
  * <p>{@code equals}/{@code hashCode} are overridden to keep them mutually consistent (the released
  * {@code EventTypeInfo} treats every subclass as equal but hashes by concrete class, which would

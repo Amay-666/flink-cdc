@@ -69,7 +69,10 @@ class KafkaJsonDruidDdlParserTest {
     void testParseAlterAddColumn() {
         KafkaJsonDdlParsedResult result =
                 parser.parse(
-                        "test", TABLE_ID, baseTable(), "ALTER TABLE `test`.`users` ADD COLUMN `age` int");
+                        "test",
+                        TABLE_ID,
+                        baseTable(),
+                        "ALTER TABLE `test`.`users` ADD COLUMN `age` int");
 
         assertEquals(KafkaJsonTableChangeType.ALTER, result.getType());
         Table table = result.getNewTable();
@@ -84,7 +87,10 @@ class KafkaJsonDruidDdlParserTest {
     void testParseAlterDropColumn() {
         KafkaJsonDdlParsedResult result =
                 parser.parse(
-                        "test", TABLE_ID, baseTable(), "ALTER TABLE `test`.`users` DROP COLUMN `name`");
+                        "test",
+                        TABLE_ID,
+                        baseTable(),
+                        "ALTER TABLE `test`.`users` DROP COLUMN `name`");
 
         assertEquals(KafkaJsonTableChangeType.ALTER, result.getType());
         Table table = result.getNewTable();
@@ -157,8 +163,7 @@ class KafkaJsonDruidDdlParserTest {
     @Test
     void testParseTruncateTable() {
         KafkaJsonDdlParsedResult result =
-                parser.parse(
-                        "test", TABLE_ID, baseTable(), "TRUNCATE TABLE `test`.`users`");
+                parser.parse("test", TABLE_ID, baseTable(), "TRUNCATE TABLE `test`.`users`");
 
         assertEquals(KafkaJsonTableChangeType.TRUNCATE, result.getType());
         assertEquals(TABLE_ID, result.getTableId());

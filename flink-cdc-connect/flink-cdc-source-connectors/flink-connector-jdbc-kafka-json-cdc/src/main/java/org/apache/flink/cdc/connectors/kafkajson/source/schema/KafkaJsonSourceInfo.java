@@ -27,9 +27,9 @@ import java.time.Instant;
  * The connector-specific source info of the Canal source: the {@code source} struct of the emitted
  * records.
  *
- * <p>Besides the common fields ({@code version}/{@code connector}/{@code name}/{@code
- * ts_ms}/{@code snapshot}/{@code db}) it carries the canal execution time ({@code es}) and send
- * time ({@code ts}).
+ * <p>Besides the common fields ({@code version}/{@code connector}/{@code name}/{@code ts_ms}/{@code
+ * snapshot}/{@code db}) it carries the canal execution time ({@code es}) and send time ({@code
+ * ts}).
  *
  * <p>Note: this class intentionally does <em>not</em> override {@link #struct()} — the struct is
  * always rendered through {@link KafkaJsonSourceInfoStructMaker} so that the data records and the
@@ -45,6 +45,7 @@ public class KafkaJsonSourceInfo extends AbstractSourceInfo {
     private final long executeTime;
     /** The time canal sent the message (millis). */
     private final long sendTime;
+
     private final SnapshotRecord snapshot;
 
     public KafkaJsonSourceInfo(

@@ -45,12 +45,12 @@ import java.io.IOException;
  * A {@link TypeSerializer} for {@link SchemaChangeEvent} that additionally handles {@link
  * RenameTableEvent} and {@link TruncateTableEvent}.
  *
- * <p>This is the canal-connector-local copy of the released {@code SchemaChangeEventSerializer}, with
- * the discriminator replaced by the connector's own {@link KafkaJsonSchemaChangeTag} so that a {@link
- * RenameTableEvent} or {@link TruncateTableEvent} — which the released {@code SchemaChangeEventType}
- * enum has no values for — can be serialized alongside the five released event types. The five known
- * events reuse the released per-event serializers and their byte formats; only the {@code RENAME_TABLE}
- * and {@code TRUNCATE_TABLE} tags are new.
+ * <p>This is the canal-connector-local copy of the released {@code SchemaChangeEventSerializer},
+ * with the discriminator replaced by the connector's own {@link KafkaJsonSchemaChangeTag} so that a
+ * {@link RenameTableEvent} or {@link TruncateTableEvent} — which the released {@code
+ * SchemaChangeEventType} enum has no values for — can be serialized alongside the five released
+ * event types. The five known events reuse the released per-event serializers and their byte
+ * formats; only the {@code RENAME_TABLE} and {@code TRUNCATE_TABLE} tags are new.
  */
 public final class KafkaJsonSchemaChangeEventSerializer
         extends TypeSerializerSingleton<SchemaChangeEvent> {
@@ -165,8 +165,7 @@ public final class KafkaJsonSchemaChangeEventSerializer
             case TRUNCATE_TABLE:
                 return KafkaJsonTruncateTableEventSerializer.INSTANCE.deserialize(source);
             default:
-                throw new IllegalArgumentException(
-                        "Unknown schema change event class: " + tag);
+                throw new IllegalArgumentException("Unknown schema change event class: " + tag);
         }
     }
 
@@ -186,9 +185,7 @@ public final class KafkaJsonSchemaChangeEventSerializer
         return new KafkaJsonSchemaChangeEventSerializerSnapshot();
     }
 
-    /**
-     * Serializer configuration snapshot for compatibility and format evolution.
-     */
+    /** Serializer configuration snapshot for compatibility and format evolution. */
     @SuppressWarnings("WeakerAccess")
     public static final class KafkaJsonSchemaChangeEventSerializerSnapshot
             extends SimpleTypeSerializerSnapshot<SchemaChangeEvent> {
@@ -198,9 +195,7 @@ public final class KafkaJsonSchemaChangeEventSerializer
         }
     }
 
-    /**
-     * The per-event discriminator written before each serialized schema change.
-     */
+    /** The per-event discriminator written before each serialized schema change. */
     enum KafkaJsonSchemaChangeTag {
         ADD_COLUMN,
         DROP_COLUMN,

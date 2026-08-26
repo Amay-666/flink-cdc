@@ -98,7 +98,8 @@ public class KafkaJsonDialect implements JdbcDataSourceDialect {
         KafkaJsonSourceConfig canalSourceConfig = (KafkaJsonSourceConfig) sourceConfig;
         MySqlConnectorConfig dbzConfig = canalSourceConfig.getDbzConnectorConfig();
         // MySQL identifiers are quoted with backticks. The KafkaJsonJdbcConnection drops the column
-        // default value that the MySQL driver reports as a literal (e.g. `0x` for a BINARY default);
+        // default value that the MySQL driver reports as a literal (e.g. `0x` for a BINARY
+        // default);
         // feeding it into Debezium's TableSchemaBuilder fails the snapshot schema read.
         return new KafkaJsonJdbcConnection(
                 dbzConfig.getJdbcConfig(),
@@ -113,9 +114,12 @@ public class KafkaJsonDialect implements JdbcDataSourceDialect {
             return currentOffsetSupplier.get();
         }
         KafkaJsonSourceConfig canalSourceConfig = (KafkaJsonSourceConfig) sourceConfig;
-        // For TiDB the boundary is queried from the database instead of Kafka: the current TSO is an
-        // authoritative commit-clock value (an upper bound on the `es` of every change already visible
-        // to the JDBC read), whereas the Kafka-sampled boundary trails the database by the publish lag
+        // For TiDB the boundary is queried from the database instead of Kafka: the current TSO is
+        // an
+        // authoritative commit-clock value (an upper bound on the `es` of every change already
+        // visible
+        // to the JDBC read), whereas the Kafka-sampled boundary trails the database by the publish
+        // lag
         // and is empty before the first change is published. TSO is only a valid boundary for
         // `es` (commit time); with `ts` the boundary stays on the Kafka-sampled value.
         if (canalSourceConfig.getDatabaseType() == DatabaseType.TIDB
@@ -160,9 +164,7 @@ public class KafkaJsonDialect implements JdbcDataSourceDialect {
     public List<TableId> discoverDataCollections(JdbcSourceConfig sourceConfig) {
         try (JdbcConnection jdbc = openJdbcConnection(sourceConfig)) {
             return KafkaJsonTableDiscoveryUtils.listTables(
-                    sourceConfig.getDatabaseList().get(0),
-                    jdbc,
-                    sourceConfig.getTableFilters());
+                    sourceConfig.getDatabaseList().get(0), jdbc, sourceConfig.getTableFilters());
         } catch (SQLException e) {
             throw new FlinkRuntimeException("Error to discover tables: " + e.getMessage(), e);
         }

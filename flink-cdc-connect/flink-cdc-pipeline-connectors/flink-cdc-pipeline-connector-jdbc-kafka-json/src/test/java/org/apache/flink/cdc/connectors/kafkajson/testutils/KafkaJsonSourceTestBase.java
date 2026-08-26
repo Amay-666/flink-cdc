@@ -79,11 +79,12 @@ public abstract class KafkaJsonSourceTestBase extends TestLogger {
 
     /**
      * Credentials of the {@code mysqluser} account created by {@code docker/setup.sql} (all
-     * privileges), mirroring {@code MySqlPipelineITCase}. The container's root account is
-     * {@code flinkuser}/{@code flinkpw}; the source and {@code UniqueDatabase} connect as
-     * {@code mysqluser}, and canal-server tails the binlog as {@code flinkuser}.
+     * privileges), mirroring {@code MySqlPipelineITCase}. The container's root account is {@code
+     * flinkuser}/{@code flinkpw}; the source and {@code UniqueDatabase} connect as {@code
+     * mysqluser}, and canal-server tails the binlog as {@code flinkuser}.
      */
     public static final String TEST_USER = "mysqluser";
+
     public static final String TEST_PASSWORD = "mysqlpw";
 
     /** Shared docker network; containers reach each other via network aliases. */
@@ -109,9 +110,9 @@ public abstract class KafkaJsonSourceTestBase extends TestLogger {
     }
 
     /**
-     * Creates a MySQL container with the binlog/replication setup required by the snapshot reader and
-     * canal. Returned as {@link KafkaJsonMySqlContainer} so callers can pin a fixed host port (see
-     * {@link KafkaJsonMySqlContainer#withFixedExposedPort}).
+     * Creates a MySQL container with the binlog/replication setup required by the snapshot reader
+     * and canal. Returned as {@link KafkaJsonMySqlContainer} so callers can pin a fixed host port
+     * (see {@link KafkaJsonMySqlContainer#withFixedExposedPort}).
      */
     protected static KafkaJsonMySqlContainer createMySqlContainer(MySqlVersion version) {
         // withConfigurationOverride/withSetupSQL/withDatabaseName/... are declared on the released
@@ -132,8 +133,8 @@ public abstract class KafkaJsonSourceTestBase extends TestLogger {
     /**
      * Builds a {@link KafkaJsonSourceConfigFactory} pointed at the given database server, with the
      * options the integration tests rely on (initial snapshot, exactly-once boundary, canal message
-     * format). {@code tablePattern} is a regex matched against {@code database.table}; pass
-     * e.g. {@code "customers"} for a single table.
+     * format). {@code tablePattern} is a regex matched against {@code database.table}; pass e.g.
+     * {@code "customers"} for a single table.
      */
     protected static KafkaJsonSourceConfigFactory buildConfigFactory(
             String hostname,
@@ -156,7 +157,9 @@ public abstract class KafkaJsonSourceTestBase extends TestLogger {
                 KafkaJsonSourceOptions.DatabaseType.MYSQL);
     }
 
-    /** Variant of {@link #buildConfigFactory} with an explicit database type (e.g. {@code tidb}). */
+    /**
+     * Variant of {@link #buildConfigFactory} with an explicit database type (e.g. {@code tidb}).
+     */
     protected static KafkaJsonSourceConfigFactory buildConfigFactory(
             String hostname,
             int port,
@@ -189,9 +192,9 @@ public abstract class KafkaJsonSourceTestBase extends TestLogger {
     }
 
     /**
-     * Starts the source over the given config factory on the given environment and returns the event
-     * iterator. The environment must have been created with the desired parallelism, checkpointing
-     * and restart strategy before calling this method.
+     * Starts the source over the given config factory on the given environment and returns the
+     * event iterator. The environment must have been created with the desired parallelism,
+     * checkpointing and restart strategy before calling this method.
      */
     protected static CloseableIterator<Event> runSource(
             KafkaJsonSourceConfigFactory configFactory, StreamExecutionEnvironment env)
@@ -246,12 +249,7 @@ public abstract class KafkaJsonSourceTestBase extends TestLogger {
     }
 
     private static String updateMessage(
-            String db,
-            String id,
-            String name,
-            String address,
-            String oldAddress,
-            long eventTime) {
+            String db, String id, String name, String address, String oldAddress, long eventTime) {
         return String.format(
                 "{\"data\":[{\"id\":\"%s\",\"name\":\"%s\",\"address\":\"%s\"}],"
                         + "\"database\":\"%s\",\"es\":%d,\"id\":2,\"isDdl\":false,"
@@ -262,7 +260,8 @@ public abstract class KafkaJsonSourceTestBase extends TestLogger {
                 id, name, address, db, eventTime, oldAddress, eventTime);
     }
 
-    private static String deleteMessage(String db, String id, String name, String address, long eventTime) {
+    private static String deleteMessage(
+            String db, String id, String name, String address, long eventTime) {
         return String.format(
                 "{\"data\":[{\"id\":\"%s\",\"name\":\"%s\",\"address\":\"%s\"}],"
                         + "\"database\":\"%s\",\"es\":%d,\"id\":3,\"isDdl\":false,"
@@ -275,9 +274,9 @@ public abstract class KafkaJsonSourceTestBase extends TestLogger {
 
     /**
      * Collects {@code size} non-{@link CreateTableEvent} events from the iterator, appending any
-     * CreateTableEvent seen along the way to {@code createTableSink}. The caller can then assert the
-     * sink is non-empty, since the connector does not guarantee how many CreateTableEvents a table
-     * produces.
+     * CreateTableEvent seen along the way to {@code createTableSink}. The caller can then assert
+     * the sink is non-empty, since the connector does not guarantee how many CreateTableEvents a
+     * table produces.
      */
     protected static List<Event> fetchDataEvents(
             Iterator<Event> iter, int size, List<CreateTableEvent> createTableSink) {

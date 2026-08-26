@@ -65,8 +65,7 @@ class KafkaJsonDialectTest {
         KafkaJsonSourceConfig config = config(DatabaseType.MYSQL, EventTime.ES);
         KafkaJsonDialect dialect = new KafkaJsonDialect(config);
         // openJdbcConnection only constructs the lazy connection; no socket is opened here.
-        assertThat(dialect.openJdbcConnection(config))
-                .isInstanceOf(KafkaJsonJdbcConnection.class);
+        assertThat(dialect.openJdbcConnection(config)).isInstanceOf(KafkaJsonJdbcConnection.class);
     }
 
     @Test

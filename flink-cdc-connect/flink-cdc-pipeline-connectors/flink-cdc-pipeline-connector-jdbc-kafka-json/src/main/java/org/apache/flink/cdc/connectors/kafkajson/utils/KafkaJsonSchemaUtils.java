@@ -108,8 +108,7 @@ public class KafkaJsonSchemaUtils {
         return databaseNames;
     }
 
-    public static List<TableId> listTables(JdbcConnection jdbc, String dbName)
-            throws SQLException {
+    public static List<TableId> listTables(JdbcConnection jdbc, String dbName) throws SQLException {
         // ----------------
         // READ TABLE NAMES
         // ----------------

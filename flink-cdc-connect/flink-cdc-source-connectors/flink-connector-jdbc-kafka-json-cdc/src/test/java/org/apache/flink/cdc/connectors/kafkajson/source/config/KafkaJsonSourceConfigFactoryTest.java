@@ -58,7 +58,8 @@ class KafkaJsonSourceConfigFactoryTest {
         assertEquals(KafkaJsonSourceOptions.DatabaseType.MYSQL, config.getDatabaseType());
         assertEquals(KafkaJsonSourceOptions.EventTime.ES, config.getEventTime());
         assertEquals(KafkaJsonSourceOptions.BoundaryMode.EXACTLY_ONCE, config.getBoundaryMode());
-        assertEquals(KafkaJsonSourceOptions.KafkaStartupMode.EARLIEST, config.getKafkaStartupMode());
+        assertEquals(
+                KafkaJsonSourceOptions.KafkaStartupMode.EARLIEST, config.getKafkaStartupMode());
         assertEquals(KafkaJsonSourceOptions.DdlParser.DRUID, config.getDdlParser());
         assertEquals("com.mysql.cj.jdbc.Driver", config.getDriverClassName());
     }
@@ -98,7 +99,8 @@ class KafkaJsonSourceConfigFactoryTest {
                         IllegalArgumentException.class,
                         () ->
                                 buildFactory()
-                                        .messageFormat(KafkaJsonSourceOptions.MessageFormat.DEBEZIUM)
+                                        .messageFormat(
+                                                KafkaJsonSourceOptions.MessageFormat.DEBEZIUM)
                                         .create(0));
         assertEquals(true, e.getMessage().contains("scan.message.format"));
         assertEquals(true, e.getMessage().contains("not implemented"));
@@ -150,10 +152,6 @@ class KafkaJsonSourceConfigFactoryTest {
     void testMissingRequiredHostnameThrows() {
         assertThrows(
                 NullPointerException.class,
-                () ->
-                        new KafkaJsonSourceConfigFactory()
-                                .username("u")
-                                .password("p")
-                                .create(0));
+                () -> new KafkaJsonSourceConfigFactory().username("u").password("p").create(0));
     }
 }

@@ -127,7 +127,8 @@ public class KafkaJsonPipelineRecordEmitter extends IncrementalSourceRecordEmitt
                 createTableEventCache.add(
                         new CreateTableEvent(
                                 commonTableId,
-                                KafkaJsonSchemaUtils.getTableSchema(jdbc, sourceConfig, commonTableId)));
+                                KafkaJsonSchemaUtils.getTableSchema(
+                                        jdbc, sourceConfig, commonTableId)));
             }
             return createTableEventCache;
         } catch (SQLException e) {

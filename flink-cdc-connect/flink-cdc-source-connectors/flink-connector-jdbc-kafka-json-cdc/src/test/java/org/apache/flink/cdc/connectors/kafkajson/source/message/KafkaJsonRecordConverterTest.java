@@ -276,8 +276,14 @@ class KafkaJsonRecordConverterTest {
                         + ",\"old\":null,\"pkNames\":[\"id\"],"
                         + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
                         + "\"ts\":1598752887000,\"type\":\"INSERT\"}";
-        SourceRecord first = converter.convert(KafkaJsonFlatMessageParser.parse(insert), "test.users", 0, 0L).get(0);
-        SourceRecord second = converter.convert(KafkaJsonFlatMessageParser.parse(insert), "test.users", 1, 1L).get(0);
+        SourceRecord first =
+                converter
+                        .convert(KafkaJsonFlatMessageParser.parse(insert), "test.users", 0, 0L)
+                        .get(0);
+        SourceRecord second =
+                converter
+                        .convert(KafkaJsonFlatMessageParser.parse(insert), "test.users", 1, 1L)
+                        .get(0);
         // the TableSchema (and hence the value schema) is registered once and reused
         assertEquals(first.valueSchema(), second.valueSchema());
         assertEquals(Integer.valueOf(1), second.kafkaPartition());

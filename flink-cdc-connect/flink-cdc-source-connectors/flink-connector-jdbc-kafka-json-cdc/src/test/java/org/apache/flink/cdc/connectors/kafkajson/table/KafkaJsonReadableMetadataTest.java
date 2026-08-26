@@ -41,7 +41,8 @@ class KafkaJsonReadableMetadataTest {
         SourceRecord record = createRecord();
 
         MetadataConverter tableNameConverter = KafkaJsonReadableMetadata.TABLE_NAME.getConverter();
-        MetadataConverter databaseNameConverter = KafkaJsonReadableMetadata.DATABASE_NAME.getConverter();
+        MetadataConverter databaseNameConverter =
+                KafkaJsonReadableMetadata.DATABASE_NAME.getConverter();
 
         assertEquals(StringData.fromString("users"), tableNameConverter.read(record));
         assertEquals(StringData.fromString("test"), databaseNameConverter.read(record));
@@ -90,14 +91,11 @@ class KafkaJsonReadableMetadataTest {
                         .put("es", 900L)
                         .put("ts", 1100L);
 
-        Schema valueSchema = SchemaBuilder.struct().field(Envelope.FieldName.SOURCE, sourceSchema).build();
+        Schema valueSchema =
+                SchemaBuilder.struct().field(Envelope.FieldName.SOURCE, sourceSchema).build();
         Struct value = new Struct(valueSchema).put(Envelope.FieldName.SOURCE, source);
 
         return new SourceRecord(
-                Collections.emptyMap(),
-                Collections.emptyMap(),
-                "canal_data",
-                valueSchema,
-                value);
+                Collections.emptyMap(), Collections.emptyMap(), "canal_data", valueSchema, value);
     }
 }

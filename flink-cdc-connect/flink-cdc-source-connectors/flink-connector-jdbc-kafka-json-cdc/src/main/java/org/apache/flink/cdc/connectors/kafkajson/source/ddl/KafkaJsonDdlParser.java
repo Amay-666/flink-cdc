@@ -26,8 +26,8 @@ import javax.annotation.Nullable;
  * Parses the {@code sql} of one canal DDL message into a {@link KafkaJsonDdlParsedResult}.
  *
  * <p>Two implementations are selectable via {@code scan.ddl.parser}: {@link
- * KafkaJsonDruidDdlParser} (Alibaba Druid, the default) and {@link KafkaJsonDebeziumDdlParser} (Debezium's
- * MySQL ANTLR parser).
+ * KafkaJsonDruidDdlParser} (Alibaba Druid, the default) and {@link KafkaJsonDebeziumDdlParser}
+ * (Debezium's MySQL ANTLR parser).
  */
 public interface KafkaJsonDdlParser {
 

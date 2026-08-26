@@ -26,8 +26,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Supplies the current position of the change-log stream, the {@link KafkaJsonOffset} that the snapshot
- * phase uses as the low/high watermark.
+ * Supplies the current position of the change-log stream, the {@link KafkaJsonOffset} that the
+ * snapshot phase uses as the low/high watermark.
  *
  * <p>The position is the maximum canal event time ({@code es}/{@code ts}) of the newest message in
  * each Kafka partition, stamped onto the sentinel partition/offset (see {@link
@@ -49,19 +49,21 @@ public class KafkaJsonOffsetSupplier implements AutoCloseable {
 
     public KafkaJsonOffsetSupplier(KafkaJsonSourceConfig sourceConfig) {
         this.sourceConfig = sourceConfig;
-        this.consumer = new KafkaConsumer<>(KafkaJsonKafkaOffsetUtils.buildConsumerProps(sourceConfig));
+        this.consumer =
+                new KafkaConsumer<>(KafkaJsonKafkaOffsetUtils.buildConsumerProps(sourceConfig));
     }
 
     /** Constructor with an externally provided consumer (used in unit tests). */
     @VisibleForTesting
-    KafkaJsonOffsetSupplier(KafkaJsonSourceConfig sourceConfig, KafkaConsumer<String, String> consumer) {
+    KafkaJsonOffsetSupplier(
+            KafkaJsonSourceConfig sourceConfig, KafkaConsumer<String, String> consumer) {
         this.sourceConfig = sourceConfig;
         this.consumer = consumer;
     }
 
     /**
-     * Returns the current position of the change-log stream; {@link KafkaJsonOffset#INITIAL_OFFSET} if
-     * no message is available yet.
+     * Returns the current position of the change-log stream; {@link KafkaJsonOffset#INITIAL_OFFSET}
+     * if no message is available yet.
      */
     public KafkaJsonOffset current() {
         return KafkaJsonKafkaOffsetUtils.queryCurrentOffset(

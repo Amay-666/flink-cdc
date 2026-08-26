@@ -40,14 +40,16 @@ class KafkaJsonTypeUtilsTest {
         assertEquals("INT", KafkaJsonTypeUtils.fromDbzColumn(column("INTEGER", 11)).toString());
         assertEquals("INT", KafkaJsonTypeUtils.fromDbzColumn(column("MEDIUMINT", 9)).toString());
         assertEquals("BIGINT", KafkaJsonTypeUtils.fromDbzColumn(column("BIGINT", 20)).toString());
-        assertEquals("SMALLINT", KafkaJsonTypeUtils.fromDbzColumn(column("SMALLINT", 6)).toString());
+        assertEquals(
+                "SMALLINT", KafkaJsonTypeUtils.fromDbzColumn(column("SMALLINT", 6)).toString());
         assertEquals("TINYINT", KafkaJsonTypeUtils.fromDbzColumn(column("TINYINT", 4)).toString());
     }
 
     @Test
     void testUnsignedWidening() {
         // unsigned int needs one more byte, widen to BIGINT
-        assertEquals("BIGINT", KafkaJsonTypeUtils.fromDbzColumn(column("INT UNSIGNED", 11)).toString());
+        assertEquals(
+                "BIGINT", KafkaJsonTypeUtils.fromDbzColumn(column("INT UNSIGNED", 11)).toString());
         // unsigned bigint may not fit in a signed BIGINT, widen to DECIMAL(20,0)
         assertEquals(
                 "DECIMAL(20, 0)",
@@ -75,11 +77,15 @@ class KafkaJsonTypeUtilsTest {
     @Test
     void testStringTypes() {
         assertEquals(
-                "VARCHAR(255)", KafkaJsonTypeUtils.fromDbzColumn(column("VARCHAR", 255)).toString());
+                "VARCHAR(255)",
+                KafkaJsonTypeUtils.fromDbzColumn(column("VARCHAR", 255)).toString());
         assertEquals("CHAR(10)", KafkaJsonTypeUtils.fromDbzColumn(column("CHAR", 10)).toString());
         assertEquals("STRING", KafkaJsonTypeUtils.fromDbzColumn(column("TEXT", 65535)).toString());
-        assertEquals("STRING", KafkaJsonTypeUtils.fromDbzColumn(column("LONGTEXT", 2147483647)).toString());
-        assertEquals("STRING", KafkaJsonTypeUtils.fromDbzColumn(column("JSON", 2147483647)).toString());
+        assertEquals(
+                "STRING",
+                KafkaJsonTypeUtils.fromDbzColumn(column("LONGTEXT", 2147483647)).toString());
+        assertEquals(
+                "STRING", KafkaJsonTypeUtils.fromDbzColumn(column("JSON", 2147483647)).toString());
     }
 
     @Test
@@ -99,11 +105,14 @@ class KafkaJsonTypeUtilsTest {
         // 23, DATETIME -> 19, TIMESTAMP(3) -> 23, TIME(6) -> 15); the fractional-seconds precision
         // is recovered from it, so the mapping is exact rather than a blanket clamp to 6.
         assertEquals(
-                "TIMESTAMP(6)", KafkaJsonTypeUtils.fromDbzColumn(column("DATETIME", 26)).toString());
+                "TIMESTAMP(6)",
+                KafkaJsonTypeUtils.fromDbzColumn(column("DATETIME", 26)).toString());
         assertEquals(
-                "TIMESTAMP(3)", KafkaJsonTypeUtils.fromDbzColumn(column("DATETIME", 23)).toString());
+                "TIMESTAMP(3)",
+                KafkaJsonTypeUtils.fromDbzColumn(column("DATETIME", 23)).toString());
         assertEquals(
-                "TIMESTAMP(0)", KafkaJsonTypeUtils.fromDbzColumn(column("DATETIME", 19)).toString());
+                "TIMESTAMP(0)",
+                KafkaJsonTypeUtils.fromDbzColumn(column("DATETIME", 19)).toString());
         assertEquals(
                 "TIMESTAMP_LTZ(3)",
                 KafkaJsonTypeUtils.fromDbzColumn(column("TIMESTAMP", 23)).toString());
@@ -164,7 +173,9 @@ class KafkaJsonTypeUtilsTest {
                 "VARBINARY(255)",
                 KafkaJsonTypeUtils.fromDbzColumn(column("VARBINARY", 255)).toString());
         assertEquals("BYTES", KafkaJsonTypeUtils.fromDbzColumn(column("BLOB", 65535)).toString());
-        assertEquals("BYTES", KafkaJsonTypeUtils.fromDbzColumn(column("LONGBLOB", 2147483647)).toString());
+        assertEquals(
+                "BYTES",
+                KafkaJsonTypeUtils.fromDbzColumn(column("LONGBLOB", 2147483647)).toString());
     }
 
     @Test

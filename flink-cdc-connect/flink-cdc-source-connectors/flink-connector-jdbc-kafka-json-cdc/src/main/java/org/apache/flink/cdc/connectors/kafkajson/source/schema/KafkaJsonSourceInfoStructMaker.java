@@ -29,9 +29,9 @@ import org.apache.kafka.connect.data.Struct;
  * Builds the {@code source} struct of the Canal source records.
  *
  * <p>The schema mirrors the MySQL connector's common fields ({@code version}/{@code connector}/
- * {@code name}/{@code ts_ms}/{@code snapshot}/{@code db}) and additionally exposes the canal
- * {@code es}/{@code ts} timestamps. {@code ts_ms} always carries the configured event time so that
- * the record timestamp and the offset ordering stay consistent.
+ * {@code name}/{@code ts_ms}/{@code snapshot}/{@code db}) and additionally exposes the canal {@code
+ * es}/{@code ts} timestamps. {@code ts_ms} always carries the configured event time so that the
+ * record timestamp and the offset ordering stay consistent.
  */
 public class KafkaJsonSourceInfoStructMaker implements SourceInfoStructMaker<KafkaJsonSourceInfo> {
 
@@ -77,7 +77,9 @@ public class KafkaJsonSourceInfoStructMaker implements SourceInfoStructMaker<Kaf
                         .put(AbstractSourceInfo.DEBEZIUM_VERSION_KEY, version)
                         .put(AbstractSourceInfo.DEBEZIUM_CONNECTOR_KEY, connector)
                         .put(AbstractSourceInfo.SERVER_NAME_KEY, serverName)
-                        .put(AbstractSourceInfo.TIMESTAMP_KEY, sourceInfo.timestamp().toEpochMilli())
+                        .put(
+                                AbstractSourceInfo.TIMESTAMP_KEY,
+                                sourceInfo.timestamp().toEpochMilli())
                         .put(AbstractSourceInfo.DATABASE_NAME_KEY, sourceInfo.database());
         if (sourceInfo.table() != null) {
             ret.put(AbstractSourceInfo.TABLE_NAME_KEY, sourceInfo.table());

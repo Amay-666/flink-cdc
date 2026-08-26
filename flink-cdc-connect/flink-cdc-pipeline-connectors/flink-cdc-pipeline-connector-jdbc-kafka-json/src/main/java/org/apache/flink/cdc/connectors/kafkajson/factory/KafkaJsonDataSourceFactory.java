@@ -292,7 +292,8 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
             case SCAN_STARTUP_MODE_VALUE_TIMESTAMP:
                 return StartupOptions.timestamp(config.get(SCAN_STARTUP_TIMESTAMP_MILLIS));
             default:
-                // 'specific-offset' (binlog file/pos) has no canal counterpart: the stream offset is
+                // 'specific-offset' (binlog file/pos) has no canal counterpart: the stream offset
+                // is
                 // the canal event time, which 'timestamp' already covers
                 throw new ValidationException(
                         String.format(
@@ -307,7 +308,8 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
         }
     }
 
-    private static List<String> getTableList(KafkaJsonSourceConfig sourceConfig, Selectors selectors) {
+    private static List<String> getTableList(
+            KafkaJsonSourceConfig sourceConfig, Selectors selectors) {
         return KafkaJsonSchemaUtils.listTables(sourceConfig, null).stream()
                 .filter(selectors::isMatch)
                 .map(TableId::toString)

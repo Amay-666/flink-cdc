@@ -60,8 +60,7 @@ public class KafkaJsonValueConverter {
     private static final long serialVersionUID = 1L;
 
     /** Matches MySQL zero dates ({@code 0000-00-00[ 00:00:00[.000000]]}). */
-    private static final Pattern ZERO_DATE =
-            Pattern.compile("^0000-00-00(\\s.*)?$");
+    private static final Pattern ZERO_DATE = Pattern.compile("^0000-00-00(\\s.*)?$");
 
     private final ZoneId serverZoneId;
     private final DateTimeFormatter fractionFormatter;
@@ -149,7 +148,10 @@ public class KafkaJsonValueConverter {
             return Date.valueOf(value);
         } catch (IllegalArgumentException e) {
             throw new FlinkRuntimeException(
-                    "Failed to convert canal DATE value '" + value + "' for column " + column.name(),
+                    "Failed to convert canal DATE value '"
+                            + value
+                            + "' for column "
+                            + column.name(),
                     e);
         }
     }
@@ -192,7 +194,8 @@ public class KafkaJsonValueConverter {
         try {
             return Base64.getDecoder().decode(value.getBytes(StandardCharsets.UTF_8));
         } catch (IllegalArgumentException e) {
-            throw new FlinkRuntimeException("Failed to base64-decode canal binary value: " + value, e);
+            throw new FlinkRuntimeException(
+                    "Failed to base64-decode canal binary value: " + value, e);
         }
     }
 

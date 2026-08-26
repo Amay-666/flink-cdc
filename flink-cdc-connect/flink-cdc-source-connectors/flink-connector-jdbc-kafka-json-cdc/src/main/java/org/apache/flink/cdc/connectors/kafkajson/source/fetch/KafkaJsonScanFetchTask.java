@@ -71,7 +71,8 @@ public class KafkaJsonScanFetchTask extends AbstractScanFetchTask {
 
     @Override
     protected void executeDataSnapshot(Context context) throws Exception {
-        KafkaJsonSourceFetchTaskContext sourceFetchContext = (KafkaJsonSourceFetchTaskContext) context;
+        KafkaJsonSourceFetchTaskContext sourceFetchContext =
+                (KafkaJsonSourceFetchTaskContext) context;
         KafkaJsonSnapshotSplitReadTask snapshotSplitReadTask =
                 new KafkaJsonSnapshotSplitReadTask(
                         sourceFetchContext.getRecordFactory(),
@@ -91,7 +92,8 @@ public class KafkaJsonScanFetchTask extends AbstractScanFetchTask {
         // Postgres connector reuses its stream reader for the backfill of each snapshot split. The
         // stream task consumes from the same Kafka consumer shared per reader, so no second
         // consumer is opened for the backfill phase.
-        new KafkaJsonStreamFetchTask(backfillStreamSplit).execute((KafkaJsonSourceFetchTaskContext) context);
+        new KafkaJsonStreamFetchTask(backfillStreamSplit)
+                .execute((KafkaJsonSourceFetchTaskContext) context);
     }
 
     /**
@@ -100,13 +102,14 @@ public class KafkaJsonScanFetchTask extends AbstractScanFetchTask {
      *
      * <p>The rows are taken straight from the JDBC result set and fed to the {@code
      * valueFromColumnData} converters of the table schema, mirroring the Debezium MySQL snapshot
-     * reader. The position of a snapshot record is irrelevant to the incremental-snapshot
-     * algorithm — only its key and envelope shape matter — so each split is stamped with the
-     * wall-clock time when it is read.
+     * reader. The position of a snapshot record is irrelevant to the incremental-snapshot algorithm
+     * — only its key and envelope shape matter — so each split is stamped with the wall-clock time
+     * when it is read.
      */
     public static class KafkaJsonSnapshotSplitReadTask {
 
-        private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonSnapshotSplitReadTask.class);
+        private static final Logger LOG =
+                LoggerFactory.getLogger(KafkaJsonSnapshotSplitReadTask.class);
         /** Interval for showing a log statement with the progress while scanning a single table. */
         private static final Duration LOG_INTERVAL = Duration.ofMillis(10_000);
 

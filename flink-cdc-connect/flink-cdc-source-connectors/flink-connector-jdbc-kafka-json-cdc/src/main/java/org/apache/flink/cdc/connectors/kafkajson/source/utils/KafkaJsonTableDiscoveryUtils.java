@@ -34,9 +34,7 @@ public class KafkaJsonTableDiscoveryUtils {
 
     private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonTableDiscoveryUtils.class);
 
-    /**
-     * Lists the tables in the given database that are accepted by the configured table filters.
-     */
+    /** Lists the tables in the given database that are accepted by the configured table filters. */
     public static List<TableId> listTables(
             String database, JdbcConnection jdbc, RelationalTableFilters tableFilters)
             throws SQLException {

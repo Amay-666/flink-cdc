@@ -37,8 +37,8 @@ import java.util.Objects;
  *
  * <p>Note: because the released {@link SchemaChangeEventType} enum has no {@code TRUNCATE_TABLE}
  * value, {@link #getType()} returns {@link SchemaChangeEventType#CREATE_TABLE} as a placeholder; it
- * is only used by generic code paths. The canal serialization stack dispatches on the concrete class
- * via {@code instanceof}, so the placeholder never affects (de)serialization.
+ * is only used by generic code paths. The canal serialization stack dispatches on the concrete
+ * class via {@code instanceof}, so the placeholder never affects (de)serialization.
  */
 @PublicEvolving
 public class TruncateTableEvent implements SchemaChangeEvent {
@@ -53,8 +53,7 @@ public class TruncateTableEvent implements SchemaChangeEvent {
         this(tableId, schema, null);
     }
 
-    public TruncateTableEvent(
-            TableId tableId, Schema schema, @Nullable String sql) {
+    public TruncateTableEvent(TableId tableId, Schema schema, @Nullable String sql) {
         this.tableId = tableId;
         this.schema = schema;
         this.sql = sql;

@@ -62,34 +62,35 @@ import java.util.Set;
  * <p>The reader consumes from all partitions of the configured topics (manually assigned, not group
  * managed). Each partition is seeked to the first message whose canal event time ({@code es}/{@code
  * ts}) is at or after the stream split's starting offset — the same conservative lower bound that
- * {@link KafkaJsonOffsetSupplier} computed during the snapshot phase, so no change is skipped at the
- * full-&gt;incremental switch.
+ * {@link KafkaJsonOffsetSupplier} computed during the snapshot phase, so no change is skipped at
+ * the full-&gt;incremental switch.
  *
  * <p>When the split is a bounded read (its ending offset is a real event time rather than {@link
- * KafkaJsonOffset#NO_STOPPING_OFFSET}) the task dispatches the {@link WatermarkKind#END} watermark once
- * every partition has delivered a message at-or-after the ending offset (or is drained to its end),
- * which finalizes the incremental snapshot of the split. Messages <em>strictly after</em> the ending
- * offset are not emitted: the stream split that follows reads only event times strictly after its
- * starting offset (its high-watermark watermark), so emitting them here would duplicate the
- * stream-phase emission. The ending offset itself is <em>not</em> after the ending offset (the
+ * KafkaJsonOffset#NO_STOPPING_OFFSET}) the task dispatches the {@link WatermarkKind#END} watermark
+ * once every partition has delivered a message at-or-after the ending offset (or is drained to its
+ * end), which finalizes the incremental snapshot of the split. Messages <em>strictly after</em> the
+ * ending offset are not emitted: the stream split that follows reads only event times strictly
+ * after its starting offset (its high-watermark watermark), so emitting them here would duplicate
+ * the stream-phase emission. The ending offset itself is <em>not</em> after the ending offset (the
  * watermark carries the sentinel partition/offset, see {@link KafkaJsonKafkaOffsetUtils}) and is
  * therefore backfilled exactly once. Messages <em>strictly before</em> the starting offset — the
  * split's low watermark — are pre-snapshot changes whose effect the JDBC read has already captured
- * (possibly superseded by a later change), and are dropped so they cannot override the snapshot with
- * a stale value.
+ * (possibly superseded by a later change), and are dropped so they cannot override the snapshot
+ * with a stale value.
  *
- * <p>In the unbounded stream phase (the {@code stream-split}) the task enforces the strict exclusive
- * lower bound: every message at-or-before the starting offset — the minimum high watermark over the
- * finished snapshot splits — is dropped, because the bounded backfill of its owning snapshot split
- * has already emitted it or the JDBC snapshot already reflects it. A message strictly after that
- * lower bound but still at-or-before the high watermark of the finished snapshot split that owns its
- * primary key is dropped as well (the multi-split residual). Both guards keep the stream phase from
- * re-emitting a change the incremental snapshot has already delivered once the base pure-stream
- * filter is bypassed; see docs/BOUNDARY_AUDIT.md.
+ * <p>In the unbounded stream phase (the {@code stream-split}) the task enforces the strict
+ * exclusive lower bound: every message at-or-before the starting offset — the minimum high
+ * watermark over the finished snapshot splits — is dropped, because the bounded backfill of its
+ * owning snapshot split has already emitted it or the JDBC snapshot already reflects it. A message
+ * strictly after that lower bound but still at-or-before the high watermark of the finished
+ * snapshot split that owns its primary key is dropped as well (the multi-split residual). Both
+ * guards keep the stream phase from re-emitting a change the incremental snapshot has already
+ * delivered once the base pure-stream filter is bypassed; see docs/BOUNDARY_AUDIT.md.
  *
- * <p>The position of the most recent consumed message is kept as {@link KafkaJsonOffset} and committed
- * by {@link KafkaJsonDialect#notifyCheckpointComplete(long, Offset)}; the Kafka group offset itself is
- * left untouched because exactly-once recovery relies on the Flink checkpointed state.
+ * <p>The position of the most recent consumed message is kept as {@link KafkaJsonOffset} and
+ * committed by {@link KafkaJsonDialect#notifyCheckpointComplete(long, Offset)}; the Kafka group
+ * offset itself is left untouched because exactly-once recovery relies on the Flink checkpointed
+ * state.
  */
 public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
 
@@ -114,11 +115,16 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
 
     private volatile KafkaJsonOffset lastCommittedOffset;
 
-    /** Partitions that have already delivered a message at-or-after the ending offset (bounded reads). */
+    /**
+     * Partitions that have already delivered a message at-or-after the ending offset (bounded
+     * reads).
+     */
     private final Set<TopicPartition> partitionsPastEnding = new HashSet<>();
     /** The partitions the consumer was assigned to (populated by {@link #assignAndSeek}). */
     private volatile List<TopicPartition> assignedPartitions = new ArrayList<>();
-    /** Partition log ends captured when the bounded read starts; a drained partition counts as done. */
+    /**
+     * Partition log ends captured when the bounded read starts; a drained partition counts as done.
+     */
     private volatile Map<TopicPartition, Long> partitionEndOffsets = new HashMap<>();
 
     /** Applies the DDL messages to the shared schema; built once per execute. */
@@ -129,9 +135,11 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
      * primary-key range and the high watermark of the bounded backfill that already replayed it, so
      * the stream phase can drop in-range records whose event time is still at-or-before that high
      * watermark (the {@code finishedSnapshotSplitInfos} of the stream split). Empty for backfill
-     * splits, whose splitId is the snapshot split id rather than {@link StreamSplit#STREAM_SPLIT_ID}.
+     * splits, whose splitId is the snapshot split id rather than {@link
+     * StreamSplit#STREAM_SPLIT_ID}.
      */
-    private final Map<TableId, List<FinishedSnapshotSplitInfo>> finishedSplitsByTable = new HashMap<>();
+    private final Map<TableId, List<FinishedSnapshotSplitInfo>> finishedSplitsByTable =
+            new HashMap<>();
 
     public KafkaJsonStreamFetchTask(StreamSplit split) {
         this.split = split;
@@ -164,7 +172,8 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
             throw new FlinkRuntimeException(
                     "Unexpected FetchTask.Context type: " + context.getClass().getName());
         }
-        KafkaJsonSourceFetchTaskContext sourceFetchContext = (KafkaJsonSourceFetchTaskContext) context;
+        KafkaJsonSourceFetchTaskContext sourceFetchContext =
+                (KafkaJsonSourceFetchTaskContext) context;
         KafkaJsonSourceConfig sourceConfig = sourceFetchContext.getSourceConfig();
         this.schemaChangeHandler = new KafkaJsonSchemaChangeHandler(sourceConfig);
         taskRunning = true;
@@ -172,8 +181,10 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
             this.consumer = sourceFetchContext.getKafkaConsumer();
             assignAndSeek(consumer, sourceConfig);
             if (isBoundedRead()) {
-                // capture the partition log ends once the consumer is positioned: the bounded read is
-                // over when every partition has delivered a message at-or-after the ending offset or
+                // capture the partition log ends once the consumer is positioned: the bounded read
+                // is
+                // over when every partition has delivered a message at-or-after the ending offset
+                // or
                 // has been drained to its end (e.g. an empty partition, which has nothing to read)
                 this.partitionEndOffsets = consumer.endOffsets(this.assignedPartitions);
             }
@@ -210,7 +221,8 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
      * has delivered a message at-or-after the ending offset, or has been drained to its end.
      */
     private boolean processRecords(
-            KafkaJsonSourceFetchTaskContext sourceFetchContext, ConsumerRecords<String, String> records)
+            KafkaJsonSourceFetchTaskContext sourceFetchContext,
+            ConsumerRecords<String, String> records)
             throws Exception {
         KafkaJsonOffset lastOffset = null;
         for (ConsumerRecord<String, String> record : records) {
@@ -237,13 +249,15 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                     && lastOffset.isAtOrBefore(startingOffset)) {
                 // The stream split reads strictly after its starting offset (the minimum high
                 // watermark over the finished snapshot splits). Once the base
-                // IncrementalSourceStreamFetcher#hasEnterPureStreamPhase fires — the first record at
+                // IncrementalSourceStreamFetcher#hasEnterPureStreamPhase fires — the first record
+                // at
                 // or after a table's max high watermark — the per-split shouldEmit filter is
                 // short-circuited, so an already-backfilled message (es <= its owning split's high
                 // watermark) that is read after that trigger would otherwise be re-emitted here on
                 // top of the bounded backfill (the F4 double, see docs/BOUNDARY_AUDIT.md). Every
                 // message at-or-before the starting offset is covered by the bounded backfill
-                // ([LOW, HIGH], inclusive) or by the JDBC snapshot (es < LOW), so it is dropped, not
+                // ([LOW, HIGH], inclusive) or by the JDBC snapshot (es < LOW), so it is dropped,
+                // not
                 // emitted, on the stream path. The backfill split (whose splitId is the snapshot
                 // split id, not STREAM_SPLIT_ID) keeps its inclusive bounds and is untouched here.
                 continue;
@@ -252,19 +266,24 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
             if (isBoundedRead()) {
                 if (lastOffset.getEventTime() < startingOffset.getEventTime()) {
                     // Below the low watermark: a pre-snapshot change whose effect the JDBC read has
-                    // already captured (the snapshot may even reflect a later change that supersedes
+                    // already captured (the snapshot may even reflect a later change that
+                    // supersedes
                     // it). Replaying it here could override the snapshot row with a stale value, so
-                    // it is dropped; the low watermark is the inclusive lower bound of the backfill.
+                    // it is dropped; the low watermark is the inclusive lower bound of the
+                    // backfill.
                     continue;
                 }
                 if (lastOffset.isAfter(endingOffset)) {
                     // A message strictly after the ending offset belongs to the stream phase, which
-                    // reads only event times strictly after its starting offset, so emitting it here
+                    // reads only event times strictly after its starting offset, so emitting it
+                    // here
                     // would duplicate the stream-phase emission. Drop it and remember that this
-                    // partition has crossed the ending offset. The boundary message (event time equal
+                    // partition has crossed the ending offset. The boundary message (event time
+                    // equal
                     // to the ending offset; the watermark carries the sentinel partition/offset, so
                     // isAfter is false) is backfilled exactly once by this bounded read.
-                    partitionsPastEnding.add(new TopicPartition(record.topic(), record.partition()));
+                    partitionsPastEnding.add(
+                            new TopicPartition(record.topic(), record.partition()));
                     continue;
                 }
             }
@@ -278,11 +297,7 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
             List<SourceRecord> sourceRecords =
                     sourceFetchContext
                             .getRecordConverter()
-                            .convert(
-                                    message,
-                                    record.topic(),
-                                    record.partition(),
-                                    record.offset());
+                            .convert(message, record.topic(), record.partition(), record.offset());
             for (SourceRecord sourceRecord : sourceRecords) {
                 if (StreamSplit.STREAM_SPLIT_ID.equals(split.splitId())
                         && isCoveredByFinishedSnapshotSplit(
@@ -290,11 +305,14 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                     // The F4 residual in a multi-split stream: a message whose event time lies in
                     // (startingOffset, owning split's high watermark] — strictly after the stream
                     // starting offset but still at-or-before the high watermark of the finished
-                    // snapshot split that owns its primary key — was already emitted by that split's
+                    // snapshot split that owns its primary key — was already emitted by that
+                    // split's
                     // bounded backfill. Once the pure-stream phase fires for the table, the base
                     // filter no longer drops it, so this pre-filter does, exactly as the base
-                    // per-split shouldEmit would in single-partition order (see docs/BOUNDARY_AUDIT.md).
-                    // A genuinely new change (es after the owning high watermark) still passes through.
+                    // per-split shouldEmit would in single-partition order (see
+                    // docs/BOUNDARY_AUDIT.md).
+                    // A genuinely new change (es after the owning high watermark) still passes
+                    // through.
                     continue;
                 }
                 sourceFetchContext.getQueue().enqueue(new DataChangeEvent(sourceRecord));
@@ -309,7 +327,8 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
         }
         // Only when every partition has crossed the ending offset (or is drained to its end) is the
         // bounded read complete. Terminating on the first crossing record would silently drop the
-        // still-unread messages of a lagging partition, so the loop keeps polling until they arrive.
+        // still-unread messages of a lagging partition, so the loop keeps polling until they
+        // arrive.
         for (TopicPartition partition : assignedPartitions) {
             if (!partitionsPastEnding.contains(partition)
                     && consumer.position(partition)
@@ -350,7 +369,9 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
         return false;
     }
 
-    /** Routes a DDL message to the schema-change pipeline (parser + shared-schema update + record). */
+    /**
+     * Routes a DDL message to the schema-change pipeline (parser + shared-schema update + record).
+     */
     private void handleDdlMessage(
             KafkaJsonSourceFetchTaskContext sourceFetchContext,
             KafkaJsonFlatMessage message,
@@ -365,13 +386,16 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
     }
 
     /** Assigns all partitions of the configured topics and seeks each to the stream start. */
-    private void assignAndSeek(KafkaConsumer<String, String> consumer, KafkaJsonSourceConfig sourceConfig) {
+    private void assignAndSeek(
+            KafkaConsumer<String, String> consumer, KafkaJsonSourceConfig sourceConfig) {
         List<TopicPartition> partitions = new ArrayList<>();
         for (String topic : sourceConfig.getKafkaTopics()) {
             List<PartitionInfo> partitionInfos = consumer.partitionsFor(topic);
             if (partitionInfos == null) {
                 throw new FlinkRuntimeException(
-                        "Kafka topic '" + topic + "' does not exist on "
+                        "Kafka topic '"
+                                + topic
+                                + "' does not exist on "
                                 + sourceConfig.getKafkaBootstrapServers());
             }
             for (PartitionInfo partitionInfo : partitionInfos) {

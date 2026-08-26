@@ -49,7 +49,8 @@ class KafkaJsonSourceInfoStructMakerTest {
     void testStreamSourceStruct() {
         MySqlConnectorConfig dbzConfig = buildConfig().getDbzConnectorConfig();
         KafkaJsonSourceInfoStructMaker maker =
-                new KafkaJsonSourceInfoStructMaker("canal", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, dbzConfig);
+                new KafkaJsonSourceInfoStructMaker(
+                        "canal", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, dbzConfig);
 
         KafkaJsonSourceInfo sourceInfo =
                 new KafkaJsonSourceInfo(
@@ -78,7 +79,8 @@ class KafkaJsonSourceInfoStructMakerTest {
     void testSnapshotSourceStruct() {
         MySqlConnectorConfig dbzConfig = buildConfig().getDbzConnectorConfig();
         KafkaJsonSourceInfoStructMaker maker =
-                new KafkaJsonSourceInfoStructMaker("canal", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, dbzConfig);
+                new KafkaJsonSourceInfoStructMaker(
+                        "canal", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, dbzConfig);
 
         KafkaJsonSourceInfo sourceInfo =
                 new KafkaJsonSourceInfo(
@@ -96,7 +98,8 @@ class KafkaJsonSourceInfoStructMakerTest {
     void testSchemaShape() {
         MySqlConnectorConfig dbzConfig = buildConfig().getDbzConnectorConfig();
         KafkaJsonSourceInfoStructMaker maker =
-                new KafkaJsonSourceInfoStructMaker("canal", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, dbzConfig);
+                new KafkaJsonSourceInfoStructMaker(
+                        "canal", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, dbzConfig);
         Schema schema = maker.schema();
 
         assertEquals("io.debezium.connector.canal.Source", schema.name());

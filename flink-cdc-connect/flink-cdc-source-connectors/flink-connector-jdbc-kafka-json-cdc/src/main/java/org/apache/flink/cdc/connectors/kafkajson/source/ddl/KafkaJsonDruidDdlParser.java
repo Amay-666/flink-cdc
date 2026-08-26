@@ -61,10 +61,10 @@ import java.util.stream.Collectors;
  * DROP}/{@code MODIFY}/{@code CHANGE} column, applied on top of the current schema), {@code DROP
  * TABLE}, {@code TRUNCATE TABLE} and the {@code RENAME TABLE}/{@code ALTER TABLE ... RENAME} table
  * renames. A single-column rename ({@code RENAME COLUMN}/{@code CHANGE}) is classified as {@link
- * KafkaJsonTableChangeType#RENAME_COLUMN}. Statements that do not change the column model ({@code ADD
- * INDEX}, {@code USE}, ...) yield {@code null} and are ignored. The column type mapping delegates to
- * {@link KafkaJsonTableUtils} so that a DDL-derived schema and a canal-message-derived schema are
- * identical.
+ * KafkaJsonTableChangeType#RENAME_COLUMN}. Statements that do not change the column model ({@code
+ * ADD INDEX}, {@code USE}, ...) yield {@code null} and are ignored. The column type mapping
+ * delegates to {@link KafkaJsonTableUtils} so that a DDL-derived schema and a canal-message-derived
+ * schema are identical.
  */
 public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
 
@@ -101,7 +101,8 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
         }
     }
 
-    private static KafkaJsonDdlParsedResult parseCreate(SQLCreateTableStatement statement, TableId tableId) {
+    private static KafkaJsonDdlParsedResult parseCreate(
+            SQLCreateTableStatement statement, TableId tableId) {
         TableEditor table = Table.editor().tableId(tableId);
         int position = 0;
         for (SQLTableElement element : statement.getTableElementList()) {
@@ -117,8 +118,8 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
     }
 
     /**
-     * Parses a {@code RENAME TABLE a TO b} (the statement may rename several tables at once; only the
-     * first pair is modeled, matching the single table announced by the canal message).
+     * Parses a {@code RENAME TABLE a TO b} (the statement may rename several tables at once; only
+     * the first pair is modeled, matching the single table announced by the canal message).
      */
     @Nullable
     private static KafkaJsonDdlParsedResult parseRenameTable(
@@ -135,9 +136,7 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
                 new TableId(
                         tableId.catalog(), tableId.schema(), unquote(item.getTo().getSimpleName()));
         Table newTable =
-                currentTable == null
-                        ? null
-                        : currentTable.edit().tableId(newTableId).create();
+                currentTable == null ? null : currentTable.edit().tableId(newTableId).create();
         return KafkaJsonDdlParsedResult.renameTable(tableId, newTableId, currentTable, newTable);
     }
 
@@ -145,10 +144,7 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
     private static KafkaJsonDdlParsedResult parseAlter(
             SQLAlterTableStatement statement, TableId tableId, @Nullable Table currentTable) {
         if (currentTable == null) {
-            LOG.warn(
-                    "Skipping ALTER on {} without a known current schema: {}",
-                    tableId,
-                    statement);
+            LOG.warn("Skipping ALTER on {} without a known current schema: {}", tableId, statement);
             return null;
         }
         TableEditor table = currentTable.edit();
@@ -177,8 +173,7 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
                     if (oldColumn != null) {
                         int position = positionOf(table, oldName);
                         table.removeColumn(oldName);
-                        table.addColumn(
-                                oldColumn.edit().name(newName).position(position).create());
+                        table.addColumn(oldColumn.edit().name(newName).position(position).create());
                     }
                 }
             } else if (item instanceof SQLAlterTableAddColumn) {
@@ -216,8 +211,7 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
                             oldColumn,
                             buildColumn(newColDef, oldColumn.position()).create());
                 }
-                table.updateColumn(
-                        buildColumn(newColDef, positionOf(table, columnName)).create());
+                table.updateColumn(buildColumn(newColDef, positionOf(table, columnName)).create());
             } else if (item instanceof MySqlAlterTableChangeColumn) {
                 // ALTER TABLE t CHANGE COLUMN ... (change + potential rename)
                 MySqlAlterTableChangeColumn change = (MySqlAlterTableChangeColumn) item;
@@ -328,11 +322,14 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
 
     /**
      * Builds a {@link ColumnEditor} from a Druid column definition by reconstructing the MySQL type
-     * expression (e.g. {@code varchar(255) unsigned}) and delegating to {@link KafkaJsonTableUtils}.
+     * expression (e.g. {@code varchar(255) unsigned}) and delegating to {@link
+     * KafkaJsonTableUtils}.
      */
     private static ColumnEditor buildColumn(SQLColumnDefinition column, int position) {
         return KafkaJsonTableUtils.buildColumn(
-                unquote(column.getColumnName()), mysqlTypeExpression(column.getDataType()), position);
+                unquote(column.getColumnName()),
+                mysqlTypeExpression(column.getDataType()),
+                position);
     }
 
     /** Strips the surrounding backticks Druid keeps on quoted identifiers (e.g. {@code `id`}). */
@@ -349,7 +346,10 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
         if (arguments != null && !arguments.isEmpty()) {
             expression
                     .append('(')
-                    .append(arguments.stream().map(SQLExpr::toString).collect(Collectors.joining(",")))
+                    .append(
+                            arguments.stream()
+                                    .map(SQLExpr::toString)
+                                    .collect(Collectors.joining(",")))
                     .append(')');
         }
         if (dataType instanceof SQLDataTypeImpl) {

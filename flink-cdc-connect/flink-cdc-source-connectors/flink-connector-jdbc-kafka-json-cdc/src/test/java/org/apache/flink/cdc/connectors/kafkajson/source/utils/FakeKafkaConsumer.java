@@ -43,11 +43,12 @@ import java.util.Properties;
  *
  * <p>Each partition is backed by an immutable log of {@link ConsumerRecord}s plus a mutable read
  * position. {@link #seek}/{@link #seekToBeginning}/{@link #seekToEnd} move the position; {@link
- * #poll(Duration)} returns the records of the currently assigned partitions that are at or after the
- * position and then advances it (at most {@code maxRecordsPerPoll} per partition when configured, to
- * simulate a lagging partition). {@link #offsetsForTimes(Map)} searches the log by the record
- * timestamp (which the tests set to the canal event time). {@link #endOffsets(Collection)} returns
- * the preconfigured log end (which may exceed the buffered records, as a real topic log would).
+ * #poll(Duration)} returns the records of the currently assigned partitions that are at or after
+ * the position and then advances it (at most {@code maxRecordsPerPoll} per partition when
+ * configured, to simulate a lagging partition). {@link #offsetsForTimes(Map)} searches the log by
+ * the record timestamp (which the tests set to the canal event time). {@link
+ * #endOffsets(Collection)} returns the preconfigured log end (which may exceed the buffered
+ * records, as a real topic log would).
  *
  * <p>All Kafka-consumer methods the production code uses are overridden, so the real {@link
  * KafkaConsumer} constructor never touches a broker.
@@ -62,6 +63,7 @@ public class FakeKafkaConsumer extends KafkaConsumer<String, String> {
     private final List<TopicPartition> assigned = new ArrayList<>();
     /** Maximum records a single {@link #poll(Duration)} returns per partition (to simulate lag). */
     private final int maxRecordsPerPoll;
+
     private volatile boolean wakeupCalled = false;
 
     public FakeKafkaConsumer(
@@ -108,8 +110,7 @@ public class FakeKafkaConsumer extends KafkaConsumer<String, String> {
         Map<TopicPartition, Long> result = new HashMap<>();
         for (TopicPartition topicPartition : partitions) {
             result.put(
-                    topicPartition,
-                    endingOffsets.getOrDefault(topicPartition, (long) log.size()));
+                    topicPartition, endingOffsets.getOrDefault(topicPartition, (long) log.size()));
         }
         return result;
     }

@@ -131,10 +131,8 @@ public class MySqlCanalChainITCase extends KafkaJsonSourceTestBase {
                             dbName));
             statement.execute(
                     String.format(
-                            "UPDATE `%s`.`customers` SET address='Hangzhou' WHERE id=101",
-                            dbName));
-            statement.execute(
-                    String.format("DELETE FROM `%s`.`customers` WHERE id=102", dbName));
+                            "UPDATE `%s`.`customers` SET address='Hangzhou' WHERE id=101", dbName));
+            statement.execute(String.format("DELETE FROM `%s`.`customers` WHERE id=102", dbName));
         }
         // give canal time to tail the binlog and produce to Kafka before the connector consumes
         Thread.sleep(5_000);
@@ -145,8 +143,7 @@ public class MySqlCanalChainITCase extends KafkaJsonSourceTestBase {
                 Statement statement = connection.createStatement()) {
             statement.execute(
                     String.format(
-                            "ALTER TABLE `%s`.`customers` ADD COLUMN email VARCHAR(255)",
-                            dbName));
+                            "ALTER TABLE `%s`.`customers` ADD COLUMN email VARCHAR(255)", dbName));
         }
         List<Event> schemaChanges = fetchDataEvents(events, 1, createTables);
 

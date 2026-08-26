@@ -39,8 +39,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Unit test for the canal serialization stack: {@link KafkaJsonEventTypeInfo} produces {@link
- * KafkaJsonEventSerializer}, which must round-trip a {@link RenameTableEvent} alongside the released
- * event types.
+ * KafkaJsonEventSerializer}, which must round-trip a {@link RenameTableEvent} alongside the
+ * released event types.
  */
 public class KafkaJsonEventSerializerTest {
 

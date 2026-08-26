@@ -64,8 +64,8 @@ import java.util.Map;
  * JdbcSourceEventDispatcher.dispatchSchemaChangeEvent}: the dispatcher's {@code
  * SchemaChangeEventReceiver} only enqueues the record when {@code
  * CommonConnectorConfig.isSchemaChangesHistoryEnabled()} is true, which the bundled Debezium 1.9.8
- * hard-codes to {@code false} for the MySQL connector. The record mirrors the dispatcher's format so
- * that the base {@code IncrementalSourceRecordEmitter} — which reads the history record for the
+ * hard-codes to {@code false} for the MySQL connector. The record mirrors the dispatcher's format
+ * so that the base {@code IncrementalSourceRecordEmitter} — which reads the history record for the
  * stream-split schema bookkeeping — consumes it unchanged.
  */
 public class KafkaJsonSchemaChangeHandler {
@@ -86,6 +86,7 @@ public class KafkaJsonSchemaChangeHandler {
      * only the type marker, {@code TRUNCATE_TABLE} only the type marker.
      */
     public static final String TABLE_CHANGE_TYPE = "tableChangeType";
+
     public static final String TABLE_CHANGE_TYPE_RENAME_TABLE = "RENAME_TABLE";
     public static final String TABLE_CHANGE_TYPE_RENAME_COLUMN = "RENAME_COLUMN";
     public static final String TABLE_CHANGE_TYPE_TRUNCATE_TABLE = "TRUNCATE_TABLE";
@@ -100,7 +101,8 @@ public class KafkaJsonSchemaChangeHandler {
         this.ddlParser = createParser(sourceConfig.getDdlParser());
         this.sourceInfoStructMaker =
                 new KafkaJsonSourceInfoStructMaker(
-                        "canal", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION,
+                        "canal",
+                        KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION,
                         sourceConfig.getDbzConnectorConfig());
     }
 
@@ -122,7 +124,9 @@ public class KafkaJsonSchemaChangeHandler {
      * @param offset the stream position of the message
      */
     public void handle(
-            KafkaJsonSourceFetchTaskContext context, KafkaJsonFlatMessage message, KafkaJsonOffset offset)
+            KafkaJsonSourceFetchTaskContext context,
+            KafkaJsonFlatMessage message,
+            KafkaJsonOffset offset)
             throws IOException, InterruptedException {
         String sql = message.getSql();
         if (sql == null || sql.isEmpty()) {
@@ -195,10 +199,13 @@ public class KafkaJsonSchemaChangeHandler {
                 || type == KafkaJsonTableChangeType.RENAME_COLUMN) {
             // The Debezium history format carries only the post-change schema in an ALTER
             // TableChange. The pipeline deserializer derives the column-level events by diffing the
-            // old and the new schema, so it needs both images: snapshot tables announce their schema
-            // as CreateTableEvents via JDBC (bypassing the schema-change stream), so the deserializer
+            // old and the new schema, so it needs both images: snapshot tables announce their
+            // schema
+            // as CreateTableEvents via JDBC (bypassing the schema-change stream), so the
+            // deserializer
             // never observed their CREATE and cannot diff an ALTER on its own. Carry the pre-change
-            // schema as a leading ALTER change — the deserializer processes the changes in order, so
+            // schema as a leading ALTER change — the deserializer processes the changes in order,
+            // so
             // the leading change primes its registry and the trailing change is diffed against it.
             if (result.getOldTable() != null) {
                 tableChanges.alter(result.getOldTable());

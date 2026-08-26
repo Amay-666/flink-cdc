@@ -61,18 +61,24 @@ class KafkaJsonValueConverterTest {
         assertEquals("-1", converter.convert(column(Types.BIGINT, "BIGINT", 20), "-1"));
         assertEquals("3.14", converter.convert(column(Types.DECIMAL, "DECIMAL", 10), "3.14"));
         assertEquals("abc", converter.convert(column(Types.VARCHAR, "VARCHAR", 255), "abc"));
-        assertEquals("{\"a\":1}", converter.convert(column(Types.LONGVARCHAR, "JSON", 65535), "{\"a\":1}"));
+        assertEquals(
+                "{\"a\":1}",
+                converter.convert(column(Types.LONGVARCHAR, "JSON", 65535), "{\"a\":1}"));
     }
 
     @Test
     void testUnsignedIntegersConvertedToNumber() {
         assertEquals(255L, converter.convert(column(Types.TINYINT, "TINYINT UNSIGNED", 3), "255"));
-        assertEquals(65535L, converter.convert(column(Types.SMALLINT, "SMALLINT UNSIGNED", 5), "65535"));
-        assertEquals(4294967295L, converter.convert(column(Types.INTEGER, "INT UNSIGNED", 10), "4294967295"));
+        assertEquals(
+                65535L, converter.convert(column(Types.SMALLINT, "SMALLINT UNSIGNED", 5), "65535"));
+        assertEquals(
+                4294967295L,
+                converter.convert(column(Types.INTEGER, "INT UNSIGNED", 10), "4294967295"));
         // BIGINT UNSIGNED passes through as String: both LONG and PRECISE converters accept it
         assertEquals(
                 "18446744073709551615",
-                converter.convert(column(Types.BIGINT, "BIGINT UNSIGNED", 20), "18446744073709551615"));
+                converter.convert(
+                        column(Types.BIGINT, "BIGINT UNSIGNED", 20), "18446744073709551615"));
     }
 
     @Test
@@ -83,8 +89,7 @@ class KafkaJsonValueConverterTest {
         assertEquals((short) 1, converter.convert(column(Types.BIT, "BIT", 1), "1"));
         // BIT(16) -> big-endian byte array
         assertArrayEquals(
-                new byte[] {2, 1},
-                (byte[]) converter.convert(column(Types.BIT, "BIT", 16), "513"));
+                new byte[] {2, 1}, (byte[]) converter.convert(column(Types.BIT, "BIT", 16), "513"));
         // binary-digit representation of the same value
         assertArrayEquals(
                 new byte[] {2, 1},
@@ -93,14 +98,20 @@ class KafkaJsonValueConverterTest {
 
     @Test
     void testDate() {
-        assertEquals(java.sql.Date.valueOf("2020-08-13"), converter.convert(column(Types.DATE, "DATE", 10), "2020-08-13"));
+        assertEquals(
+                java.sql.Date.valueOf("2020-08-13"),
+                converter.convert(column(Types.DATE, "DATE", 10), "2020-08-13"));
     }
 
     @Test
     void testZeroDatesBecomeNull() {
         assertNull(converter.convert(column(Types.DATE, "DATE", 10), "0000-00-00"));
-        assertNull(converter.convert(column(Types.TIMESTAMP, "DATETIME", 6), "0000-00-00 00:00:00"));
-        assertNull(converter.convert(column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP", 6), "0000-00-00 00:00:00"));
+        assertNull(
+                converter.convert(column(Types.TIMESTAMP, "DATETIME", 6), "0000-00-00 00:00:00"));
+        assertNull(
+                converter.convert(
+                        column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP", 6),
+                        "0000-00-00 00:00:00"));
     }
 
     @Test
@@ -120,7 +131,8 @@ class KafkaJsonValueConverterTest {
                 converter.convert(column(Types.TIMESTAMP, "DATETIME", 6), "2020-08-13 15:03:02"));
         assertEquals(
                 java.sql.Timestamp.valueOf("2020-08-13 15:03:02.123456"),
-                converter.convert(column(Types.TIMESTAMP, "DATETIME", 6), "2020-08-13 15:03:02.123456"));
+                converter.convert(
+                        column(Types.TIMESTAMP, "DATETIME", 6), "2020-08-13 15:03:02.123456"));
     }
 
     @Test
@@ -131,7 +143,8 @@ class KafkaJsonValueConverterTest {
         assertEquals(
                 expected,
                 converter.convert(
-                        column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP", 6), "2020-08-13 15:03:02"));
+                        column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP", 6),
+                        "2020-08-13 15:03:02"));
     }
 
     @Test
@@ -168,8 +181,10 @@ class KafkaJsonValueConverterTest {
     @Test
     void testIntegerBoundariesPassThrough() {
         // signed integer extremes stay String: the Debezium converters parse them from String
-        assertEquals("2147483647", converter.convert(column(Types.INTEGER, "INT", 11), "2147483647"));
-        assertEquals("-2147483648", converter.convert(column(Types.INTEGER, "INT", 11), "-2147483648"));
+        assertEquals(
+                "2147483647", converter.convert(column(Types.INTEGER, "INT", 11), "2147483647"));
+        assertEquals(
+                "-2147483648", converter.convert(column(Types.INTEGER, "INT", 11), "-2147483648"));
         assertEquals(
                 "9223372036854775807",
                 converter.convert(column(Types.BIGINT, "BIGINT", 20), "9223372036854775807"));
@@ -194,18 +209,24 @@ class KafkaJsonValueConverterTest {
     void testDecimalPrecisionAndScalePassThrough() {
         assertEquals(
                 "12345678901234567890.1234567890",
-                converter.convert(column(Types.DECIMAL, "DECIMAL", 38), "12345678901234567890.1234567890"));
+                converter.convert(
+                        column(Types.DECIMAL, "DECIMAL", 38), "12345678901234567890.1234567890"));
         assertEquals(
-                "0.0000000001", converter.convert(column(Types.DECIMAL, "DECIMAL", 30), "0.0000000001"));
+                "0.0000000001",
+                converter.convert(column(Types.DECIMAL, "DECIMAL", 30), "0.0000000001"));
         // DECIMAL UNSIGNED (fractional) must NOT go through the integer Number path
-        assertEquals("99.99", converter.convert(column(Types.DECIMAL, "DECIMAL UNSIGNED", 10), "99.99"));
+        assertEquals(
+                "99.99", converter.convert(column(Types.DECIMAL, "DECIMAL UNSIGNED", 10), "99.99"));
     }
 
     @Test
     void testVarcharEdgeCases() {
         assertEquals("", converter.convert(column(Types.VARCHAR, "VARCHAR", 255), ""));
-        assertEquals("你好, wörld", converter.convert(column(Types.VARCHAR, "VARCHAR", 255), "你好, wörld"));
-        assertEquals("  padded  ", converter.convert(column(Types.VARCHAR, "VARCHAR", 255), "  padded  "));
+        assertEquals(
+                "你好, wörld", converter.convert(column(Types.VARCHAR, "VARCHAR", 255), "你好, wörld"));
+        assertEquals(
+                "  padded  ",
+                converter.convert(column(Types.VARCHAR, "VARCHAR", 255), "  padded  "));
     }
 
     @Test
@@ -236,17 +257,20 @@ class KafkaJsonValueConverterTest {
                 converter.convert(column(Types.TIMESTAMP, "DATETIME", 6), "1000-01-01 00:00:00"));
         assertEquals(
                 java.sql.Timestamp.valueOf("9999-12-31 23:59:59.999999"),
-                converter.convert(column(Types.TIMESTAMP, "DATETIME", 6), "9999-12-31 23:59:59.999999"));
+                converter.convert(
+                        column(Types.TIMESTAMP, "DATETIME", 6), "9999-12-31 23:59:59.999999"));
     }
 
     @Test
     void testTimestampWithZoneLeapDayAndMaxPrecision() {
         OffsetDateTime expected =
-                OffsetDateTime.of(LocalDateTime.parse("2020-02-29T23:59:59.999999"), ZoneOffset.UTC);
+                OffsetDateTime.of(
+                        LocalDateTime.parse("2020-02-29T23:59:59.999999"), ZoneOffset.UTC);
         assertEquals(
                 expected,
                 converter.convert(
-                        column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP", 6), "2020-02-29 23:59:59.999999"));
+                        column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP", 6),
+                        "2020-02-29 23:59:59.999999"));
     }
 
     @Test
@@ -266,6 +290,9 @@ class KafkaJsonValueConverterTest {
         // a malformed timestamp
         assertThrows(
                 FlinkRuntimeException.class,
-                () -> converter.convert(column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP", 6), "2020-13-40 00:00:00"));
+                () ->
+                        converter.convert(
+                                column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP", 6),
+                                "2020-13-40 00:00:00"));
     }
 }

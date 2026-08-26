@@ -41,7 +41,8 @@ public class KafkaJsonOffsetFactory extends OffsetFactory {
 
     @Override
     public Offset newOffset(Long position) {
-        throw new FlinkRuntimeException("not supported create new KafkaJsonOffset by Long position.");
+        throw new FlinkRuntimeException(
+                "not supported create new KafkaJsonOffset by Long position.");
     }
 
     @Override

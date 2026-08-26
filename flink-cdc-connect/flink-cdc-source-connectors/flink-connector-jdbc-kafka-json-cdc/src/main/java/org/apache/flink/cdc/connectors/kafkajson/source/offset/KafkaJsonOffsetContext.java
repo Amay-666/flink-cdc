@@ -33,8 +33,8 @@ import java.util.Map;
 /**
  * The {@link OffsetContext} of the Canal source.
  *
- * <p>The offset is a {@link KafkaJsonOffset} — the Kafka position of the last consumed message, keyed
- * by its event time. The context is updated on every emitted record so that checkpointing and
+ * <p>The offset is a {@link KafkaJsonOffset} — the Kafka position of the last consumed message,
+ * keyed by its event time. The context is updated on every emitted record so that checkpointing and
  * restart always resume from the latest consumed message.
  */
 public class KafkaJsonOffsetContext implements OffsetContext {
@@ -45,7 +45,8 @@ public class KafkaJsonOffsetContext implements OffsetContext {
 
     public KafkaJsonOffsetContext(MySqlConnectorConfig config) {
         this.sourceInfoStructMaker =
-                new KafkaJsonSourceInfoStructMaker("canal", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, config);
+                new KafkaJsonSourceInfoStructMaker(
+                        "canal", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, config);
     }
 
     /** Updates the current offset. */

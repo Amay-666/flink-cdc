@@ -214,8 +214,7 @@ class KafkaJsonTableSourceFactoryTest {
         // 'specific-offset' (binlog file/pos) has no canal counterpart
         ValidationException e =
                 assertThrows(ValidationException.class, () -> createTableSource(options));
-        assertTrue(
-                getRootCauseMessage(e).contains("Invalid value for option 'scan.startup.mode'"));
+        assertTrue(getRootCauseMessage(e).contains("Invalid value for option 'scan.startup.mode'"));
     }
 
     @Test
@@ -255,8 +254,7 @@ class KafkaJsonTableSourceFactoryTest {
         assertTrue(readableMetadata.containsKey("row_kind"));
 
         tableSource.applyReadableMetadata(
-                Arrays.asList("table_name", "op_ts"),
-                SCHEMA_WITH_METADATA.toSourceRowDataType());
+                Arrays.asList("table_name", "op_ts"), SCHEMA_WITH_METADATA.toSourceRowDataType());
 
         // copy() keeps the mutable metadata state
         KafkaJsonTableSource copied = (KafkaJsonTableSource) tableSource.copy();
@@ -286,9 +284,9 @@ class KafkaJsonTableSourceFactoryTest {
     }
 
     /**
-     * {@code FactoryUtil} wraps any exception thrown while creating a table source in its own {@link
-     * ValidationException} ("Unable to create a source ..."), so assertions must walk down to the
-     * root cause.
+     * {@code FactoryUtil} wraps any exception thrown while creating a table source in its own
+     * {@link ValidationException} ("Unable to create a source ..."), so assertions must walk down
+     * to the root cause.
      */
     private static String getRootCauseMessage(Throwable t) {
         Throwable cause = t;

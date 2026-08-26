@@ -44,8 +44,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Simulated-producer baseline for the TiDB chain: the connector snapshots a real TiDB v8.5 cluster
- * over the MySQL wire protocol ({@code scan.database.type=tidb}) and consumes canal flatMessage JSON
- * written by a test-side producer as the incremental stream.
+ * over the MySQL wire protocol ({@code scan.database.type=tidb}) and consumes canal flatMessage
+ * JSON written by a test-side producer as the incremental stream.
  *
  * <p>This empirically validates the assumption that the snapshot path (JDBC metadata discovery +
  * MySQL-compatible chunk queries) works against TiDB. The incremental half is identical to the

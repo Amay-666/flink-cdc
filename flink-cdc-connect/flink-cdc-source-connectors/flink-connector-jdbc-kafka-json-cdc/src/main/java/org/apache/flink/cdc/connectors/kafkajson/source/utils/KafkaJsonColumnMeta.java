@@ -31,18 +31,18 @@ import io.debezium.relational.Column;
  * {@code KafkaJsonTypeUtils}. Keeping one implementation here means a fix applies to both layers at
  * once.
  *
- * <p><b>Temporal precision recovery:</b> the {@code length} of a Debezium {@link Column} carries two
- * meanings depending on the schema source. The streaming message path ({@link
+ * <p><b>Temporal precision recovery:</b> the {@code length} of a Debezium {@link Column} carries
+ * two meanings depending on the schema source. The streaming message path ({@link
  * KafkaJsonTableUtils#buildColumn}) parses the DDL text, so {@code "time(3)"} yields the
- * fractional-seconds precision ({@code 3}) directly. The JDBC snapshot path reports the
- * <em>display width</em> instead &mdash; verified on MySQL 8.0.46 and TiDB: {@code DATETIME(6)}
- * &rarr; {@code 26}, {@code DATETIME(3)} &rarr; {@code 23}, {@code DATETIME} &rarr; {@code 19},
- * {@code TIMESTAMP(6)} &rarr; {@code 26}, {@code TIME(6)} &rarr; {@code 15}. The two are
- * unambiguous because the fractional-seconds precision is at most {@code 6} while the smallest
- * display width is {@code 8} (TIME) / {@code 19} (DATETIME/TIMESTAMP); a length above the
- * fractional-seconds maximum is a display width and is converted back to the precision
- * ({@code width - 9} / {@code width - 20} above that floor). Numeric and string types are clamped
- * to their CDC/Flink bounds for the same reason.
+ * fractional-seconds precision ({@code 3}) directly. The JDBC snapshot path reports the <em>display
+ * width</em> instead &mdash; verified on MySQL 8.0.46 and TiDB: {@code DATETIME(6)} &rarr; {@code
+ * 26}, {@code DATETIME(3)} &rarr; {@code 23}, {@code DATETIME} &rarr; {@code 19}, {@code
+ * TIMESTAMP(6)} &rarr; {@code 26}, {@code TIME(6)} &rarr; {@code 15}. The two are unambiguous
+ * because the fractional-seconds precision is at most {@code 6} while the smallest display width is
+ * {@code 8} (TIME) / {@code 19} (DATETIME/TIMESTAMP); a length above the fractional-seconds maximum
+ * is a display width and is converted back to the precision ({@code width - 9} / {@code width - 20}
+ * above that floor). Numeric and string types are clamped to their CDC/Flink bounds for the same
+ * reason.
  */
 public final class KafkaJsonColumnMeta {
 

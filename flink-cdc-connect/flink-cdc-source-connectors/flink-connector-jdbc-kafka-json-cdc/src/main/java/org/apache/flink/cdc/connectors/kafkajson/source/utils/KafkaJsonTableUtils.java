@@ -43,17 +43,20 @@ import java.util.regex.Pattern;
  * ({@code mysqlType} / {@code sqlType} / {@code pkNames}).
  *
  * <p>This is the fallback path of the schema resolution: when a table is not (yet) known to {@code
- * KafkaJsonSchema} — e.g. a table created after the snapshot discovery, or a stream-only setup without
- * JDBC credentials — the column types are reconstructed from the message itself. The canonical path
- * still prefers the JDBC schema from {@code KafkaJsonSchema}.
+ * KafkaJsonSchema} — e.g. a table created after the snapshot discovery, or a stream-only setup
+ * without JDBC credentials — the column types are reconstructed from the message itself. The
+ * canonical path still prefers the JDBC schema from {@code KafkaJsonSchema}.
  */
 public class KafkaJsonTableUtils {
 
     /** {@code int(11)}, {@code varchar(255)}, {@code decimal(10,2)}, {@code timestamp(3)}, ... */
-    private static final Pattern PARAM_PATTERN = Pattern.compile("^\\s*([a-z0-9]+)\\s*(?:\\((.*?)\\))?\\s*(unsigned)?\\s*(zerofill)?\\s*$");
+    private static final Pattern PARAM_PATTERN =
+            Pattern.compile(
+                    "^\\s*([a-z0-9]+)\\s*(?:\\((.*?)\\))?\\s*(unsigned)?\\s*(zerofill)?\\s*$");
 
     private static final Set<String> STRING_TYPES =
-            new LinkedHashSet<>(Arrays.asList("char", "varchar", "tinytext", "text", "mediumtext", "longtext"));
+            new LinkedHashSet<>(
+                    Arrays.asList("char", "varchar", "tinytext", "text", "mediumtext", "longtext"));
 
     private static final Set<String> BINARY_TYPES =
             new LinkedHashSet<>(Arrays.asList("binary", "varbinary"));
@@ -86,7 +89,10 @@ public class KafkaJsonTableUtils {
      */
     public static Table buildTable(KafkaJsonFlatMessage message) {
         TableId tableId =
-                new TableId(message.getDatabase() == null ? "" : message.getDatabase(), null, message.getTable());
+                new TableId(
+                        message.getDatabase() == null ? "" : message.getDatabase(),
+                        null,
+                        message.getTable());
         List<String> columns = columnNames(message);
         if (columns.isEmpty()) {
             return null;
@@ -288,8 +294,7 @@ public class KafkaJsonTableUtils {
             return Collections.emptyList();
         }
         List<String> values = new ArrayList<>();
-        Matcher matcher =
-                Pattern.compile("'((?:[^']|'')*)'").matcher(params);
+        Matcher matcher = Pattern.compile("'((?:[^']|'')*)'").matcher(params);
         while (matcher.find()) {
             values.add(matcher.group(1).replace("''", "'"));
         }

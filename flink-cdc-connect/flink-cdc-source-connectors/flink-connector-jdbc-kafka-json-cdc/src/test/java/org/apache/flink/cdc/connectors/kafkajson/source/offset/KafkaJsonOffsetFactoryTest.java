@@ -73,9 +73,7 @@ class KafkaJsonOffsetFactoryTest {
 
     @Test
     void testUnsupportedNewOffsetWithFilename() {
-        assertThrows(
-                FlinkRuntimeException.class,
-                () -> factory.newOffset("binlog.000001", 123L));
+        assertThrows(FlinkRuntimeException.class, () -> factory.newOffset("binlog.000001", 123L));
     }
 
     @Test

@@ -96,8 +96,10 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
                 config.get(SourceOptions.SCAN_NEWLY_ADDED_TABLE_ENABLED);
 
         String kafkaBootstrapServers = config.get(KafkaJsonSourceOptions.KAFKA_BOOTSTRAP_SERVERS);
-        String kafkaGroupId = config.getOptional(KafkaJsonSourceOptions.KAFKA_GROUP_ID).orElse(null);
-        List<String> kafkaTopics = getKafkaTopics(config.get(KafkaJsonSourceOptions.SCAN_KAFKA_TOPICS));
+        String kafkaGroupId =
+                config.getOptional(KafkaJsonSourceOptions.KAFKA_GROUP_ID).orElse(null);
+        List<String> kafkaTopics =
+                getKafkaTopics(config.get(KafkaJsonSourceOptions.SCAN_KAFKA_TOPICS));
         Map<String, String> options = context.getCatalogTable().getOptions();
         KafkaJsonSourceOptions.MessageFormat messageFormat =
                 getEnumOption(
@@ -106,7 +108,9 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
                         KafkaJsonSourceOptions.MessageFormat.class);
         KafkaJsonSourceOptions.EventTime eventTime =
                 getEnumOption(
-                        options, KafkaJsonSourceOptions.EVENT_TIME, KafkaJsonSourceOptions.EventTime.class);
+                        options,
+                        KafkaJsonSourceOptions.EVENT_TIME,
+                        KafkaJsonSourceOptions.EventTime.class);
         KafkaJsonSourceOptions.BoundaryMode boundaryMode =
                 getEnumOption(
                         options,
@@ -243,7 +247,8 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
                 return StartupOptions.timestamp(
                         config.get(SourceOptions.SCAN_STARTUP_TIMESTAMP_MILLIS));
             default:
-                // 'specific-offset' (binlog file/pos) has no canal counterpart: the stream offset is
+                // 'specific-offset' (binlog file/pos) has no canal counterpart: the stream offset
+                // is
                 // the canal event time, which 'timestamp' already covers
                 throw new ValidationException(
                         String.format(
@@ -298,7 +303,8 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
                 (key, value) -> {
                     if (key.startsWith(KafkaJsonSourceOptions.KAFKA_PROPERTIES_PREFIX)) {
                         kafkaProperties.setProperty(
-                                key.substring(KafkaJsonSourceOptions.KAFKA_PROPERTIES_PREFIX.length()),
+                                key.substring(
+                                        KafkaJsonSourceOptions.KAFKA_PROPERTIES_PREFIX.length()),
                                 value);
                     }
                 });
@@ -317,7 +323,8 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
             Pattern.compile(regex);
         } catch (Exception e) {
             throw new ValidationException(
-                    String.format("The %s '%s' is not a valid regular expression", optionName, regex),
+                    String.format(
+                            "The %s '%s' is not a valid regular expression", optionName, regex),
                     e);
         }
     }

@@ -32,13 +32,13 @@ import java.util.Objects;
  *
  * <p>The released flink-cdc runtime has no {@code RENAME_TABLE} event type, so a table rename would
  * otherwise be indistinguishable from a {@code DROP}+{@code CREATE} pair. This event carries both
- * table ids so that a downstream that builds its own event handling can migrate per-table state from
- * the old table id to the new one.
+ * table ids so that a downstream that builds its own event handling can migrate per-table state
+ * from the old table id to the new one.
  *
- * <p>Note: because the released {@link SchemaChangeEventType} enum has no {@code RENAME_TABLE} value,
- * {@link #getType()} returns {@link SchemaChangeEventType#CREATE_TABLE} as a placeholder; it is only
- * used by generic code paths. The canal serialization stack dispatches on the concrete class via
- * {@code instanceof}, so the placeholder never affects (de)serialization.
+ * <p>Note: because the released {@link SchemaChangeEventType} enum has no {@code RENAME_TABLE}
+ * value, {@link #getType()} returns {@link SchemaChangeEventType#CREATE_TABLE} as a placeholder; it
+ * is only used by generic code paths. The canal serialization stack dispatches on the concrete
+ * class via {@code instanceof}, so the placeholder never affects (de)serialization.
  */
 @PublicEvolving
 public class RenameTableEvent implements SchemaChangeEvent {

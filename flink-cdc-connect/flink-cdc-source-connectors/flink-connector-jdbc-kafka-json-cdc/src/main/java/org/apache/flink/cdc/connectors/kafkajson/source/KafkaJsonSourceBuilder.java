@@ -120,7 +120,8 @@ public class KafkaJsonSourceBuilder<T> {
     }
 
     /** Whether the source should scan the newly added tables or not. */
-    public KafkaJsonSourceBuilder<T> scanNewlyAddedTableEnabled(boolean scanNewlyAddedTableEnabled) {
+    public KafkaJsonSourceBuilder<T> scanNewlyAddedTableEnabled(
+            boolean scanNewlyAddedTableEnabled) {
         this.configFactory.scanNewlyAddedTableEnabled(scanNewlyAddedTableEnabled);
         return this;
     }
@@ -168,13 +169,15 @@ public class KafkaJsonSourceBuilder<T> {
     }
 
     /** The message format of the Kafka messages. */
-    public KafkaJsonSourceBuilder<T> messageFormat(KafkaJsonSourceOptions.MessageFormat messageFormat) {
+    public KafkaJsonSourceBuilder<T> messageFormat(
+            KafkaJsonSourceOptions.MessageFormat messageFormat) {
         this.configFactory.messageFormat(messageFormat);
         return this;
     }
 
     /** The database type of the source. */
-    public KafkaJsonSourceBuilder<T> databaseType(KafkaJsonSourceOptions.DatabaseType databaseType) {
+    public KafkaJsonSourceBuilder<T> databaseType(
+            KafkaJsonSourceOptions.DatabaseType databaseType) {
         this.configFactory.databaseType(databaseType);
         return this;
     }
@@ -186,13 +189,15 @@ public class KafkaJsonSourceBuilder<T> {
     }
 
     /** The boundary handling mode of the full->incremental switch. */
-    public KafkaJsonSourceBuilder<T> boundaryMode(KafkaJsonSourceOptions.BoundaryMode boundaryMode) {
+    public KafkaJsonSourceBuilder<T> boundaryMode(
+            KafkaJsonSourceOptions.BoundaryMode boundaryMode) {
         this.configFactory.boundaryMode(boundaryMode);
         return this;
     }
 
     /** The Kafka consumer startup mode for stream-only scenarios. */
-    public KafkaJsonSourceBuilder<T> kafkaStartupMode(KafkaJsonSourceOptions.KafkaStartupMode kafkaStartupMode) {
+    public KafkaJsonSourceBuilder<T> kafkaStartupMode(
+            KafkaJsonSourceOptions.KafkaStartupMode kafkaStartupMode) {
         this.configFactory.kafkaStartupMode(kafkaStartupMode);
         return this;
     }
@@ -224,10 +229,10 @@ public class KafkaJsonSourceBuilder<T> {
     /**
      * Build the {@link KafkaJsonSource}.
      *
-     * <p>Wires the {@link KafkaJsonOffsetFactory} and the {@link KafkaJsonDialect} into the incremental
-     * snapshot framework of flink-cdc-base. The base framework drives the whole pipeline: the
-     * enumerator discovers the tables and assigns the splits, and the reader executes each split
-     * through the dialect-created fetch tasks (see {@code IncrementalSource}).
+     * <p>Wires the {@link KafkaJsonOffsetFactory} and the {@link KafkaJsonDialect} into the
+     * incremental snapshot framework of flink-cdc-base. The base framework drives the whole
+     * pipeline: the enumerator discovers the tables and assigns the splits, and the reader executes
+     * each split through the dialect-created fetch tasks (see {@code IncrementalSource}).
      *
      * @return a KafkaJsonSource with the settings made for this builder.
      */

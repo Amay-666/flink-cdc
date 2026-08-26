@@ -27,21 +27,23 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * The result of parsing one canal DDL message: the affected table, the type of the schema change and
- * the table schemas before and after the change.
+ * The result of parsing one canal DDL message: the affected table, the type of the schema change
+ * and the table schemas before and after the change.
  *
- * <p>Unlike Debezium's {@code TableChanges.TableChangeType} — which only knows {@code CREATE}/{@code
- * ALTER}/{@code DROP} — the {@link KafkaJsonTableChangeType} also models {@code RENAME_TABLE} and {@code
- * RENAME_COLUMN}, so a rename is carried with both the old and the new table id / schema instead of
- * being flattened into a {@code DROP}+{@code CREATE} pair. Likewise a truncate is carried with the
- * preserved schema (the truncated table is not dropped).
+ * <p>Unlike Debezium's {@code TableChanges.TableChangeType} — which only knows {@code
+ * CREATE}/{@code ALTER}/{@code DROP} — the {@link KafkaJsonTableChangeType} also models {@code
+ * RENAME_TABLE} and {@code RENAME_COLUMN}, so a rename is carried with both the old and the new
+ * table id / schema instead of being flattened into a {@code DROP}+{@code CREATE} pair. Likewise a
+ * truncate is carried with the preserved schema (the truncated table is not dropped).
  */
 public class KafkaJsonDdlParsedResult {
 
     private final KafkaJsonTableChangeType type;
     /** The affected table; for a {@link KafkaJsonTableChangeType#RENAME_TABLE} the old table id. */
     private final TableId tableId;
-    /** The new table id of a {@link KafkaJsonTableChangeType#RENAME_TABLE}, otherwise {@code null}. */
+    /**
+     * The new table id of a {@link KafkaJsonTableChangeType#RENAME_TABLE}, otherwise {@code null}.
+     */
     @Nullable private final TableId newTableId;
     /** The schema before the change, or {@code null} if unknown (e.g. {@code CREATE}). */
     @Nullable private final Table oldTable;
@@ -78,7 +80,8 @@ public class KafkaJsonDdlParsedResult {
     }
 
     public static KafkaJsonDdlParsedResult create(TableId tableId, Table newTable) {
-        return new KafkaJsonDdlParsedResult(KafkaJsonTableChangeType.CREATE, tableId, null, null, newTable);
+        return new KafkaJsonDdlParsedResult(
+                KafkaJsonTableChangeType.CREATE, tableId, null, null, newTable);
     }
 
     public static KafkaJsonDdlParsedResult alter(
@@ -98,16 +101,12 @@ public class KafkaJsonDdlParsedResult {
             Table newTable,
             List<ColumnChangeInfo> columnChanges) {
         return new KafkaJsonDdlParsedResult(
-                KafkaJsonTableChangeType.ALTER,
-                tableId,
-                null,
-                oldTable,
-                newTable,
-                columnChanges);
+                KafkaJsonTableChangeType.ALTER, tableId, null, oldTable, newTable, columnChanges);
     }
 
     public static KafkaJsonDdlParsedResult drop(TableId tableId, @Nullable Table oldTable) {
-        return new KafkaJsonDdlParsedResult(KafkaJsonTableChangeType.DROP, tableId, null, oldTable, null);
+        return new KafkaJsonDdlParsedResult(
+                KafkaJsonTableChangeType.DROP, tableId, null, oldTable, null);
     }
 
     public static KafkaJsonDdlParsedResult renameTable(
@@ -139,7 +138,10 @@ public class KafkaJsonDdlParsedResult {
         return tableId;
     }
 
-    /** Returns the new table id of a {@link KafkaJsonTableChangeType#RENAME_TABLE}, else {@code null}. */
+    /**
+     * Returns the new table id of a {@link KafkaJsonTableChangeType#RENAME_TABLE}, else {@code
+     * null}.
+     */
     @Nullable
     public TableId getNewTableId() {
         return newTableId;
@@ -151,15 +153,18 @@ public class KafkaJsonDdlParsedResult {
         return oldTable;
     }
 
-    /** Returns the schema after the change, or {@code null} for a {@link KafkaJsonTableChangeType#DROP}. */
+    /**
+     * Returns the schema after the change, or {@code null} for a {@link
+     * KafkaJsonTableChangeType#DROP}.
+     */
     @Nullable
     public Table getNewTable() {
         return newTable;
     }
 
     /**
-     * Returns the list of column-level changes for {@code ALTER} operations, or an empty list if not
-     * applicable.
+     * Returns the list of column-level changes for {@code ALTER} operations, or an empty list if
+     * not applicable.
      */
     public List<ColumnChangeInfo> getColumnChanges() {
         return columnChanges;
@@ -167,9 +172,9 @@ public class KafkaJsonDdlParsedResult {
 
     /**
      * Returns whether the change from {@code oldTable} to {@code newTable} is a pure column rename:
-     * the two tables have the same number of columns, at every position the column type is unchanged
-     * and at exactly one position the column name differs. Used by the DDL parsers to classify a
-     * single-column rename as {@link KafkaJsonTableChangeType#RENAME_COLUMN}.
+     * the two tables have the same number of columns, at every position the column type is
+     * unchanged and at exactly one position the column name differs. Used by the DDL parsers to
+     * classify a single-column rename as {@link KafkaJsonTableChangeType#RENAME_COLUMN}.
      */
     public static boolean isPureColumnRename(Table oldTable, Table newTable) {
         List<Column> oldColumns = oldTable.columns();

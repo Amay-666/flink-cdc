@@ -109,7 +109,8 @@ class KafkaJsonFlatMessageParserTest {
     @Test
     void testMissingFieldsAreTolerated() {
         // A minimal message missing most fields must not fail parsing
-        KafkaJsonFlatMessage message = KafkaJsonFlatMessageParser.parse("{\"data\":[{\"id\":\"1\"}]}");
+        KafkaJsonFlatMessage message =
+                KafkaJsonFlatMessageParser.parse("{\"data\":[{\"id\":\"1\"}]}");
         assertEquals(0, message.getId());
         assertNull(message.getDatabase());
         assertNull(message.getTable());

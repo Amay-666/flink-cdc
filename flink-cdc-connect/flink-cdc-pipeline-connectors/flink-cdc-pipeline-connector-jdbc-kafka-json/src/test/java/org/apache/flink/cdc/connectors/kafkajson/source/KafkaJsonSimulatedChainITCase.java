@@ -44,15 +44,15 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Simulated-producer baseline for the MySQL chain: a real MySQL snapshot is read by the source, then
- * canal flatMessage JSON (INSERT/UPDATE/DELETE) is written to Kafka by a test-side producer and
- * consumed as the incremental stream.
+ * Simulated-producer baseline for the MySQL chain: a real MySQL snapshot is read by the source,
+ * then canal flatMessage JSON (INSERT/UPDATE/DELETE) is written to Kafka by a test-side producer
+ * and consumed as the incremental stream.
  *
  * <p>This is the deterministic reference for the {@link MySqlCanalChainITCase}: it exercises the
  * same wire format and the same snapshot-to-stream transition, without depending on canal-server's
- * startup timing. Messages are produced only <em>after</em> the snapshot events have been collected,
- * so every message survives the exactly-once boundary (empty topic at snapshot start → high
- * watermark {@code -1}).
+ * startup timing. Messages are produced only <em>after</em> the snapshot events have been
+ * collected, so every message survives the exactly-once boundary (empty topic at snapshot start →
+ * high watermark {@code -1}).
  */
 public class KafkaJsonSimulatedChainITCase extends KafkaJsonSourceTestBase {
 

@@ -102,7 +102,13 @@ class KafkaJsonRecordFactoryTest {
 
     private KafkaJsonSourceInfo sourceInfo(SnapshotRecord snapshot) {
         return new KafkaJsonSourceInfo(
-                dbzConfig, "test", "users", 1598752886000L, 1598752886000L, 1598752887000L, snapshot);
+                dbzConfig,
+                "test",
+                "users",
+                1598752886000L,
+                1598752886000L,
+                1598752887000L,
+                snapshot);
     }
 
     @Test
@@ -113,8 +119,14 @@ class KafkaJsonRecordFactoryTest {
 
         SourceRecord record =
                 factory.createRecord(
-                        table, null, data, Envelope.Operation.CREATE, sourceInfo(SnapshotRecord.FALSE),
-                        "test.users", 0, 100L);
+                        table,
+                        null,
+                        data,
+                        Envelope.Operation.CREATE,
+                        sourceInfo(SnapshotRecord.FALSE),
+                        "test.users",
+                        0,
+                        100L);
 
         // key struct contains only the primary key columns
         Struct key = (Struct) record.key();
@@ -122,7 +134,8 @@ class KafkaJsonRecordFactoryTest {
         assertEquals(1, key.schema().fields().size());
 
         // source partition / offset / topic
-        assertEquals(Collections.singletonMap("server", "canal_cdc_source"), record.sourcePartition());
+        assertEquals(
+                Collections.singletonMap("server", "canal_cdc_source"), record.sourcePartition());
         Map<String, ?> offset = record.sourceOffset();
         assertEquals("1598752886000", offset.get("eventTime"));
         assertEquals("0", offset.get("partition"));
@@ -142,15 +155,17 @@ class KafkaJsonRecordFactoryTest {
         assertEquals(Long.valueOf(millisOf("2020-08-13 15:00:00")), after.getInt64("created_at"));
         assertEquals(LocalDate.parse("2020-08-13").toEpochDay(), (long) after.getInt32("birth"));
         assertEquals(
-                Long.valueOf(io.debezium.connector.mysql.MySqlValueConverters.stringToDuration("15:03:02")
-                        .toNanos() / 1_000L),
+                Long.valueOf(
+                        io.debezium.connector.mysql.MySqlValueConverters.stringToDuration(
+                                                "15:03:02")
+                                        .toNanos()
+                                / 1_000L),
                 after.getInt64("login_time"));
         assertEquals((short) 1, after.getInt16("enabled"));
 
         // MySQL TIMESTAMP is emitted as an ISO instant string in the server zone
         String updatedAt = after.getString("updated_at");
-        assertEquals(
-                Instant.parse("2020-08-13T15:00:00Z"), Instant.parse(updatedAt));
+        assertEquals(Instant.parse("2020-08-13T15:00:00Z"), Instant.parse(updatedAt));
 
         // source struct
         Struct source = value.getStruct("source");
@@ -169,12 +184,24 @@ class KafkaJsonRecordFactoryTest {
 
         SourceRecord streamRecord =
                 factory.createRecord(
-                        table, null, data, Envelope.Operation.CREATE, sourceInfo(SnapshotRecord.FALSE),
-                        "test.users", 0, 100L);
+                        table,
+                        null,
+                        data,
+                        Envelope.Operation.CREATE,
+                        sourceInfo(SnapshotRecord.FALSE),
+                        "test.users",
+                        0,
+                        100L);
         SourceRecord snapshotRecord =
                 factory.createRecord(
-                        table, null, data, Envelope.Operation.READ, sourceInfo(SnapshotRecord.TRUE),
-                        "test.users", 0, 100L);
+                        table,
+                        null,
+                        data,
+                        Envelope.Operation.READ,
+                        sourceInfo(SnapshotRecord.TRUE),
+                        "test.users",
+                        0,
+                        100L);
 
         // identical value schema and identical after struct
         assertSame(streamRecord.valueSchema(), snapshotRecord.valueSchema());
@@ -184,10 +211,10 @@ class KafkaJsonRecordFactoryTest {
         // different op and snapshot flag
         assertEquals("c", ((Struct) streamRecord.value()).getString("op"));
         assertEquals("r", ((Struct) snapshotRecord.value()).getString("op"));
-        assertNull(
-                ((Struct) streamRecord.value()).getStruct("source").getString("snapshot"));
+        assertNull(((Struct) streamRecord.value()).getStruct("source").getString("snapshot"));
         assertEquals(
-                "true", ((Struct) snapshotRecord.value()).getStruct("source").getString("snapshot"));
+                "true",
+                ((Struct) snapshotRecord.value()).getStruct("source").getString("snapshot"));
     }
 
     @Test
@@ -244,8 +271,14 @@ class KafkaJsonRecordFactoryTest {
         Object[] data = factory.canalRowData(table, aliceRow());
         SourceRecord record =
                 factory.createRecord(
-                        table, null, data, Envelope.Operation.CREATE, sourceInfo(SnapshotRecord.FALSE),
-                        "test.users", 0, 100L);
+                        table,
+                        null,
+                        data,
+                        Envelope.Operation.CREATE,
+                        sourceInfo(SnapshotRecord.FALSE),
+                        "test.users",
+                        0,
+                        100L);
         assertNull(record.key());
         assertNull(record.keySchema());
     }

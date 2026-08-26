@@ -37,11 +37,11 @@ import java.util.stream.Collectors;
  *
  * <p>The current schema, when known, is seeded into the {@link Tables} instance so that {@code
  * ALTER} statements are applied on top of it; after {@code parse} the affected table is read back
- * from the same instance. The change type is inferred from the seed: a table that existed before and
- * is gone afterwards without any replacement was dropped, the same table present under another id
- * was renamed ({@link KafkaJsonTableChangeType#RENAME_TABLE}), a table that did not exist and now does
- * was created, anything else on a known table is an alter — or a single-column rename, when the two
- * schemas only differ in one column name.
+ * from the same instance. The change type is inferred from the seed: a table that existed before
+ * and is gone afterwards without any replacement was dropped, the same table present under another
+ * id was renamed ({@link KafkaJsonTableChangeType#RENAME_TABLE}), a table that did not exist and
+ * now does was created, anything else on a known table is an alter — or a single-column rename,
+ * when the two schemas only differ in one column name.
  */
 public class KafkaJsonDebeziumDdlParser implements KafkaJsonDdlParser {
 
@@ -68,7 +68,8 @@ public class KafkaJsonDebeziumDdlParser implements KafkaJsonDdlParser {
                 return KafkaJsonDdlParsedResult.create(tableId, parsed);
             }
             if (parsed == null) {
-                // The announced table is gone: either it was renamed to another table id or dropped.
+                // The announced table is gone: either it was renamed to another table id or
+                // dropped.
                 TableId renamedTo = findRenamedTable(tableId, tables.tableIds());
                 if (renamedTo != null) {
                     return KafkaJsonDdlParsedResult.renameTable(
@@ -96,10 +97,10 @@ public class KafkaJsonDebeziumDdlParser implements KafkaJsonDdlParser {
     }
 
     /**
-     * Returns the id of the table {@code tableId} was renamed to, or {@code null} when the announced
-     * table was dropped instead: a table id present after the parse but not among the seeded current
-     * schema. Only a single replacement is recognized (a statement renaming several tables at once
-     * falls back to a {@code DROP}).
+     * Returns the id of the table {@code tableId} was renamed to, or {@code null} when the
+     * announced table was dropped instead: a table id present after the parse but not among the
+     * seeded current schema. Only a single replacement is recognized (a statement renaming several
+     * tables at once falls back to a {@code DROP}).
      */
     @Nullable
     private static TableId findRenamedTable(TableId tableId, Set<TableId> tableIds) {

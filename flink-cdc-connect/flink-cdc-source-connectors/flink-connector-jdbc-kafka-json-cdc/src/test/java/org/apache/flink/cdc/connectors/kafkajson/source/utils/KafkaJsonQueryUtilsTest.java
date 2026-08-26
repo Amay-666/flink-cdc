@@ -55,8 +55,7 @@ class KafkaJsonQueryUtilsTest {
     @Test
     void testBuildSplitScanQueryFirstSplit() {
         String sql = KafkaJsonQueryUtils.buildSplitScanQuery(TABLE_ID, singleKey(), true, false);
-        assertEquals(
-                "SELECT * FROM `test`.`users` WHERE id <= ? AND NOT (id = ?)", sql);
+        assertEquals("SELECT * FROM `test`.`users` WHERE id <= ? AND NOT (id = ?)", sql);
     }
 
     @Test
@@ -74,8 +73,7 @@ class KafkaJsonQueryUtilsTest {
 
     @Test
     void testBuildSplitScanQueryCompositeKey() {
-        RowType compositeKey =
-                (RowType) ROW(FIELD("a", INT()), FIELD("b", INT())).getLogicalType();
+        RowType compositeKey = (RowType) ROW(FIELD("a", INT()), FIELD("b", INT())).getLogicalType();
         String sql = KafkaJsonQueryUtils.buildSplitScanQuery(TABLE_ID, compositeKey, false, false);
         assertEquals(
                 "SELECT * FROM `test`.`users` "

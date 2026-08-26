@@ -45,12 +45,12 @@ import java.util.Map;
  * source.process(new KafkaJsonRenameStateOperator()).sinkTo(yourSink);
  * }</pre>
  *
- * <p>Any per-table state the operator keeps (offsets, buffered records, an in-flight schema) must be
- * moved to the new table id when the source table is renamed; otherwise the state accumulated under
- * the old name would be orphaned. Here the state is a plain map to keep the example self-contained —
- * in a real job it would be a {@code MapState}/{@code ValueState} managed by the runtime (use a
- * {@code KeyedProcessFunction} keyed on the table id so the migration is a copy+delete of the keyed
- * entries).
+ * <p>Any per-table state the operator keeps (offsets, buffered records, an in-flight schema) must
+ * be moved to the new table id when the source table is renamed; otherwise the state accumulated
+ * under the old name would be orphaned. Here the state is a plain map to keep the example
+ * self-contained — in a real job it would be a {@code MapState}/{@code ValueState} managed by the
+ * runtime (use a {@code KeyedProcessFunction} keyed on the table id so the migration is a
+ * copy+delete of the keyed entries).
  */
 public class KafkaJsonRenameStateOperator extends ProcessFunction<Event, Event> {
 
