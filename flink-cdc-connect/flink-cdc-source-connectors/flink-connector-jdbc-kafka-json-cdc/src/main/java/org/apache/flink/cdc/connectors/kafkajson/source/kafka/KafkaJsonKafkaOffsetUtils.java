@@ -19,6 +19,9 @@ package org.apache.flink.cdc.connectors.kafkajson.source.kafka;
 
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.MessageFormat;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.DebeziumMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.DebeziumMessageParser;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonKafkaUtils;
 
@@ -68,20 +71,25 @@ public class KafkaJsonKafkaOffsetUtils {
         try (KafkaConsumer<String, String> consumer =
                 new KafkaConsumer<>(buildConsumerProps(sourceConfig))) {
             return queryCurrentOffset(
-                    consumer, sourceConfig.getKafkaTopics(), sourceConfig.getEventTime());
+                    consumer,
+                    sourceConfig.getKafkaTopics(),
+                    sourceConfig.getEventTime(),
+                    sourceConfig.getMessageFormat());
         }
     }
 
     /**
      * Returns the current position of the change-log stream using the given (reusable) consumer.
      *
-     * <p>For each partition the newest message is read and its canal event time (the configured
-     * {@code es}/{@code ts} field) is extracted from the message content — Kafka's own record
-     * timestamp is the producer send time, not the binlog execution time, so it can not be used as
-     * the offset ordering key.
+     * <p>For each partition the newest message is read and its event time for the configured mode is
+     * extracted from the message content — Kafka's own record timestamp is the producer send time,
+     * not the source change time, so it can not be used as the offset ordering key.
      */
     public static KafkaJsonOffset queryCurrentOffset(
-            KafkaConsumer<String, String> consumer, List<String> topics, EventTime eventTime) {
+            KafkaConsumer<String, String> consumer,
+            List<String> topics,
+            EventTime eventTime,
+            MessageFormat format) {
         List<TopicPartition> partitions = listPartitions(consumer, topics);
         if (partitions.isEmpty()) {
             return KafkaJsonOffset.INITIAL_OFFSET;
@@ -102,7 +110,7 @@ public class KafkaJsonKafkaOffsetUtils {
             ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(3000));
             for (ConsumerRecord<String, String> record : records) {
                 if (record.offset() == lastOffset) {
-                    long et = extractEventTime(record.value(), eventTime);
+                    long et = extractEventTime(record.value(), eventTime, format);
                     if (et >= 0) {
                         maxEventTime = Math.max(maxEventTime, et);
                         found = true;
@@ -122,17 +130,48 @@ public class KafkaJsonKafkaOffsetUtils {
         return new KafkaJsonOffset(maxEventTime, Integer.MAX_VALUE, Long.MAX_VALUE);
     }
 
-    /**
-     * Extracts the event time (millis) from a canal flatMessage JSON string. Returns {@code -1} if
-     * the field is absent or unparsable.
-     */
+    /** Extracts the event time (millis) of a canal flatMessage. Returns {@code -1} when absent. */
     public static long extractEventTime(String message, EventTime eventTime) {
+        return extractEventTime(message, eventTime, MessageFormat.CANAL);
+    }
+
+    /**
+     * Extracts the event time (millis) of a message for the configured {@link EventTime} mode and
+     * message format. Returns {@code -1} if the message is null/empty, unparsable, or carries no
+     * usable time.
+     */
+    public static long extractEventTime(
+            String message, EventTime eventTime, MessageFormat format) {
         if (message == null || message.isEmpty()) {
             return -1L;
         }
         try {
+            if (format == MessageFormat.DEBEZIUM) {
+                // single source of truth for the extraction semantics: the parser binds the message
+                // and getEventTimeValue applies the mode (source.ts_ms / payload.ts_ms / TSO)
+                DebeziumMessage dbz = new DebeziumMessageParser().parse(message);
+                if (dbz == null) {
+                    return -1L;
+                }
+                Long value = dbz.getEventTimeValue(eventTime);
+                return value == null ? -1L : value;
+            }
             JsonNode root = OBJECT_MAPPER.readTree(message);
-            String field = eventTime == EventTime.ES ? "es" : "ts";
+            String field;
+            switch (eventTime) {
+                case ES:
+                case TIDB_TSO:
+                    // A canal flatMessage carries no top-level TSO; the sampled watermark degrades
+                    // to es (the commit-time equivalent). TiDB+TIDB_TSO uses the TSO query path of
+                    // KafkaJsonTidbOffsetUtils instead of the Kafka sampling, so this branch is
+                    // only a fallback for exotic canal shapes.
+                    field = "es";
+                    break;
+                case TS:
+                default:
+                    field = "ts";
+                    break;
+            }
             JsonNode node = root.get(field);
             if (node == null || node.isNull()) {
                 return -1L;

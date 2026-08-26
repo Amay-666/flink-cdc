@@ -22,12 +22,15 @@ import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOp
 import org.apache.flink.cdc.connectors.kafkajson.source.schema.KafkaJsonSourceInfo;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTableUtils;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.debezium.connector.SnapshotRecord;
 import io.debezium.connector.mysql.MySqlConnectorConfig;
 import io.debezium.data.Envelope;
 import io.debezium.relational.Table;
 import io.debezium.relational.TableId;
 import org.apache.kafka.connect.source.SourceRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -37,10 +40,11 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Converts a canal flatMessage into the list of Debezium-shaped {@link SourceRecord}s.
+ * Converts a change-log message into the list of Debezium-shaped {@link SourceRecord}s, dispatching
+ * on the message format (see docs/DEBEZIUM_PLAN.md §S3).
  *
- * <p>canal batches the rows of a single DML statement into {@code data[]}/{@code old[]}; each row
- * becomes one {@link SourceRecord}:
+ * <p><b>canal flatMessage</b> — batches the rows of a single DML statement into {@code data[]}/
+ * {@code old[]}; each row becomes one {@link SourceRecord}:
  *
  * <ul>
  *   <li>{@code INSERT} → {@code op=c} with {@code after}=data row;
@@ -49,9 +53,16 @@ import java.util.Map;
  *   <li>other types ({@code GTID}/{@code SAVEPOINT}/…) and DDL messages produce no data records.
  * </ul>
  *
+ * <p><b>Debezium envelope</b> — a single typed {@code before}/{@code after} image per message, with
+ * the {@code op} already in Debezium's {@code c}/{@code u}/{@code d}/{@code r} coding; the table
+ * schema comes from the registered (JDBC) schema, so a table must be observed by the snapshot phase
+ * before its Debezium messages are consumed.
+ *
  * <p>DDL messages are forwarded to the schema-change pipeline (Phase 8) and therefore skipped here.
  */
 public class KafkaJsonRecordConverter {
+
+    private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonRecordConverter.class);
 
     private final KafkaJsonRecordFactory factory;
     private final EventTime eventTimeMode;
@@ -65,23 +76,37 @@ public class KafkaJsonRecordConverter {
     }
 
     /**
-     * Converts one flatMessage into the data records it carries.
+     * Returns the ordering event time (millis) of a message for the configured {@link EventTime}
+     * mode, or {@code -1} when the message carries no usable time. For a canal flatMessage it is
+     * the binlog execution time {@code es} / the canal send time {@code ts} (a canal flatMessage
+     * carries no TSO, so {@code TIDB_TSO} degrades to {@code es}, which canal-json already reports
+     * as the commit time); for a Debezium message it is {@code source.ts_ms} / {@code payload.ts_ms}
+     * / the decoded commit TSO.
+     */
+    public static long eventTime(KafkaJsonMessage message, EventTime eventTimeMode) {
+        Long value = message.getEventTimeValue(eventTimeMode);
+        return value == null ? -1L : value;
+    }
+
+    /**
+     * Converts one message into the data records it carries, dispatching on the message format.
      *
-     * @param message the parsed flatMessage (not a DDL message)
+     * @param message the parsed message (not a DDL message; those are routed to the schema-change
+     *     handler by the stream fetch task)
      * @param topic the Kafka topic the message was consumed from
      * @param partition the Kafka partition
      * @param kafkaOffset the Kafka partition-local offset
-     * @return the emitted records; possibly empty (e.g. for DDL or non-DML messages)
+     * @return the emitted records; possibly empty (e.g. for DDL, watermarks or non-DML messages)
      */
-    /**
-     * Returns the ordering event time (millis) of a flatMessage for the configured {@link
-     * EventTime} mode: the binlog execution time {@code es} or the canal send time {@code ts}.
-     */
-    public static long eventTime(KafkaJsonFlatMessage message, EventTime eventTimeMode) {
-        return eventTimeMode == EventTime.ES ? message.getEs() : message.getTs();
+    public List<SourceRecord> convert(
+            KafkaJsonMessage message, String topic, int partition, long kafkaOffset) {
+        if (message instanceof DebeziumMessage) {
+            return convertDebezium((DebeziumMessage) message, topic, partition, kafkaOffset);
+        }
+        return convertFlat((KafkaJsonFlatMessage) message, topic, partition, kafkaOffset);
     }
 
-    public List<SourceRecord> convert(
+    private List<SourceRecord> convertFlat(
             KafkaJsonFlatMessage message, String topic, int partition, long kafkaOffset) {
         if (message.isDdl()) {
             return Collections.emptyList();
@@ -106,6 +131,79 @@ public class KafkaJsonRecordConverter {
             default:
                 // GTID / XACOMPLETE / SAVEPOINT / ... : no data rows
                 return Collections.emptyList();
+        }
+    }
+
+    /**
+     * Converts one Debezium envelope message into its single data record. The {@code op} is already
+     * in Debezium coding; the typed {@code before}/{@code after} images are converted against the
+     * registered table schema.
+     */
+    private List<SourceRecord> convertDebezium(
+            DebeziumMessage message, String topic, int partition, long kafkaOffset) {
+        if (message.getMessageType() != KafkaJsonMessage.MessageType.DML) {
+            // DDL messages are routed to the schema-change handler by the stream fetch task;
+            // watermarks ({@code op=m}) and unknown ops carry no rows
+            return Collections.emptyList();
+        }
+        DebeziumMessage.Payload payload = message.getPayload();
+        if (payload == null) {
+            return Collections.emptyList();
+        }
+        Envelope.Operation op = toEnvelopeOp(payload.getOp());
+        if (op == null) {
+            return Collections.emptyList();
+        }
+        Table table = resolveTable(message);
+        if (table == null) {
+            LOG.warn(
+                    "No registered schema for Debezium DML on {}.{}; dropping the message (its "
+                            + "table must be observed by the snapshot phase first)",
+                    message.getDatabase(),
+                    message.getTable());
+            return Collections.emptyList();
+        }
+        long eventTime = eventTime(message, eventTimeMode);
+        KafkaJsonSourceInfo sourceInfo =
+                new KafkaJsonSourceInfo(
+                        dbzConfig,
+                        message.getDatabase(),
+                        message.getTable(),
+                        eventTime,
+                        message.getEs(),
+                        message.getTs(),
+                        SnapshotRecord.FALSE);
+        JsonNode before = payload.getBefore();
+        JsonNode after = payload.getAfter();
+        Object[] beforeData = before == null ? null : factory.debeziumRowData(table, before);
+        Object[] afterData = after == null ? null : factory.debeziumRowData(table, after);
+        return Collections.singletonList(
+                factory.createRecord(
+                        table,
+                        beforeData,
+                        afterData,
+                        op,
+                        sourceInfo,
+                        topic,
+                        partition,
+                        kafkaOffset));
+    }
+
+    private static Envelope.Operation toEnvelopeOp(String op) {
+        if (op == null) {
+            return null;
+        }
+        switch (op) {
+            case "c":
+                return Envelope.Operation.CREATE;
+            case "r":
+                return Envelope.Operation.READ;
+            case "u":
+                return Envelope.Operation.UPDATE;
+            case "d":
+                return Envelope.Operation.DELETE;
+            default:
+                return null;
         }
     }
 
@@ -218,5 +316,19 @@ public class KafkaJsonRecordConverter {
             factory.registerTable(table);
         }
         return table;
+    }
+
+    /**
+     * Returns the registered (JDBC) schema of a Debezium message's table. A Debezium message carries
+     * no {@code mysqlType}/{@code sqlType}, so there is no fallback build: the table must have been
+     * registered by the snapshot phase.
+     */
+    private Table resolveTable(DebeziumMessage message) {
+        TableId tableId =
+                new TableId(
+                        message.getDatabase() == null ? "" : message.getDatabase(),
+                        null,
+                        message.getTable());
+        return factory.tableFor(tableId);
     }
 }

@@ -99,7 +99,10 @@ public class KafkaJsonSourceOptions extends JdbcSourceOptions {
                     .stringType()
                     .defaultValue(EventTime.ES.toString().toLowerCase(Locale.ROOT))
                     .withDescription(
-                            "The timestamp used as the offset event time for canal messages: 'es' (binlog execution time, default) or 'ts' (canal send time).");
+                            "The timestamp used as the offset event time of a message: 'es' (source change "
+                                    + "time, default; binlog execution time for canal, source.ts_ms for debezium), "
+                                    + "'ts' (producer send time; canal ts, debezium ts_ms), or 'tidb-tso' (TiDB "
+                                    + "commit TSO for the TiCDC debezium format).");
 
     /**
      * How to handle the boundary when a stream message timestamp equals the snapshot high
@@ -150,10 +153,17 @@ public class KafkaJsonSourceOptions extends JdbcSourceOptions {
         TIDB
     }
 
-    /** Timestamp field of a canal message used as the offset event time. */
+    /**
+     * Timestamp field of a message used as the offset event time. For canal messages {@code ES} is
+     * the binlog execution time and {@code TS} the canal send time; for debezium messages {@code ES}
+     * is {@code payload.source.ts_ms} (source change time) and {@code TS} {@code payload.ts_ms}
+     * (connector processing time); {@code TIDB_TSO} is the TiDB commit TSO ({@code
+     * payload.source.commit_ts}, right-shifted to physical millis) of the TiCDC debezium format.
+     */
     public enum EventTime {
         ES,
-        TS
+        TS,
+        TIDB_TSO
     }
 
     /** Boundary handling mode of the full->incremental switch. */

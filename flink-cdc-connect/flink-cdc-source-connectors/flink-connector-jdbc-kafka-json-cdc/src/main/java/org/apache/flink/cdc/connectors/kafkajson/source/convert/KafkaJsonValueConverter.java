@@ -20,12 +20,16 @@ package org.apache.flink.cdc.connectors.kafkajson.source.convert;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTableUtils;
 import org.apache.flink.util.FlinkRuntimeException;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.debezium.connector.mysql.MySqlValueConverters;
 import io.debezium.relational.Column;
 
 import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.Timestamp;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
@@ -37,7 +41,8 @@ import java.util.regex.Pattern;
 
 /**
  * Converts the {@code String} value delivered by canal into the Java object that the Debezium value
- * converter of the corresponding column expects.
+ * converter of the corresponding column expects. For the Debezium message format the typed JSON
+ * value is converted by {@link #convertFromJson(Column, JsonNode)} (see docs/DEBEZIUM_PLAN.md §S3).
  *
  * <p>canal always renders column values as {@code String}s, while the {@code TableSchemaBuilder}
  * converters (driven by {@link MySqlValueConverters}) accept different Java types per column type:
@@ -119,6 +124,71 @@ public class KafkaJsonValueConverter {
         // All remaining types (signed numerics, decimal, float/double, char/text, JSON, ENUM, SET,
         // YEAR) accept the plain String
         return value;
+    }
+
+    /**
+     * Converts a typed JSON value (the {@code before}/{@code after} image of a Debezium or TiCDC
+     * message) for the given column.
+     *
+     * <p>Debezium delivers values as typed JSON (numbers, booleans, base64 text for binary), so this
+     * is the counterpart of {@link #convert(Column, String)} for the Debezium path. Two encodings
+     * are handled:
+     *
+     * <ul>
+     *   <li>the Debezium temporal precision modes, which encode {@code DATE}/{@code TIME}/{@code
+     *       DATETIME}/{@code TIMESTAMP} as epoch numbers (days / millis / micros / millis) that the
+     *       canal {@code String} converter cannot parse — converted here under the default {@code
+     *       adaptive} assumptions;
+     *   <li>the textual output of TiCDC (and of Debezium with {@code temporal.precision.mode=connect}
+     *       and {@code decimal.handling.mode=string}), which is already in the MySQL text form the
+     *       canal converter parses and is passed through unchanged.
+     * </ul>
+     *
+     * <p>DECIMAL columns must NOT be decoded with Debezium {@code decimal.handling.mode=precise}:
+     * that emits a base64-encoded byte array, which this converter would try to parse as a decimal
+     * text and fail. Use {@code double}/{@code string} (as TiCDC does) or the default {@code
+     * string}-shaped output.
+     */
+    public Object convertFromJson(Column column, JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (node.isBoolean()) {
+            // BOOLEAN / BIT(1) converters accept a Boolean directly
+            return node.asBoolean();
+        }
+        if (node.isNumber()) {
+            String typeName = column.typeName().toUpperCase(Locale.ROOT);
+            if (!"YEAR".equals(typeName)) {
+                // YEAR is jdbcType DATE but must NOT be treated as epoch days (the canal path
+                // guards it too); every other numeric temporal is a Debezium epoch encoding
+                switch (column.jdbcType()) {
+                    case java.sql.Types.DATE:
+                        // Debezium adaptive: days since the epoch
+                        return Date.valueOf(LocalDate.ofEpochDay(node.asLong()));
+                    case java.sql.Types.TIME:
+                        // Debezium adaptive: millis since midnight
+                        return Duration.ofMillis(node.asLong());
+                    case java.sql.Types.TIMESTAMP: // MySQL DATETIME
+                        // Debezium adaptive: micros since the epoch
+                        return new Timestamp(node.asLong() / 1000L);
+                    case java.sql.Types.TIMESTAMP_WITH_TIMEZONE: // MySQL TIMESTAMP
+                        // Debezium adaptive: millis since the epoch, rendered in the server zone
+                        return OffsetDateTime.ofInstant(Instant.ofEpochMilli(node.asLong()), serverZoneId);
+                    default:
+                        break;
+                }
+            }
+            // numeric text parses back through the canal converter (e.g. a DECIMAL rendered as a
+            // float64, or a BOOLEAN rendered as 0/1)
+            return convert(column, node.asText());
+        }
+        if (node.isContainerNode()) {
+            // a JSON column may arrive as nested JSON instead of a JSON text string
+            return convert(column, node.toString());
+        }
+        // text (including base64-encoded binary and MySQL-formatted dates/times/decimals)
+        return convert(column, node.asText());
     }
 
     private Object toBit(Column column, String value) {

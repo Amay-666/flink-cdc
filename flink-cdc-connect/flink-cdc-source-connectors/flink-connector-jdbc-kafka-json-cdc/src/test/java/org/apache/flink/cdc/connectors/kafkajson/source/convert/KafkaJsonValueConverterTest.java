@@ -19,11 +19,14 @@ package org.apache.flink.cdc.connectors.kafkajson.source.convert;
 
 import org.apache.flink.util.FlinkRuntimeException;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import io.debezium.relational.Column;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Types;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
@@ -271,6 +274,144 @@ class KafkaJsonValueConverterTest {
                 converter.convert(
                         column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP", 6),
                         "2020-02-29 23:59:59.999999"));
+    }
+
+    @Test
+    void testConvertFromJsonNull() {
+        // both an absent field (Java null) and an explicit JSON null bind as no value
+        assertNull(converter.convertFromJson(column(Types.INTEGER, "INT", 11), null));
+        assertNull(
+                converter.convertFromJson(
+                        column(Types.INTEGER, "INT", 11), JsonNodeFactory.instance.nullNode()));
+    }
+
+    @Test
+    void testConvertFromJsonBoolean() {
+        assertEquals(
+                Boolean.TRUE,
+                converter.convertFromJson(
+                        column(Types.BOOLEAN, "BOOLEAN", 1), JsonNodeFactory.instance.booleanNode(true)));
+        assertEquals(
+                Boolean.FALSE,
+                converter.convertFromJson(
+                        column(Types.BIT, "BIT", 1), JsonNodeFactory.instance.booleanNode(false)));
+    }
+
+    @Test
+    void testConvertFromJsonNumericPassThrough() {
+        // numeric values render back to their text form, which the canal converter parses
+        assertEquals(
+                "123",
+                converter.convertFromJson(
+                        column(Types.INTEGER, "INT", 11), JsonNodeFactory.instance.numberNode(123)));
+        assertEquals(
+                "9223372036854775807",
+                converter.convertFromJson(
+                        column(Types.BIGINT, "BIGINT", 20),
+                        JsonNodeFactory.instance.numberNode(Long.MAX_VALUE)));
+        // a DECIMAL rendered as a float64 (decimal.handling.mode=double / TiCDC) parses back
+        assertEquals(
+                "3.14",
+                converter.convertFromJson(
+                        column(Types.DECIMAL, "DECIMAL", 10),
+                        JsonNodeFactory.instance.numberNode(3.14d)));
+        // a numeric BOOLEAN (0/1) goes through the Number branch
+        assertEquals(
+                1L,
+                converter.convertFromJson(
+                        column(Types.BOOLEAN, "BOOLEAN", 1), JsonNodeFactory.instance.numberNode(1)));
+    }
+
+    @Test
+    void testConvertFromJsonEpochTemporals() {
+        // Debezium adaptive precision mode encodes temporals as epoch numbers
+        long epochDay = LocalDate.of(2020, 8, 13).toEpochDay();
+        assertEquals(
+                java.sql.Date.valueOf("2020-08-13"),
+                converter.convertFromJson(
+                        column(Types.DATE, "DATE", 10), JsonNodeFactory.instance.numberNode(epochDay)));
+
+        Duration expectedTime = Duration.ofHours(15).plusMinutes(3).plusSeconds(2);
+        assertEquals(
+                expectedTime,
+                converter.convertFromJson(
+                        column(Types.TIME, "TIME", 0),
+                        JsonNodeFactory.instance.numberNode(expectedTime.toMillis())));
+
+        java.sql.Timestamp expectedDatetime = java.sql.Timestamp.valueOf("2020-08-13 15:03:02");
+        assertEquals(
+                expectedDatetime,
+                converter.convertFromJson(
+                        column(Types.TIMESTAMP, "DATETIME", 6),
+                        JsonNodeFactory.instance.numberNode(expectedDatetime.getTime() * 1000L)));
+
+        long expectedTimestampMillis =
+                LocalDateTime.parse("2020-08-13T15:03:02").toInstant(ZoneOffset.UTC).toEpochMilli();
+        assertEquals(
+                OffsetDateTime.of(LocalDateTime.parse("2020-08-13T15:03:02"), ZoneOffset.UTC),
+                converter.convertFromJson(
+                        column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP", 6),
+                        JsonNodeFactory.instance.numberNode(expectedTimestampMillis)));
+    }
+
+    @Test
+    void testConvertFromJsonTextualPassThrough() {
+        // TiCDC (and Debezium with connect precision / string decimals) emits MySQL-formatted text
+        assertEquals(
+                java.sql.Date.valueOf("2020-08-13"),
+                converter.convertFromJson(
+                        column(Types.DATE, "DATE", 10),
+                        JsonNodeFactory.instance.textNode("2020-08-13")));
+        assertEquals(
+                java.sql.Timestamp.valueOf("2020-08-13 15:03:02.5"),
+                converter.convertFromJson(
+                        column(Types.TIMESTAMP, "DATETIME", 6),
+                        JsonNodeFactory.instance.textNode("2020-08-13 15:03:02.5")));
+        assertEquals(
+                Duration.ofHours(15).plusMinutes(3).plusSeconds(2),
+                converter.convertFromJson(
+                        column(Types.TIME, "TIME", 0),
+                        JsonNodeFactory.instance.textNode("15:03:02")));
+        assertEquals(
+                "1234567890.123",
+                converter.convertFromJson(
+                        column(Types.DECIMAL, "DECIMAL", 30),
+                        JsonNodeFactory.instance.textNode("1234567890.123")));
+        assertEquals(
+                "hello",
+                converter.convertFromJson(
+                        column(Types.VARCHAR, "VARCHAR", 255),
+                        JsonNodeFactory.instance.textNode("hello")));
+    }
+
+    @Test
+    void testConvertFromJsonBinaryAndJsonColumn() {
+        byte[] expected = new byte[] {1, 2, 3};
+        assertArrayEquals(
+                expected,
+                (byte[])
+                        converter.convertFromJson(
+                                column(Types.BINARY, "BINARY", 4),
+                                JsonNodeFactory.instance.textNode(
+                                        java.util.Base64.getEncoder().encodeToString(expected))));
+        // a JSON column may arrive as nested JSON instead of a JSON text
+        JsonNode objectNode =
+                JsonNodeFactory.instance
+                        .objectNode()
+                        .put("a", 1)
+                        .put("b", "x");
+        assertEquals(
+                "{\"a\":1,\"b\":\"x\"}",
+                converter.convertFromJson(column(Types.LONGVARCHAR, "JSON", 65535), objectNode));
+    }
+
+    @Test
+    void testConvertFromJsonYearIsNotEpochDate() {
+        // YEAR is jdbcType DATE but a numeric YEAR is a plain year, not epoch days
+        assertEquals(
+                "2020",
+                converter.convertFromJson(
+                        column(Types.DATE, "YEAR", 4), JsonNodeFactory.instance.numberNode(2020)));
     }
 
     @Test

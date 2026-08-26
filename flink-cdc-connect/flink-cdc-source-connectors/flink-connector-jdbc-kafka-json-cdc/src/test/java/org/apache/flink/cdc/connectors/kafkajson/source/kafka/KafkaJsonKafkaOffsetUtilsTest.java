@@ -18,6 +18,7 @@
 package org.apache.flink.cdc.connectors.kafkajson.source.kafka;
 
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.MessageFormat;
 
 import org.junit.jupiter.api.Test;
 
@@ -58,5 +59,79 @@ class KafkaJsonKafkaOffsetUtilsTest {
         assertEquals(-1L, KafkaJsonKafkaOffsetUtils.extractEventTime("not-a-json", EventTime.ES));
         assertEquals(-1L, KafkaJsonKafkaOffsetUtils.extractEventTime(null, EventTime.TS));
         assertEquals(-1L, KafkaJsonKafkaOffsetUtils.extractEventTime("", EventTime.ES));
+    }
+
+    @Test
+    void testDebeziumExtractSourceAndProcessingTime() {
+        // ES -> payload.source.ts_ms (source change time), TS -> payload.ts_ms (processing time)
+        String envelope =
+                "{\"schema\":{\"type\":\"struct\",\"fields\":[]},\"payload\":{"
+                        + "\"before\":null,\"after\":{\"id\":1},"
+                        + "\"source\":{\"connector\":\"mysql\",\"ts_ms\":1598752886000,"
+                        + "\"db\":\"test\",\"table\":\"users\"},"
+                        + "\"op\":\"c\",\"ts_ms\":1598752887000}}";
+        assertEquals(
+                1598752886000L,
+                KafkaJsonKafkaOffsetUtils.extractEventTime(
+                        envelope, EventTime.ES, MessageFormat.DEBEZIUM));
+        assertEquals(
+                1598752887000L,
+                KafkaJsonKafkaOffsetUtils.extractEventTime(
+                        envelope, EventTime.TS, MessageFormat.DEBEZIUM));
+    }
+
+    @Test
+    void testDebeziumPayloadOnlyShape() {
+        // schema-include=false: the payload fields sit at the top level
+        String payloadOnly =
+                "{\"after\":{\"id\":1},\"source\":{\"ts_ms\":100,\"db\":\"test\","
+                        + "\"table\":\"users\"},\"op\":\"u\",\"ts_ms\":200}";
+        assertEquals(
+                100L,
+                KafkaJsonKafkaOffsetUtils.extractEventTime(
+                        payloadOnly, EventTime.ES, MessageFormat.DEBEZIUM));
+        assertEquals(
+                200L,
+                KafkaJsonKafkaOffsetUtils.extractEventTime(
+                        payloadOnly, EventTime.TS, MessageFormat.DEBEZIUM));
+    }
+
+    @Test
+    void testDebeziumEsFallsBackToProcessingTime() {
+        // a message without source.ts_ms (e.g. a bare schema-change record) uses payload.ts_ms
+        String noSourceTime =
+                "{\"payload\":{\"ddl\":\"ALTER TABLE `u` ADD COLUMN c INT\","
+                        + "\"databaseName\":\"test\",\"tableChanges\":[],\"ts_ms\":200}}";
+        assertEquals(
+                200L,
+                KafkaJsonKafkaOffsetUtils.extractEventTime(
+                        noSourceTime, EventTime.ES, MessageFormat.DEBEZIUM));
+    }
+
+    @Test
+    void testDebeziumTidbCommitTso() {
+        long commitTs = 4398046511104L; // 16777216 ms << 18
+        String ticdc =
+                "{\"payload\":{\"after\":{\"id\":1},"
+                        + "\"source\":{\"connector\":\"tidb\",\"commit_ts\":" + commitTs + ","
+                        + "\"cluster_id\":\"c1\"},\"op\":\"c\",\"ts_ms\":200}}";
+        assertEquals(
+                16777216L,
+                KafkaJsonKafkaOffsetUtils.extractEventTime(
+                        ticdc, EventTime.TIDB_TSO, MessageFormat.DEBEZIUM));
+    }
+
+    @Test
+    void testDebeziumTombstoneAndBlank() {
+        assertEquals(
+                -1L,
+                KafkaJsonKafkaOffsetUtils.extractEventTime(
+                        "{\"schema\":{\"type\":\"struct\"},\"payload\":null}",
+                        EventTime.ES,
+                        MessageFormat.DEBEZIUM));
+        assertEquals(
+                -1L,
+                KafkaJsonKafkaOffsetUtils.extractEventTime(
+                        "not-a-json", EventTime.ES, MessageFormat.DEBEZIUM));
     }
 }

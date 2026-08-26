@@ -25,8 +25,10 @@ import org.apache.flink.cdc.connectors.base.source.meta.wartermark.WatermarkKind
 import org.apache.flink.cdc.connectors.base.source.reader.external.FetchTask;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.handler.KafkaJsonSchemaChangeHandler;
-import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonFlatMessage;
-import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonFlatMessageParser;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonMessage.MessageType;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonMessageParser;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonParserFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonRecordConverter;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.util.FlinkRuntimeException;
@@ -55,13 +57,14 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * The stream fetch task of the Canal source: consumes the change-log messages written by canal to
- * Kafka and converts them into the Debezium-shaped {@link SourceRecord}s that are enqueued into the
- * shared {@link io.debezium.connector.base.ChangeEventQueue}.
+ * The stream fetch task of the Kafka-json source: consumes the change-log messages written by canal
+ * (or a Debezium / TiCDC connector) to Kafka and converts them into the Debezium-shaped {@link
+ * SourceRecord}s that are enqueued into the shared {@link io.debezium.connector.base.ChangeEventQueue}.
  *
  * <p>The reader consumes from all partitions of the configured topics (manually assigned, not group
- * managed). Each partition is seeked to the first message whose canal event time ({@code es}/{@code
- * ts}) is at or after the stream split's starting offset — the same conservative lower bound that
+ * managed). Each partition is seeked to the first message whose event time (canal {@code es}/{@code
+ * ts}, or Debezium {@code source.ts_ms}/{@code payload.ts_ms} for the configured {@code EventTime}
+ * mode) is at or after the stream split's starting offset — the same conservative lower bound that
  * {@link KafkaJsonOffsetSupplier} computed during the snapshot phase, so no change is skipped at
  * the full-&gt;incremental switch.
  *
@@ -130,6 +133,9 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
     /** Applies the DDL messages to the shared schema; built once per execute. */
     private volatile KafkaJsonSchemaChangeHandler schemaChangeHandler;
 
+    /** Parses the Kafka messages into the message abstraction; selected once per message format. */
+    private volatile KafkaJsonMessageParser messageParser;
+
     /**
      * The finished snapshot splits of the stream split, indexed by table. Each split carries the
      * primary-key range and the high watermark of the bounded backfill that already replayed it, so
@@ -176,6 +182,7 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                 (KafkaJsonSourceFetchTaskContext) context;
         KafkaJsonSourceConfig sourceConfig = sourceFetchContext.getSourceConfig();
         this.schemaChangeHandler = new KafkaJsonSchemaChangeHandler(sourceConfig);
+        this.messageParser = KafkaJsonParserFactory.create(sourceConfig.getMessageFormat());
         taskRunning = true;
         try {
             this.consumer = sourceFetchContext.getKafkaConsumer();
@@ -229,10 +236,11 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
             if (stopped) {
                 break;
             }
-            KafkaJsonFlatMessage message = KafkaJsonFlatMessageParser.parse(record.value());
+            KafkaJsonMessage message = messageParser.parse(record.value());
             if (message == null) {
                 LOG.warn(
-                        "Ignoring unparsable canal message at {}-{}@{}",
+                        "Ignoring unparsable {} message at {}-{}@{}",
+                        sourceFetchContext.getSourceConfig().getMessageFormat(),
                         record.topic(),
                         record.partition(),
                         record.offset());
@@ -288,7 +296,7 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                 }
             }
 
-            if (message.isDdl()) {
+            if (message.getMessageType() == MessageType.DDL) {
                 // DDL: apply the schema change to the shared schema and (when configured) emit the
                 // schema-change record; no data record is produced
                 handleDdlMessage(sourceFetchContext, message, lastOffset);
@@ -374,7 +382,7 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
      */
     private void handleDdlMessage(
             KafkaJsonSourceFetchTaskContext sourceFetchContext,
-            KafkaJsonFlatMessage message,
+            KafkaJsonMessage message,
             KafkaJsonOffset offset)
             throws IOException, InterruptedException {
         KafkaJsonSchemaChangeHandler handler = schemaChangeHandler;

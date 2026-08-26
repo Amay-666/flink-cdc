@@ -24,6 +24,7 @@ import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonPartitio
 import org.apache.flink.cdc.connectors.kafkajson.source.schema.KafkaJsonSourceInfo;
 import org.apache.flink.cdc.connectors.kafkajson.source.schema.KafkaJsonSourceInfoStructMaker;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.debezium.connector.mysql.MySqlConnectorConfig;
 import io.debezium.connector.mysql.MySqlValueConverters;
 import io.debezium.data.Envelope;
@@ -153,6 +154,21 @@ public class KafkaJsonRecordFactory implements Serializable {
         for (int i = 0; i < columns.size(); i++) {
             Column column = columns.get(i);
             data[i] = valueConverter.convert(column, row.get(column.name()));
+        }
+        return data;
+    }
+
+    /**
+     * Converts a Debezium ({@code before}/{@code after}) image ({@code column name -> typed JSON
+     * value}) into the typed column-data array expected by {@link TableSchema#valueFromColumnData}.
+     * Values are converted via {@link KafkaJsonValueConverter#convertFromJson(Column, JsonNode)}.
+     */
+    public Object[] debeziumRowData(Table table, JsonNode row) {
+        List<Column> columns = table.columns();
+        Object[] data = new Object[columns.size()];
+        for (int i = 0; i < columns.size(); i++) {
+            Column column = columns.get(i);
+            data[i] = valueConverter.convertFromJson(column, row.get(column.name()));
         }
         return data;
     }

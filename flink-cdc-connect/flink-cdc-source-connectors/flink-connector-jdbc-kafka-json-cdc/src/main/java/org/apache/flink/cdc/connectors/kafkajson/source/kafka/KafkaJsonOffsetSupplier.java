@@ -67,7 +67,10 @@ public class KafkaJsonOffsetSupplier implements AutoCloseable {
      */
     public KafkaJsonOffset current() {
         return KafkaJsonKafkaOffsetUtils.queryCurrentOffset(
-                consumer, sourceConfig.getKafkaTopics(), sourceConfig.getEventTime());
+                consumer,
+                sourceConfig.getKafkaTopics(),
+                sourceConfig.getEventTime(),
+                sourceConfig.getMessageFormat());
     }
 
     @Override

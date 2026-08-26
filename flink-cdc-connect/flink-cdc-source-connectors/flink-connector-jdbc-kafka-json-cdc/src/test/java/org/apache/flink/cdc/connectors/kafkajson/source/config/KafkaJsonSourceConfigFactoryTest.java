@@ -88,22 +88,17 @@ class KafkaJsonSourceConfigFactoryTest {
     }
 
     /**
-     * The extension seam fails fast at job setup: a declared-but-unimplemented message format
-     * ({@code scan.message.format=debezium}) must not build a config that later fails deep inside
-     * the read pipeline.
+     * The 'debezium' message format (Debezium / TiCDC envelopes, see docs/DEBEZIUM_PLAN.md §S3) is
+     * implemented since S3 and must build a config normally.
      */
     @Test
-    void testUnimplementedMessageFormatFailsFast() {
-        IllegalArgumentException e =
-                assertThrows(
-                        IllegalArgumentException.class,
-                        () ->
-                                buildFactory()
-                                        .messageFormat(
-                                                KafkaJsonSourceOptions.MessageFormat.DEBEZIUM)
-                                        .create(0));
-        assertEquals(true, e.getMessage().contains("scan.message.format"));
-        assertEquals(true, e.getMessage().contains("not implemented"));
+    void testDebeziumMessageFormatIsAccepted() {
+        KafkaJsonSourceConfig config =
+                buildFactory()
+                        .messageFormat(KafkaJsonSourceOptions.MessageFormat.DEBEZIUM)
+                        .create(0);
+        assertEquals(KafkaJsonSourceOptions.MessageFormat.DEBEZIUM, config.getMessageFormat());
+        assertEquals("com.mysql.cj.jdbc.Driver", config.getDriverClassName());
     }
 
     /**

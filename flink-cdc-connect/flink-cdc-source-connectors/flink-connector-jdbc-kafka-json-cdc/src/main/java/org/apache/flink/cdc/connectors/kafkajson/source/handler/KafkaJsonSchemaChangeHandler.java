@@ -25,7 +25,9 @@ import org.apache.flink.cdc.connectors.kafkajson.source.ddl.KafkaJsonDebeziumDdl
 import org.apache.flink.cdc.connectors.kafkajson.source.ddl.KafkaJsonDruidDdlParser;
 import org.apache.flink.cdc.connectors.kafkajson.source.ddl.KafkaJsonTableChangeType;
 import org.apache.flink.cdc.connectors.kafkajson.source.fetch.KafkaJsonSourceFetchTaskContext;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.DebeziumMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonFlatMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonPartition;
 import org.apache.flink.cdc.connectors.kafkajson.source.schema.KafkaJsonSourceInfo;
@@ -120,12 +122,12 @@ public class KafkaJsonSchemaChangeHandler {
      * Applies the DDL of the message to the shared schema and enqueues the schema-change record.
      *
      * @param context the fetch task context (shared schema + queue)
-     * @param message the canal DDL message
+     * @param message the DDL message (canal flatMessage or Debezium schema-change record)
      * @param offset the stream position of the message
      */
     public void handle(
             KafkaJsonSourceFetchTaskContext context,
-            KafkaJsonFlatMessage message,
+            KafkaJsonMessage message,
             KafkaJsonOffset offset)
             throws IOException, InterruptedException {
         String sql = message.getSql();
@@ -170,9 +172,19 @@ public class KafkaJsonSchemaChangeHandler {
         }
     }
 
+    /** The {@code es}/{@code ts} event times of a message, per format (Debezium has neither field). */
+    private static long[] eventTimesOf(KafkaJsonMessage message) {
+        if (message instanceof DebeziumMessage) {
+            DebeziumMessage dbz = (DebeziumMessage) message;
+            return new long[] {dbz.getEs(), dbz.getTs()};
+        }
+        KafkaJsonFlatMessage flat = (KafkaJsonFlatMessage) message;
+        return new long[] {flat.getEs(), flat.getTs()};
+    }
+
     private void enqueueSchemaChange(
             KafkaJsonSourceFetchTaskContext context,
-            KafkaJsonFlatMessage message,
+            KafkaJsonMessage message,
             KafkaJsonOffset offset,
             KafkaJsonDdlParsedResult result)
             throws IOException, InterruptedException {
@@ -228,14 +240,15 @@ public class KafkaJsonSchemaChangeHandler {
 
         Map<String, Object> source = new HashMap<>();
         source.put(AbstractSourceInfo.DATABASE_NAME_KEY, message.getDatabase());
+        long[] eventTimes = eventTimesOf(message);
         KafkaJsonSourceInfo sourceInfo =
                 new KafkaJsonSourceInfo(
                         dbzConfig,
                         message.getDatabase(),
                         message.getTable(),
                         offset.getEventTime(),
-                        message.getEs(),
-                        message.getTs(),
+                        eventTimes[0],
+                        eventTimes[1],
                         SnapshotRecord.FALSE);
         Struct sourceStruct = sourceInfoStructMaker.struct(sourceInfo);
 

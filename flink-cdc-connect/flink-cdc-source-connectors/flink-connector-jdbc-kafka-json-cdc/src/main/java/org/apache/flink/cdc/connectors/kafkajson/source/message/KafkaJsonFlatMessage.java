@@ -17,12 +17,14 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.message;
 
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
+
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import javax.annotation.Nullable;
 
-import java.io.Serializable;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -33,9 +35,14 @@ import java.util.Map;
  * {@code after} image, or the {@code before} image for {@code DELETE}) and {@link #getOld()} (the
  * {@code before} image for {@code UPDATE}).
  *
+ * <p>Implements the {@link KafkaJsonMessage} abstraction for the canal format. Note that {@link
+ * #getDatabase()} / {@link #getTable()} return the raw field (which canal always fills, possibly
+ * {@code ""}); the empty-string → {@code null} normalization is a {@code DebeziumMessage} concern,
+ * whose {@code source} object may be absent entirely.
+ *
  * <p>See https://github.com/alibaba/canal/wiki/ClientExample for the canonical JSON layout.
  */
-public class KafkaJsonFlatMessage implements Serializable {
+public class KafkaJsonFlatMessage extends KafkaJsonMessage {
 
     private static final long serialVersionUID = 1L;
 
@@ -84,6 +91,7 @@ public class KafkaJsonFlatMessage implements Serializable {
         this.id = id;
     }
 
+    @Override
     @Nullable
     public String getDatabase() {
         return database;
@@ -93,6 +101,7 @@ public class KafkaJsonFlatMessage implements Serializable {
         this.database = database;
     }
 
+    @Override
     @Nullable
     public String getTable() {
         return table;
@@ -144,6 +153,7 @@ public class KafkaJsonFlatMessage implements Serializable {
         this.ts = ts;
     }
 
+    @Override
     @Nullable
     public String getSql() {
         return sql;
@@ -151,6 +161,48 @@ public class KafkaJsonFlatMessage implements Serializable {
 
     public void setSql(String sql) {
         this.sql = sql;
+    }
+
+    /**
+     * Classifies the message by its canal {@code isDdl}/{@code type} fields: DDL messages, the DML
+     * ops (INSERT / UPDATE / DELETE / QUERY), TiDB watermark markers and everything else.
+     */
+    @Override
+    public MessageType getMessageType() {
+        if (isDdl) {
+            return MessageType.DDL;
+        }
+        if (type == null) {
+            return MessageType.UNKNOWN;
+        }
+        switch (type.toUpperCase(Locale.ROOT)) {
+            case "INSERT":
+            case "UPDATE":
+            case "DELETE":
+            case "QUERY":
+                return MessageType.DML;
+            case "TIDB_WATERMARK":
+                return MessageType.TIDB_WATERMARK;
+            default:
+                return MessageType.UNKNOWN;
+        }
+    }
+
+    @Override
+    @Nullable
+    public Long getEventTimeValue(EventTime mode) {
+        switch (mode) {
+            case ES:
+                return es;
+            case TS:
+                return ts;
+            case TIDB_TSO:
+                // A canal flatMessage carries no commit TSO. TiCDC's canal-json already reports the
+                // commit time in `es`, which is the closest equivalent, so TIDB_TSO degrades to ES.
+                return es;
+            default:
+                return null;
+        }
     }
 
     @Nullable
