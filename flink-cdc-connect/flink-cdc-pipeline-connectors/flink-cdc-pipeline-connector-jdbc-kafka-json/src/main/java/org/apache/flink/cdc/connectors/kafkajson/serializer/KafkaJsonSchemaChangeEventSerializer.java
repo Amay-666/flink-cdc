@@ -151,6 +151,13 @@ public final class KafkaJsonSchemaChangeEventSerializer
             enumSerializer.serialize(KafkaJsonSchemaChangeTag.TRUNCATE_TABLE, target);
             KafkaJsonTruncateTableEventSerializer.INSTANCE.serialize(
                     (TruncateTableEvent) record, target);
+        } else if (record instanceof DropTableEvent) {
+            enumSerializer.serialize(KafkaJsonSchemaChangeTag.DROP_TABLE, target);
+            KafkaJsonDropTableEventSerializer.INSTANCE.serialize((DropTableEvent) record, target);
+        } else if (record instanceof AlterTableCommentEvent) {
+            enumSerializer.serialize(KafkaJsonSchemaChangeTag.ALTER_TABLE_COMMENT, target);
+            KafkaJsonAlterTableCommentEventSerializer.INSTANCE.serialize(
+                    (AlterTableCommentEvent) record, target);
         } else if (record instanceof AlterColumnCommentEvent) {
             enumSerializer.serialize(KafkaJsonSchemaChangeTag.ALTER_COLUMN_COMMENT, target);
             KafkaJsonAlterColumnCommentEventSerializer.INSTANCE.serialize(
@@ -178,6 +185,10 @@ public final class KafkaJsonSchemaChangeEventSerializer
                 return KafkaJsonRenameTableEventSerializer.INSTANCE.deserialize(source);
             case TRUNCATE_TABLE:
                 return KafkaJsonTruncateTableEventSerializer.INSTANCE.deserialize(source);
+            case DROP_TABLE:
+                return KafkaJsonDropTableEventSerializer.INSTANCE.deserialize(source);
+            case ALTER_TABLE_COMMENT:
+                return KafkaJsonAlterTableCommentEventSerializer.INSTANCE.deserialize(source);
             case ALTER_COLUMN_COMMENT:
                 return KafkaJsonAlterColumnCommentEventSerializer.INSTANCE.deserialize(source);
             default:
@@ -215,9 +226,9 @@ public final class KafkaJsonSchemaChangeEventSerializer
      * The per-event discriminator written before each serialized schema change.
      *
      * <p>The ordinals are part of the serialized format: new tags are appended, never reordered or
-     * removed. {@code RENAME_TABLE}/{@code TRUNCATE_TABLE}/{@code ALTER_COLUMN_COMMENT} (and, in the
-     * next iteration, {@code DROP_TABLE}/{@code ALTER_TABLE_COMMENT}) are the connector's own tags
-     * for the event types the released {@code SchemaChangeEventType} enum has no values for.
+     * removed. {@code RENAME_TABLE}/{@code TRUNCATE_TABLE}/{@code DROP_TABLE}/{@code
+     * ALTER_TABLE_COMMENT}/{@code ALTER_COLUMN_COMMENT} are the connector's own tags for the event
+     * types the released {@code SchemaChangeEventType} enum has no values for.
      */
     enum KafkaJsonSchemaChangeTag {
         ADD_COLUMN,
@@ -227,6 +238,8 @@ public final class KafkaJsonSchemaChangeEventSerializer
         ALTER_COLUMN_TYPE,
         RENAME_TABLE,
         TRUNCATE_TABLE,
-        ALTER_COLUMN_COMMENT
+        ALTER_COLUMN_COMMENT,
+        DROP_TABLE,
+        ALTER_TABLE_COMMENT
     }
 }

@@ -25,6 +25,8 @@ import org.apache.flink.cdc.common.schema.Column;
 import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.common.types.DataTypes;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
+import org.apache.flink.cdc.connectors.kafkajson.event.AlterTableCommentEvent;
+import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.serializer.KafkaJsonEventSerializer;
@@ -127,6 +129,63 @@ public class KafkaJsonEventSerializerTest {
                                 new ByteArrayInputStream(baos.toByteArray())));
 
         assertThat(restored).isInstanceOf(AlterColumnCommentEvent.class);
+        assertThat(restored).isEqualTo(original);
+    }
+
+    @Test
+    public void testDropTableEventRoundTrip() throws Exception {
+        TypeSerializer<Event> serializer =
+                new KafkaJsonEventTypeInfo().createSerializer(new ExecutionConfig());
+
+        DropTableEvent original =
+                new DropTableEvent(
+                        TableId.tableId("test", "users"),
+                        Schema.newBuilder()
+                                .setColumns(
+                                        Collections.singletonList(
+                                                Column.physicalColumn(
+                                                        "id", DataTypes.BIGINT(), null)))
+                                .primaryKey(Collections.singletonList("id"))
+                                .build(),
+                        "DROP TABLE `test`.`users`");
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        serializer.serialize(original, new DataOutputViewStreamWrapper(baos));
+        Event restored =
+                serializer.deserialize(
+                        new DataInputViewStreamWrapper(
+                                new ByteArrayInputStream(baos.toByteArray())));
+
+        assertThat(restored).isInstanceOf(DropTableEvent.class);
+        assertThat(restored).isEqualTo(original);
+    }
+
+    @Test
+    public void testAlterTableCommentEventRoundTrip() throws Exception {
+        TypeSerializer<Event> serializer =
+                new KafkaJsonEventTypeInfo().createSerializer(new ExecutionConfig());
+
+        AlterTableCommentEvent original =
+                new AlterTableCommentEvent(
+                        TableId.tableId("test", "users"),
+                        Schema.newBuilder()
+                                .setColumns(
+                                        Collections.singletonList(
+                                                Column.physicalColumn(
+                                                        "id", DataTypes.BIGINT(), null)))
+                                .primaryKey(Collections.singletonList("id"))
+                                .build(),
+                        "ALTER TABLE `test`.`users` COMMENT = 'vip users'",
+                        "vip users");
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        serializer.serialize(original, new DataOutputViewStreamWrapper(baos));
+        Event restored =
+                serializer.deserialize(
+                        new DataInputViewStreamWrapper(
+                                new ByteArrayInputStream(baos.toByteArray())));
+
+        assertThat(restored).isInstanceOf(AlterTableCommentEvent.class);
         assertThat(restored).isEqualTo(original);
     }
 }
