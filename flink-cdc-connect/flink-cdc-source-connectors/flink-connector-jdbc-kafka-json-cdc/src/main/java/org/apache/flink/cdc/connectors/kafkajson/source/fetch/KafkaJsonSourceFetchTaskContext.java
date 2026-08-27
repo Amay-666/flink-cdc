@@ -64,7 +64,7 @@ import javax.annotation.Nullable;
 import java.sql.SQLException;
 
 /**
- * The fetch task context of the Canal source, shared by {@link KafkaJsonScanFetchTask} and {@link
+ * The fetch task context of the Kafka Changelog Json source, shared by {@link KafkaJsonScanFetchTask} and {@link
  * KafkaJsonStreamFetchTask}.
  *
  * <p>It owns the {@link ChangeEventQueue} that both fetch tasks enqueue {@link DataChangeEvent}s
@@ -78,7 +78,7 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
     private static final Logger LOG =
             LoggerFactory.getLogger(KafkaJsonSourceFetchTaskContext.class);
 
-    private final KafkaJsonSourceConfig canalSourceConfig;
+    private final KafkaJsonSourceConfig kafkaJsonSourceConfig;
 
     // stateful objects built once per reader lifetime
     private KafkaJsonRecordFactory recordFactory;
@@ -98,7 +98,7 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
     public KafkaJsonSourceFetchTaskContext(
             JdbcSourceConfig sourceConfig, KafkaJsonDialect dataSourceDialect) {
         super(sourceConfig, dataSourceDialect);
-        this.canalSourceConfig = (KafkaJsonSourceConfig) sourceConfig;
+        this.kafkaJsonSourceConfig = (KafkaJsonSourceConfig) sourceConfig;
     }
 
     @Override
@@ -107,9 +107,9 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
         MySqlConnectorConfig connectorConfig = getDbzConnectorConfig();
 
         if (schema == null) {
-            this.recordFactory = new KafkaJsonRecordFactory(canalSourceConfig);
-            this.recordConverter = new KafkaJsonRecordConverter(recordFactory, canalSourceConfig);
-            this.schema = new KafkaJsonSchema(canalSourceConfig, recordFactory);
+            this.recordFactory = new KafkaJsonRecordFactory(kafkaJsonSourceConfig);
+            this.recordConverter = new KafkaJsonRecordConverter(recordFactory, kafkaJsonSourceConfig);
+            this.schema = new KafkaJsonSchema(kafkaJsonSourceConfig, recordFactory);
         }
         // register the table schemas carried by the split so the snapshot read can resolve them.
         // The splitter builds its schemas with a separate KafkaJsonRecordFactory instance, so the
@@ -153,7 +153,7 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
 
     @Override
     public KafkaJsonSourceConfig getSourceConfig() {
-        return canalSourceConfig;
+        return kafkaJsonSourceConfig;
     }
 
     @Override
@@ -188,8 +188,8 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
             // commit unobservable (and thus the checkpoint-completion commit unverifiable); the
             // throw-away consumers used for offset probing pass null deliberately and never
             // commit, so they are unaffected by this requirement.
-            if (canalSourceConfig.getKafkaGroupId() == null
-                    || canalSourceConfig.getKafkaGroupId().isEmpty()) {
+            if (kafkaJsonSourceConfig.getKafkaGroupId() == null
+                    || kafkaJsonSourceConfig.getKafkaGroupId().isEmpty()) {
                 throw new IllegalArgumentException(
                         "The streaming reader commits the consumed Kafka offsets to the "
                                 + "consumer group on checkpoint completion, so "
@@ -199,7 +199,7 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
             kafkaConsumer =
                     new KafkaConsumer<>(
                             KafkaJsonKafkaUtils.buildConsumerProps(
-                                    canalSourceConfig, canalSourceConfig.getKafkaGroupId()));
+                                    kafkaJsonSourceConfig, kafkaJsonSourceConfig.getKafkaGroupId()));
         }
         return kafkaConsumer;
     }
@@ -207,7 +207,7 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
     /** Returns (creating on first use) the supplier of the current stream position. */
     public KafkaJsonOffsetSupplier getOffsetSupplier() {
         if (offsetSupplier == null) {
-            offsetSupplier = new KafkaJsonOffsetSupplier(canalSourceConfig);
+            offsetSupplier = new KafkaJsonOffsetSupplier(kafkaJsonSourceConfig);
         }
         return offsetSupplier;
     }
@@ -225,7 +225,7 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
      */
     public JdbcConnection getConnection() {
         if (jdbcConnection == null) {
-            jdbcConnection = dataSourceDialect.openJdbcConnection(canalSourceConfig);
+            jdbcConnection = dataSourceDialect.openJdbcConnection(kafkaJsonSourceConfig);
         }
         return jdbcConnection;
     }
