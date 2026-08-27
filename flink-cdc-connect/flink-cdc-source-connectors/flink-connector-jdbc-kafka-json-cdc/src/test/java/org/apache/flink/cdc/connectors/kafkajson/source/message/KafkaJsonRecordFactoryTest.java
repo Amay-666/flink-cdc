@@ -136,7 +136,7 @@ class KafkaJsonRecordFactoryTest {
 
         // source partition / offset / topic
         assertEquals(
-                Collections.singletonMap("server", "canal_cdc_source"), record.sourcePartition());
+                Collections.singletonMap("server", "kafka_json_cdc_source"), record.sourcePartition());
         Map<String, ?> offset = record.sourceOffset();
         assertEquals("1598752886000", offset.get("eventTime"));
         assertEquals("0", offset.get("partition"));
@@ -170,8 +170,8 @@ class KafkaJsonRecordFactoryTest {
 
         // source struct
         Struct source = value.getStruct("source");
-        assertEquals("canal", source.getString("connector"));
-        assertEquals("canal_cdc_source", source.getString("name"));
+        assertEquals("kafka.json", source.getString("connector"));
+        assertEquals("kafka_json_cdc_source", source.getString("name"));
         // SnapshotRecord.toSource is a no-op for FALSE -> stream records leave snapshot unset
         assertNull(source.getString("snapshot"));
         assertEquals("users", source.getString("table"));
@@ -238,7 +238,6 @@ class KafkaJsonRecordFactoryTest {
         Struct value = (Struct) record.value();
         assertEquals("u", value.getString("op"));
         assertEquals("Alice", value.getStruct("before").getString("name"));
-        // columns not present in the canal `old` image are null in `before`
         assertNull(value.getStruct("before").get("id"));
         assertEquals("Alice", value.getStruct("after").getString("name"));
     }

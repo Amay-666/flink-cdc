@@ -27,6 +27,8 @@ import org.apache.flink.cdc.common.event.DropColumnEvent;
 import org.apache.flink.cdc.common.event.RenameColumnEvent;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
+import org.apache.flink.cdc.connectors.kafkajson.event.AlterTableCommentEvent;
+import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.runtime.serializer.EnumSerializer;
@@ -100,6 +102,10 @@ public final class KafkaJsonSchemaChangeEventSerializer
             return KafkaJsonRenameTableEventSerializer.INSTANCE.copy((RenameTableEvent) from);
         } else if (from instanceof TruncateTableEvent) {
             return KafkaJsonTruncateTableEventSerializer.INSTANCE.copy((TruncateTableEvent) from);
+        } else if (from instanceof DropTableEvent) {
+            return KafkaJsonDropTableEventSerializer.INSTANCE.copy((DropTableEvent) from);
+        } else if (from instanceof AlterTableCommentEvent) {
+            return KafkaJsonAlterTableCommentEventSerializer.INSTANCE.copy((AlterTableCommentEvent) from);
         } else {
             throw new IllegalArgumentException("Unknown schema change event: " + from);
         }

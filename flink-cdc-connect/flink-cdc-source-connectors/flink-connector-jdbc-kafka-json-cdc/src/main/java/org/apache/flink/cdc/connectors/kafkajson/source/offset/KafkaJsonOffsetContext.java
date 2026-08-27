@@ -46,7 +46,7 @@ public class KafkaJsonOffsetContext implements OffsetContext {
     public KafkaJsonOffsetContext(MySqlConnectorConfig config) {
         this.sourceInfoStructMaker =
                 new KafkaJsonSourceInfoStructMaker(
-                        "canal", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, config);
+                        "kafka.json", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, config);
     }
 
     /** Updates the current offset. */

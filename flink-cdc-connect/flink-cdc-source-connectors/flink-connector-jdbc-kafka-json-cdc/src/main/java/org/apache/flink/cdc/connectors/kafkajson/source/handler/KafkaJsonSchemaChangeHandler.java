@@ -76,9 +76,9 @@ public class KafkaJsonSchemaChangeHandler {
 
     private static final String HISTORY_RECORD_FIELD = "historyRecord";
     private static final String SCHEMA_CHANGE_KEY_NAME =
-            "io.debezium.connector.kafkajson.SchemaChangeKey";
+            "io.debezium.connector.kafka.json.SchemaChangeKey";
     private static final String SCHEMA_CHANGE_VALUE_NAME =
-            "io.debezium.connector.canal.SchemaChangeValue";
+            "io.debezium.connector.kafka.json.SchemaChangeValue";
 
     /**
      * The custom fields set on the history-record document of a rename/truncate schema change. They
@@ -92,6 +92,7 @@ public class KafkaJsonSchemaChangeHandler {
     public static final String TABLE_CHANGE_TYPE_RENAME_TABLE = "RENAME_TABLE";
     public static final String TABLE_CHANGE_TYPE_RENAME_COLUMN = "RENAME_COLUMN";
     public static final String TABLE_CHANGE_TYPE_TRUNCATE_TABLE = "TRUNCATE_TABLE";
+    public static final String TABLE_CHANGE_TYPE_ALTER_COLUMN_TYPE = "ALTER_COLUMN_TYPE";
     public static final String NEW_TABLE_ID = "newTableId";
 
     private static final DocumentWriter DOCUMENT_WRITER = DocumentWriter.defaultWriter();
@@ -103,7 +104,7 @@ public class KafkaJsonSchemaChangeHandler {
         this.ddlParser = createParser(sourceConfig.getDdlParser());
         this.sourceInfoStructMaker =
                 new KafkaJsonSourceInfoStructMaker(
-                        "canal",
+                        "kafka.json",
                         KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION,
                         sourceConfig.getDbzConnectorConfig());
     }
@@ -208,7 +209,10 @@ public class KafkaJsonSchemaChangeHandler {
         if (type == KafkaJsonTableChangeType.CREATE) {
             tableChanges.create(result.getNewTable());
         } else if (type == KafkaJsonTableChangeType.ALTER
-                || type == KafkaJsonTableChangeType.RENAME_COLUMN) {
+                || type == KafkaJsonTableChangeType.RENAME_COLUMN
+                || type == KafkaJsonTableChangeType.ALTER_COLUMN_TYPE
+                || type == KafkaJsonTableChangeType.ALTER_COLUMN_COMMENT
+        ) {
             // The Debezium history format carries only the post-change schema in an ALTER
             // TableChange. The pipeline deserializer derives the column-level events by diffing the
             // old and the new schema, so it needs both images: snapshot tables announce their
@@ -270,6 +274,8 @@ public class KafkaJsonSchemaChangeHandler {
             historyDocument.set(TABLE_CHANGE_TYPE, TABLE_CHANGE_TYPE_RENAME_COLUMN);
         } else if (type == KafkaJsonTableChangeType.TRUNCATE) {
             historyDocument.set(TABLE_CHANGE_TYPE, TABLE_CHANGE_TYPE_TRUNCATE_TABLE);
+        } else if (type == KafkaJsonTableChangeType.ALTER_COLUMN_TYPE) {
+            historyDocument.set(TABLE_CHANGE_TYPE, TABLE_CHANGE_TYPE_ALTER_COLUMN_TYPE);
         }
         String historyStr = DOCUMENT_WRITER.write(historyDocument);
 

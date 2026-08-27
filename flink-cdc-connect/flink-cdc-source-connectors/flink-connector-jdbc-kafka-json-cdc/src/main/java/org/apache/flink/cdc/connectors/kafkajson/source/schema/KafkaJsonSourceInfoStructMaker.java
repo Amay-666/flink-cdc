@@ -50,7 +50,7 @@ public class KafkaJsonSourceInfoStructMaker implements SourceInfoStructMaker<Kaf
         this.serverName = connectorConfig.getLogicalName();
         this.schema =
                 SchemaBuilder.struct()
-                        .name("io.debezium.connector.canal.Source")
+                        .name("io.debezium.connector.kafka.json.Source")
                         .field(AbstractSourceInfo.DEBEZIUM_VERSION_KEY, Schema.STRING_SCHEMA)
                         .field(AbstractSourceInfo.DEBEZIUM_CONNECTOR_KEY, Schema.STRING_SCHEMA)
                         .field(AbstractSourceInfo.SERVER_NAME_KEY, Schema.STRING_SCHEMA)

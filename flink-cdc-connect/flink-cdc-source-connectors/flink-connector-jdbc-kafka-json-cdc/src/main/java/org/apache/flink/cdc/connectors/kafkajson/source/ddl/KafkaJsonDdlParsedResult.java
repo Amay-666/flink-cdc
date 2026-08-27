@@ -17,6 +17,8 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.ddl;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.debezium.relational.Column;
 import io.debezium.relational.Table;
 import io.debezium.relational.TableId;
@@ -24,7 +26,12 @@ import io.debezium.relational.TableId;
 import javax.annotation.Nullable;
 
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  * The result of parsing one canal DDL message: the affected table, the type of the schema change
@@ -37,6 +44,8 @@ import java.util.List;
  * truncate is carried with the preserved schema (the truncated table is not dropped).
  */
 public class KafkaJsonDdlParsedResult {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final KafkaJsonTableChangeType type;
     /** The affected table; for a {@link KafkaJsonTableChangeType#RENAME_TABLE} the old table id. */
@@ -202,5 +211,63 @@ public class KafkaJsonDdlParsedResult {
                 && a.scale() == b.scale()
                 && a.isOptional() == b.isOptional()
                 && a.typeName().equals(b.typeName());
+    }
+
+    public static KafkaJsonDdlParsedResult alterColumnType(
+            TableId tableId,
+            @Nullable Table oldTable,
+            Table newTable,
+            List<ColumnChangeInfo> columnChanges) {
+        return new KafkaJsonDdlParsedResult(
+                KafkaJsonTableChangeType.ALTER_COLUMN_TYPE, tableId, null, oldTable, newTable, columnChanges);
+    }
+
+    public static boolean isPureColumnTypeChange(Table oldTable, Table newTable) {
+        List<Column> oldColumns = oldTable.columns();
+        List<Column> newColumns = newTable.columns();
+        if (oldColumns.size() != newColumns.size()) {
+            return false;
+        }
+        int columnTypeChangeCount = 0;
+        for (Column oldColumn : oldColumns) {
+            Optional<Column> newColumnOptional = newColumns.stream().filter(newColumn -> newColumn.name().equals(oldColumn.name())).findFirst();
+            if (!newColumnOptional.isPresent()) {
+                return false;
+            }
+            Column newColumn = newColumnOptional.get();
+            Map<String, Object> oldColumnMap =
+                    OBJECT_MAPPER.convertValue(oldColumn, new TypeReference<Map<String, Object>>() {});
+            Map<String, Object> newColumnMap =
+                    OBJECT_MAPPER.convertValue(newColumn, new TypeReference<Map<String, Object>>() {});
+
+            Set<String> diffKeys = differingKeys(oldColumnMap, newColumnMap);
+
+            if (!diffKeys.contains("position")
+                    && !diffKeys.contains("charsetName")
+                    && !diffKeys.contains("autoIncremented")
+                    && !diffKeys.contains("generated")
+                    && !diffKeys.contains("comment")
+                    && !sameColumnType(oldColumn, newColumn)
+                // && !diffKeys.contains("defaultValueExpression")
+                // && !diffKeys.contains("hasDefaultValue")
+                // && !diffKeys.contains("enumValues")
+            ) {
+                columnTypeChangeCount++;
+            }
+        }
+        return columnTypeChangeCount == 1;
+    }
+
+    /** Returns the keys whose values differ between the two maps. */
+    private static Set<String> differingKeys(Map<String, Object> a, Map<String, Object> b) {
+        Set<String> keys = new HashSet<>(a.keySet());
+        keys.addAll(b.keySet());
+        Set<String> differing = new HashSet<>();
+        for (String key : keys) {
+            if (!Objects.equals(a.get(key), b.get(key))) {
+                differing.add(key);
+            }
+        }
+        return differing;
     }
 }

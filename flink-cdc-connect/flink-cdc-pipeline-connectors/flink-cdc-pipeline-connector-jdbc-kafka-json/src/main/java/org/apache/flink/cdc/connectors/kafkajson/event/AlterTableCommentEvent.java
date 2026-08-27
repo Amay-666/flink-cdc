@@ -28,35 +28,28 @@ import javax.annotation.Nullable;
 import java.util.Objects;
 
 /**
- * A schema change event announcing that a table was truncated.
+ * A schema change event announcing that a table's comment was changed.
  *
- * <p>The released flink-cdc runtime has no {@code TRUNCATE_TABLE} event type, so a table truncate
- * would otherwise be invisible to downstream consumers. This event carries the (unchanged) table
- * schema so that a downstream that builds its own event handling can clear per-table state
- * associated with the truncated table.
- *
- * <p>Note: because the released {@link SchemaChangeEventType} enum has no {@code TRUNCATE_TABLE}
- * value, {@link #getType()} returns {@link SchemaChangeEventType#CREATE_TABLE} as a placeholder; it
- * is only used by generic code paths. The canal serialization stack dispatches on the concrete
- * class via {@code instanceof}, so the placeholder never affects (de)serialization.
+ * <p>The released flink-cdc runtime has no {@code ALTER_TABLE_COMMENT} event type, so a comment
+ * change would otherwise be indistinguishable from a plain {@code ALTER_TABLE}. This event carries
+ * the post-change schema, the new table comment and the raw DDL so a downstream can react to the
+ * comment change explicitly.
  */
 @PublicEvolving
-public class TruncateTableEvent implements SchemaChangeEvent {
-
+public class AlterTableCommentEvent implements SchemaChangeEvent {
     private static final long serialVersionUID = 1L;
 
     private final TableId tableId;
     private final Schema schema;
-    @Nullable private final String sql;
+    @Nullable
+    private final String sql;
+    private final String comment;
 
-    public TruncateTableEvent(TableId tableId, Schema schema) {
-        this(tableId, schema, null);
-    }
-
-    public TruncateTableEvent(TableId tableId, Schema schema, @Nullable String sql) {
+    public AlterTableCommentEvent(TableId tableId, Schema schema, @Nullable String sql, String comment) {
         this.tableId = tableId;
         this.schema = schema;
         this.sql = sql;
+        this.comment = comment;
     }
 
     /** Returns the id of the truncated table. */
@@ -76,9 +69,13 @@ public class TruncateTableEvent implements SchemaChangeEvent {
         return sql;
     }
 
+    public String getComment() {
+        return comment;
+    }
+
     @Override
     public SchemaChangeEventType getType() {
-        throw new UnsupportedOperationException("TruncateTableEvent is not supported by released flink-cdc runtime.");
+        throw new UnsupportedOperationException("AlterTableCommentEvent is not supported by released flink-cdc runtime.");
     }
 
     @Override
@@ -86,29 +83,33 @@ public class TruncateTableEvent implements SchemaChangeEvent {
         if (this == o) {
             return true;
         }
-        if (!(o instanceof TruncateTableEvent)) {
+        if (!(o instanceof AlterTableCommentEvent)) {
             return false;
         }
-        TruncateTableEvent that = (TruncateTableEvent) o;
+        AlterTableCommentEvent that = (AlterTableCommentEvent) o;
         return Objects.equals(tableId, that.tableId)
                 && Objects.equals(schema, that.schema)
-                && Objects.equals(sql, that.sql);
+                && Objects.equals(sql, that.sql)
+                && Objects.equals(comment, that.comment);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableId, schema, sql);
+        return Objects.hash(tableId, schema, sql, comment);
     }
 
     @Override
     public String toString() {
-        return "TruncateTableEvent{"
+        return "AlterTableCommentEvent{"
                 + "tableId="
                 + tableId
                 + ", schema="
                 + schema
                 + ", sql='"
                 + sql
+                + '\''
+                + ", comment='"
+                + comment
                 + '\''
                 + '}';
     }

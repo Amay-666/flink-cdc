@@ -130,7 +130,7 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
                         .loggingContextSupplier(
                                 () ->
                                         LoggingContext.forConnector(
-                                                "canal",
+                                                "kafka.json",
                                                 connectorConfig.getLogicalName(),
                                                 "jdbc-kafka-json-cdc-connector-task"))
                         // do not buffer any element, we use signal events
@@ -274,7 +274,7 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
             try {
                 kafkaConsumer.close();
             } catch (Exception e) {
-                LOG.warn("Failed to close the KafkaJsonSourceFetchTaskContext kafka consumer", e);
+                LOG.warn("Failed to close the KafkaJsonSourceFetchTaskContext Kafka consumer", e);
             }
             kafkaConsumer = null;
         }

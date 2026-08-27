@@ -248,6 +248,9 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
         if (KafkaJsonDdlParsedResult.isPureColumnRename(currentTable, newTable)) {
             return KafkaJsonDdlParsedResult.renameColumn(tableId, currentTable, newTable);
         }
+        if (KafkaJsonDdlParsedResult.isPureColumnTypeChange(currentTable, newTable)) {
+            return KafkaJsonDdlParsedResult.alterColumnType(tableId, currentTable, newTable, columnChanges);
+        }
         return KafkaJsonDdlParsedResult.alter(tableId, currentTable, newTable, columnChanges);
     }
 

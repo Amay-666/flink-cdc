@@ -309,6 +309,6 @@ class KafkaJsonRecordConverterTest {
                         42L);
         Map<String, ?> partition = records.get(0).sourcePartition();
         assertEquals(1, partition.size());
-        assertEquals("canal_cdc_source", partition.get("server"));
+        assertEquals("kafka_json_cdc_source", partition.get("server"));
     }
 }

@@ -50,7 +50,7 @@ class KafkaJsonSourceInfoStructMakerTest {
         MySqlConnectorConfig dbzConfig = buildConfig().getDbzConnectorConfig();
         KafkaJsonSourceInfoStructMaker maker =
                 new KafkaJsonSourceInfoStructMaker(
-                        "canal", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, dbzConfig);
+                        "kafka.json", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, dbzConfig);
 
         KafkaJsonSourceInfo sourceInfo =
                 new KafkaJsonSourceInfo(
@@ -64,8 +64,8 @@ class KafkaJsonSourceInfoStructMakerTest {
         Struct struct = maker.struct(sourceInfo);
 
         assertEquals("1.9.8.Final", struct.getString("version"));
-        assertEquals("canal", struct.getString("connector"));
-        assertEquals("canal_cdc_source", struct.getString("name"));
+        assertEquals("kafka.json", struct.getString("connector"));
+        assertEquals("kafka_json_cdc_source", struct.getString("name"));
         assertEquals(1598752886000L, struct.getInt64("ts_ms"));
         // SnapshotRecord.toSource is a no-op for FALSE (matches Debezium stream records)
         assertNull(struct.getString("snapshot"));
@@ -80,7 +80,7 @@ class KafkaJsonSourceInfoStructMakerTest {
         MySqlConnectorConfig dbzConfig = buildConfig().getDbzConnectorConfig();
         KafkaJsonSourceInfoStructMaker maker =
                 new KafkaJsonSourceInfoStructMaker(
-                        "canal", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, dbzConfig);
+                        "kafka.json", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, dbzConfig);
 
         KafkaJsonSourceInfo sourceInfo =
                 new KafkaJsonSourceInfo(
@@ -99,10 +99,10 @@ class KafkaJsonSourceInfoStructMakerTest {
         MySqlConnectorConfig dbzConfig = buildConfig().getDbzConnectorConfig();
         KafkaJsonSourceInfoStructMaker maker =
                 new KafkaJsonSourceInfoStructMaker(
-                        "canal", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, dbzConfig);
+                        "kafka.json", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, dbzConfig);
         Schema schema = maker.schema();
 
-        assertEquals("io.debezium.connector.canal.Source", schema.name());
+        assertEquals("io.debezium.connector.kafka.json.Source", schema.name());
         assertTrue(schema.field("version") != null);
         assertTrue(schema.field("connector") != null);
         assertTrue(schema.field("name") != null);

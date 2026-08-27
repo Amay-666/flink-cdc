@@ -49,7 +49,7 @@ class KafkaJsonConnectorConfigTest {
     void testDbzConnectorConfigLogicalName() {
         MySqlConnectorConfig dbzConfig = buildConfig().getDbzConnectorConfig();
         assertNotNull(dbzConfig);
-        assertEquals("canal_cdc_source", dbzConfig.getLogicalName());
+        assertEquals("kafka_json_cdc_source", dbzConfig.getLogicalName());
     }
 
     @Test

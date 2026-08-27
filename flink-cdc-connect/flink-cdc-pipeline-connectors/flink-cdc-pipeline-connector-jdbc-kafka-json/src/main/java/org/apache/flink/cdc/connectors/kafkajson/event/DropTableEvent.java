@@ -28,32 +28,22 @@ import javax.annotation.Nullable;
 import java.util.Objects;
 
 /**
- * A schema change event announcing that a table was truncated.
+ * A schema change event announcing that a table was dropped.
  *
- * <p>The released flink-cdc runtime has no {@code TRUNCATE_TABLE} event type, so a table truncate
- * would otherwise be invisible to downstream consumers. This event carries the (unchanged) table
- * schema so that a downstream that builds its own event handling can clear per-table state
- * associated with the truncated table.
- *
- * <p>Note: because the released {@link SchemaChangeEventType} enum has no {@code TRUNCATE_TABLE}
- * value, {@link #getType()} returns {@link SchemaChangeEventType#CREATE_TABLE} as a placeholder; it
- * is only used by generic code paths. The canal serialization stack dispatches on the concrete
- * class via {@code instanceof}, so the placeholder never affects (de)serialization.
+ * <p>The released flink-cdc runtime has no {@code DROP_TABLE} event type, so a table drop would
+ * otherwise be indistinguishable from a silent disappearance of the table. This event carries the
+ * pre-drop schema and the raw DDL so a downstream can react to the drop explicitly.
  */
 @PublicEvolving
-public class TruncateTableEvent implements SchemaChangeEvent {
-
+public class DropTableEvent implements SchemaChangeEvent {
     private static final long serialVersionUID = 1L;
 
     private final TableId tableId;
     private final Schema schema;
-    @Nullable private final String sql;
+    @Nullable
+    private final String sql;
 
-    public TruncateTableEvent(TableId tableId, Schema schema) {
-        this(tableId, schema, null);
-    }
-
-    public TruncateTableEvent(TableId tableId, Schema schema, @Nullable String sql) {
+    public DropTableEvent(TableId tableId, Schema schema, @Nullable String sql) {
         this.tableId = tableId;
         this.schema = schema;
         this.sql = sql;
@@ -78,7 +68,7 @@ public class TruncateTableEvent implements SchemaChangeEvent {
 
     @Override
     public SchemaChangeEventType getType() {
-        throw new UnsupportedOperationException("TruncateTableEvent is not supported by released flink-cdc runtime.");
+        throw new UnsupportedOperationException("DropTableEvent is not supported by released flink-cdc runtime.");
     }
 
     @Override
@@ -86,10 +76,10 @@ public class TruncateTableEvent implements SchemaChangeEvent {
         if (this == o) {
             return true;
         }
-        if (!(o instanceof TruncateTableEvent)) {
+        if (!(o instanceof DropTableEvent)) {
             return false;
         }
-        TruncateTableEvent that = (TruncateTableEvent) o;
+        DropTableEvent that = (DropTableEvent) o;
         return Objects.equals(tableId, that.tableId)
                 && Objects.equals(schema, that.schema)
                 && Objects.equals(sql, that.sql);
@@ -102,7 +92,7 @@ public class TruncateTableEvent implements SchemaChangeEvent {
 
     @Override
     public String toString() {
-        return "TruncateTableEvent{"
+        return "DropTableEvent{"
                 + "tableId="
                 + tableId
                 + ", schema="

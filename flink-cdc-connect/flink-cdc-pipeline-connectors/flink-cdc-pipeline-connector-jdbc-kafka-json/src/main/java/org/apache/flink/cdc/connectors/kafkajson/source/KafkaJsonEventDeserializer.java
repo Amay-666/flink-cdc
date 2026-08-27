@@ -68,7 +68,7 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
     private static final long serialVersionUID = 1L;
 
     public static final String SCHEMA_CHANGE_EVENT_KEY_NAME =
-            "io.debezium.connector.kafkajson.SchemaChangeKey";
+            "io.debezium.connector.kafka.json.SchemaChangeKey";
 
     private static final FlinkJsonTableChangeSerializer TABLE_CHANGE_SERIALIZER =
             new FlinkJsonTableChangeSerializer();

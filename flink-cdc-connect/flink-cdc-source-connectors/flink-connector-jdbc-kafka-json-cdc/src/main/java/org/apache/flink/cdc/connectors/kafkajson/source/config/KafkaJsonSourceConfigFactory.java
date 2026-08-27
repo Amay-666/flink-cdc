@@ -105,7 +105,7 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
         // table filters / schema name adjuster. Snapshot reading is done by our own JDBC code,
         // so the actual database connection properties still need to be present.
         props.setProperty("connector.class", MySqlConnector.class.getCanonicalName());
-        props.setProperty("database.server.name", "canal_cdc_source");
+        props.setProperty("database.server.name", "kafka_json_cdc_source");
         props.setProperty("database.hostname", checkNotNull(hostname));
         props.setProperty("database.port", String.valueOf(port));
         props.setProperty("database.user", checkNotNull(username));

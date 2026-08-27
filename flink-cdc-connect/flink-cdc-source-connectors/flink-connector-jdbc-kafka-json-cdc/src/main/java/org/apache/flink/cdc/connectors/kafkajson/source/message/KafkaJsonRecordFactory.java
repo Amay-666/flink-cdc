@@ -79,7 +79,7 @@ public class KafkaJsonRecordFactory implements Serializable {
         MySqlConnectorConfig dbzConfig = sourceConfig.getDbzConnectorConfig();
         this.sourceInfoStructMaker =
                 new KafkaJsonSourceInfoStructMaker(
-                        "canal", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, dbzConfig);
+                        "kafka.json", KafkaJsonSourceInfoStructMaker.DEBEZIUM_VERSION, dbzConfig);
         this.sourceInfoSchema = sourceInfoStructMaker.schema();
         MySqlValueConverters valueConverters = createValueConverters(dbzConfig);
         this.schemaBuilder =
