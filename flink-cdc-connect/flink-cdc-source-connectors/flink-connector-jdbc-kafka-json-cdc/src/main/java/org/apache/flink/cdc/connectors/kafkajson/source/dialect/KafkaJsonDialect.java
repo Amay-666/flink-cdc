@@ -48,6 +48,7 @@ import io.debezium.relational.history.TableChanges.TableChange;
 import javax.annotation.Nullable;
 
 import java.sql.SQLException;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -132,6 +133,17 @@ public class KafkaJsonDialect implements JdbcDataSourceDialect {
 
     @Override
     public List<TableId> discoverDataCollections(JdbcSourceConfig sourceConfig) {
+        // Stream-only reads (startup-options=latest/earliest) capture changes from the configured
+        // Kafka topics alone, with no database to snapshot and no source JDBC connection to open:
+        // the reader relies on the per-message schemas built from the canal flatMessage instead
+        // (see KafkaJsonSchema#resolveTable). The base reader discovers the captured tables for
+        // every schema-less stream split, so without this short-circuit it would try to open a
+        // JDBC connection to a database that is not even configured.
+        if (sourceConfig.getStartupOptions().isStreamOnly()
+                && (sourceConfig.getDatabaseList() == null
+                        || sourceConfig.getDatabaseList().isEmpty())) {
+            return Collections.emptyList();
+        }
         try (JdbcConnection jdbc = openJdbcConnection(sourceConfig)) {
             return KafkaJsonTableDiscoveryUtils.listTables(
                     sourceConfig.getDatabaseList().get(0), jdbc, sourceConfig.getTableFilters());
@@ -143,6 +155,9 @@ public class KafkaJsonDialect implements JdbcDataSourceDialect {
     @Override
     public Map<TableId, TableChange> discoverDataCollectionSchemas(JdbcSourceConfig sourceConfig) {
         final List<TableId> capturedTableIds = discoverDataCollections(sourceConfig);
+        if (capturedTableIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
 
         try (JdbcConnection jdbc = openJdbcConnection(sourceConfig)) {
             Map<TableId, TableChange> tableSchemas = new HashMap<>();

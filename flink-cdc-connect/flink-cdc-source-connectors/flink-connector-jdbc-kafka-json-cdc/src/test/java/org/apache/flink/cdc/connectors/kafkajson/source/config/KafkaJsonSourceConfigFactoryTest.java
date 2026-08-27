@@ -17,6 +17,9 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.config;
 
+import org.apache.flink.cdc.connectors.base.options.StartupMode;
+import org.apache.flink.cdc.connectors.base.options.StartupOptions;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
@@ -64,6 +67,25 @@ class KafkaJsonSourceConfigFactoryTest {
                 KafkaJsonSourceOptions.KafkaStartupMode.EARLIEST, config.getKafkaStartupMode());
         assertEquals(KafkaJsonSourceOptions.DdlParser.DRUID, config.getDdlParser());
         assertEquals("com.mysql.cj.jdbc.Driver", config.getDriverClassName());
+    }
+
+    @Test
+    void testEarliestStartupModeIsAccepted() {
+        // The base factory whitelists INITIAL/SNAPSHOT/LATEST_OFFSET only; the connector
+        // additionally accepts EARLIEST_OFFSET (pure streaming from the beginning of the Kafka
+        // log, paired with scan.kafka.startup.mode=earliest).
+        KafkaJsonSourceConfig config =
+                buildFactory().startupOptions(StartupOptions.earliest()).create(0);
+        assertEquals(StartupMode.EARLIEST_OFFSET, config.getStartupOptions().startupMode);
+        assertTrue(config.getStartupOptions().isStreamOnly());
+    }
+
+    @Test
+    void testTimestampStartupModeStillRejected() {
+        KafkaJsonSourceConfigFactory factory = buildFactory();
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> factory.startupOptions(StartupOptions.timestamp(1_700_000_000_000L)));
     }
 
     @Test

@@ -326,7 +326,22 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
 
     @Override
     public KafkaJsonSourceConfigFactory startupOptions(StartupOptions startupOptions) {
-        return (KafkaJsonSourceConfigFactory) super.startupOptions(startupOptions);
+        // The base factory only whitelists INITIAL / SNAPSHOT / LATEST_OFFSET. A pure streaming
+        // read from the beginning of the Kafka log — startup-options=earliest, no snapshot — is a
+        // supported mode of this connector (the streaming consumer then seeks per
+        // scan.kafka.startup.mode), so allow it alongside the base set.
+        switch (startupOptions.startupMode) {
+            case INITIAL:
+            case SNAPSHOT:
+            case LATEST_OFFSET:
+            case EARLIEST_OFFSET:
+                break;
+            default:
+                throw new UnsupportedOperationException(
+                        "Unsupported startup mode: " + startupOptions.startupMode);
+        }
+        this.startupOptions = startupOptions;
+        return this;
     }
 
     @Override
