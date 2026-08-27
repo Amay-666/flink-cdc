@@ -37,6 +37,12 @@ public class KafkaJsonKafkaUtils {
      * (optional) group id — a random one is used when {@code null} so that throw-away consumers
      * never participate in the configured group —, the {@link StringDeserializer}s and any
      * user-supplied {@code scan.kafka.properties.*}.
+     *
+     * <p>The random fallback is only appropriate for throw-away consumers that never commit (offset
+     * probing). The streaming consumer that commits the consumed offsets to the group must always
+     * be created with a user-provided group id; {@link
+     * org.apache.flink.cdc.connectors.kafkajson.source.fetch.KafkaJsonSourceFetchTaskContext#getKafkaConsumer}
+     * enforces that.
      */
     public static Properties buildConsumerProps(
             KafkaJsonSourceConfig sourceConfig, @Nullable String groupId) {

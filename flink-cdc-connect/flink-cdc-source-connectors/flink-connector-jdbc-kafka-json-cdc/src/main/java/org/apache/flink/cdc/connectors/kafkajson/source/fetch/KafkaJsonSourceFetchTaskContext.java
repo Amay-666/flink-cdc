@@ -182,6 +182,20 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
      */
     public KafkaConsumer<String, String> getKafkaConsumer() {
         if (kafkaConsumer == null) {
+            // The streaming consumer commits the consumed offsets to the consumer group on
+            // checkpoint completion, so the group id must be user-provided and stable. A random
+            // throw-away id would silently accumulate __consumer_offsets records and make the
+            // commit unobservable (and thus the checkpoint-completion commit unverifiable); the
+            // throw-away consumers used for offset probing pass null deliberately and never
+            // commit, so they are unaffected by this requirement.
+            if (canalSourceConfig.getKafkaGroupId() == null
+                    || canalSourceConfig.getKafkaGroupId().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "The streaming reader commits the consumed Kafka offsets to the "
+                                + "consumer group on checkpoint completion, so "
+                                + "'properties.kafka.group.id' must be configured for streaming "
+                                + "reads.");
+            }
             kafkaConsumer =
                     new KafkaConsumer<>(
                             KafkaJsonKafkaUtils.buildConsumerProps(
