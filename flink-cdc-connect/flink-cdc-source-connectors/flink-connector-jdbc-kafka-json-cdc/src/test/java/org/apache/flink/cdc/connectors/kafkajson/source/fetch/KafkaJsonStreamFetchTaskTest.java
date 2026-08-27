@@ -442,6 +442,34 @@ class KafkaJsonStreamFetchTaskTest {
         assertEquals(new KafkaJsonOffset(1000, 1, 1), task.getLastCommittedOffset());
     }
 
+    @Test
+    void testCheckpointCompletionCommitsGroupOffsets() throws Exception {
+        FakeKafkaConsumer consumer = consumer(INSERT);
+        KafkaJsonSourceFetchTaskContext context = context(consumer);
+        StreamSplit split =
+                streamSplit(KafkaJsonOffset.INITIAL_OFFSET, KafkaJsonOffset.NO_STOPPING_OFFSET);
+        KafkaJsonStreamFetchTask task = new KafkaJsonStreamFetchTask(split);
+        context.configure(split);
+
+        Thread thread = new Thread(() -> runQuietly(task, context));
+        thread.setDaemon(true);
+        thread.start();
+        try {
+            drain(context.getQueue(), 1);
+            // a completed checkpoint snapshots the consumed offsets for the group commit
+            task.commitCurrentOffset(new KafkaJsonOffset(3000, 0, 0));
+            long deadline = System.currentTimeMillis() + 5000;
+            while (System.currentTimeMillis() < deadline
+                    && consumer.getCommittedOffsets().isEmpty()) {
+                Thread.sleep(10);
+            }
+            assertEquals(Collections.singletonMap(PARTITION, 1L), consumer.getCommittedOffsets());
+        } finally {
+            task.close();
+            thread.join(5000);
+        }
+    }
+
     private static KafkaJsonSourceFetchTaskContext context(FakeKafkaConsumer consumer) {
         KafkaJsonSourceConfig config = config();
         KafkaJsonSourceFetchTaskContext context =

@@ -21,6 +21,7 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetAndTimestamp;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.PartitionInfo;
@@ -36,6 +37,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * An in-memory {@link KafkaConsumer} test double used to unit-test the streaming reader without a
@@ -60,6 +62,7 @@ public class FakeKafkaConsumer extends KafkaConsumer<String, String> {
             new LinkedHashMap<>();
     private final Map<TopicPartition, Long> endingOffsets = new HashMap<>();
     private final Map<TopicPartition, Long> positions = new HashMap<>();
+    private final Map<TopicPartition, Long> committedOffsets = new ConcurrentHashMap<>();
     private final List<TopicPartition> assigned = new ArrayList<>();
     /** Maximum records a single {@link #poll(Duration)} returns per partition (to simulate lag). */
     private final int maxRecordsPerPoll;
@@ -182,6 +185,18 @@ public class FakeKafkaConsumer extends KafkaConsumer<String, String> {
             }
         }
         return new ConsumerRecords<>(batch);
+    }
+
+    @Override
+    public void commitSync(Map<TopicPartition, OffsetAndMetadata> offsets) {
+        for (Map.Entry<TopicPartition, OffsetAndMetadata> entry : offsets.entrySet()) {
+            committedOffsets.put(entry.getKey(), entry.getValue().offset());
+        }
+    }
+
+    /** Returns the offsets recorded by the last {@link #commitSync(Map)} calls. */
+    public Map<TopicPartition, Long> getCommittedOffsets() {
+        return new HashMap<>(committedOffsets);
     }
 
     @Override

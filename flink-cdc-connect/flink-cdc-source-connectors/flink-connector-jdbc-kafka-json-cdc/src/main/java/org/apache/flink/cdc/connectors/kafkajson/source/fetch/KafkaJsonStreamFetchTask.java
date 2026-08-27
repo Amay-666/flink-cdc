@@ -41,6 +41,7 @@ import io.debezium.relational.TableId;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetAndTimestamp;
 import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.TopicPartition;
@@ -58,6 +59,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The stream fetch task of the Kafka-json source: consumes the change-log messages written by canal
@@ -94,9 +96,11 @@ import java.util.Set;
  * delivered once the base pure-stream filter is bypassed; see docs/BOUNDARY_AUDIT.md.
  *
  * <p>The position of the most recent consumed message is kept as {@link KafkaJsonOffset} and
- * committed by {@link KafkaJsonDialect#notifyCheckpointComplete(long, Offset)}; the Kafka group
- * offset itself is left untouched because exactly-once recovery relies on the Flink checkpointed
- * state.
+ * committed by {@link KafkaJsonDialect#notifyCheckpointComplete(long, Offset)}; exactly-once
+ * recovery relies on the Flink checkpointed state, so the Kafka group offset is never read back.
+ * For observability the consumed offsets are committed to the consumer group when a checkpoint
+ * completes (performed by the fetcher thread after the next poll, since {@link KafkaConsumer} is
+ * not thread-safe).
  */
 public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
 
@@ -120,6 +124,16 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
     private volatile KafkaJsonOffset currentOffset;
 
     private volatile KafkaJsonOffset lastCommittedOffset;
+
+    /** The next Kafka offset to consume per partition, tracked as records are polled. */
+    private final Map<TopicPartition, Long> consumedOffsets = new ConcurrentHashMap<>();
+
+    /**
+     * Offsets to commit to the Kafka consumer group, snapshotted on checkpoint completion and
+     * committed by the fetcher thread after the next poll ({@link KafkaConsumer} is not
+     * thread-safe). May be {@code null} when no commit is pending.
+     */
+    private volatile Map<TopicPartition, Long> pendingCommitOffsets;
 
     /** Partitions that have already delivered a message strictly after the ending offset. */
     private final Set<TopicPartition> partitionsPastEnding = new HashSet<>();
@@ -196,6 +210,7 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                 }
                 if (records.isEmpty()) {
                     // avoid a busy loop when there is no message (or the consumer is a mock)
+                    commitPendingOffsets(consumer);
                     Thread.sleep(EMPTY_POLL_SLEEP_MILLIS);
                     continue;
                 }
@@ -204,6 +219,7 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                     dispatchEndWatermark(sourceFetchContext);
                     break;
                 }
+                commitPendingOffsets(consumer);
             }
         } finally {
             taskRunning = false;
@@ -242,6 +258,9 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                             eventTimeValue == null ? -1L : eventTimeValue,
                             record.partition(),
                             record.offset());
+            // track the next offset to consume per partition (for the checkpoint-time group commit)
+            consumedOffsets.put(
+                    new TopicPartition(record.topic(), record.partition()), record.offset() + 1L);
 
             if (StreamSplit.STREAM_SPLIT_ID.equals(split.splitId())
                     && lastOffset.isAtOrBefore(startingOffset)) {
@@ -481,7 +500,16 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
         }
     }
 
-    /** Commits the offset of the latest checkpoint to the stream position. */
+    /**
+     * Commits the offset of the latest checkpoint to the stream position and snapshots the consumed
+     * Kafka offsets for the next group commit.
+     *
+     * <p>The Kafka group offset itself is never read back by this connector (exactly-once recovery
+     * is provided by the Flink checkpointed state, see the class javadoc); it is committed only so
+     * the consumer group's position/lag can be observed externally. The actual commit runs on the
+     * fetcher thread after the next poll, because {@link KafkaConsumer} is not thread-safe and this
+     * method is invoked from the checkpoint-complete callback on the task thread.
+     */
     public void commitCurrentOffset(Offset offset) {
         if (offset instanceof KafkaJsonOffset) {
             KafkaJsonOffset canalOffset = (KafkaJsonOffset) offset;
@@ -489,8 +517,33 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                 lastCommittedOffset = canalOffset;
             }
             LOG.debug("Committing offset: {}", lastCommittedOffset);
-            // The Kafka group offset is intentionally not committed: exactly-once recovery is
-            // provided by the Flink checkpointed state (see the class javadoc).
+            pendingCommitOffsets = new HashMap<>(consumedOffsets);
+        }
+    }
+
+    /**
+     * Commits the offsets pending from the last checkpoint completion to the Kafka consumer group.
+     *
+     * <p>Must run on the fetcher thread (the only thread allowed to touch the {@link
+     * KafkaConsumer}). The committed offsets are informational only — the connector always assigns
+     * and seeks manually, so it never resumes from the group offset.
+     */
+    private void commitPendingOffsets(KafkaConsumer<String, String> consumer) {
+        Map<TopicPartition, Long> pending = pendingCommitOffsets;
+        if (pending == null || pending.isEmpty()) {
+            return;
+        }
+        pendingCommitOffsets = null;
+        Map<TopicPartition, OffsetAndMetadata> offsets = new HashMap<>();
+        for (Map.Entry<TopicPartition, Long> entry : pending.entrySet()) {
+            offsets.put(entry.getKey(), new OffsetAndMetadata(entry.getValue()));
+        }
+        try {
+            consumer.commitSync(offsets);
+            LOG.debug("Committed Kafka group offsets: {}", offsets);
+        } catch (Exception e) {
+            // informational only; a failed commit must not fail the task
+            LOG.warn("Failed to commit Kafka group offsets", e);
         }
     }
 
