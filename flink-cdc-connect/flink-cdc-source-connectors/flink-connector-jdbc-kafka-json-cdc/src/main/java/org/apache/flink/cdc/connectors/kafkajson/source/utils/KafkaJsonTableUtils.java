@@ -26,6 +26,8 @@ import io.debezium.relational.Table;
 import io.debezium.relational.TableEditor;
 import io.debezium.relational.TableId;
 
+import javax.annotation.Nullable;
+
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -133,6 +135,18 @@ public class KafkaJsonTableUtils {
      * and a message-derived column of the same type are built identically.
      */
     public static ColumnEditor buildColumn(String name, String mysqlType, int position) {
+        return buildColumn(name, mysqlType, position, null);
+    }
+
+    /**
+     * Builds a {@link ColumnEditor} from a column name, its MySQL type expression and comment.
+     *
+     * <p>The DDL parsers pass the {@code COMMENT '...'} clause of a column definition here so that
+     * a comment change on a {@code MODIFY}/{@code CHANGE} column can be detected; the canal-message
+     * path ({@link #buildTable(CanalMessage)}) carries no comments and passes {@code null}.
+     */
+    public static ColumnEditor buildColumn(
+            String name, String mysqlType, int position, @Nullable String comment) {
         ParsedType parsed = parseType(mysqlType);
         if (GEOMETRY_TYPES.contains(parsed.base)) {
             throw new FlinkRuntimeException(
@@ -147,6 +161,9 @@ public class KafkaJsonTableUtils {
                         .length(parsed.length)
                         .scale(parsed.scale)
                         .optional(true);
+        if (comment != null) {
+            editor.comment(comment);
+        }
         if (parsed.enumValues != null) {
             editor.enumValues(parsed.enumValues);
         }

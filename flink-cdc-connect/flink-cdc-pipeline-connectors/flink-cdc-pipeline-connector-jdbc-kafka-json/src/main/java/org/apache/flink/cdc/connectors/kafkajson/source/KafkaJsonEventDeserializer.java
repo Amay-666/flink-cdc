@@ -28,6 +28,7 @@ import org.apache.flink.cdc.common.event.RenameColumnEvent;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.types.DataType;
+import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.serializer.KafkaJsonEventTypeInfo;
@@ -56,6 +57,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -276,7 +278,9 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
      * Diffs the old and the new table and produces the column-level schema change events. A column
      * that is gone in the new table but re-appears at the same position with the same type under a
      * different name is treated as a rename ({@link RenameColumnEvent}) instead of a {@code DROP}+
-     * {@code ADD} pair.
+     * {@code ADD} pair. A changed column type yields an {@link AlterColumnTypeEvent} and a changed
+     * column comment an {@link AlterColumnCommentEvent}; a column that only toggles nullability is
+     * ignored.
      */
     private List<SchemaChangeEvent> diffTable(
             TableId tableId,
@@ -290,6 +294,7 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
 
         List<AddColumnEvent.ColumnWithPosition> addedColumns = new ArrayList<>();
         Map<String, DataType> alteredColumns = new HashMap<>();
+        Map<String, String> alteredComments = new HashMap<>();
         Map<String, String> renamedColumns = new HashMap<>();
         Set<String> usedOldColumns = new HashSet<>();
         for (io.debezium.relational.Column newColumn : newTable.columns()) {
@@ -301,6 +306,9 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
                             newColumn.name(),
                             KafkaJsonColumnMeta.fromColumn(newColumn)
                                     .toCdcDataType(newColumn.isOptional()));
+                }
+                if (!Objects.equals(oldColumn.comment(), newColumn.comment())) {
+                    alteredComments.put(newColumn.name(), newColumn.comment());
                 }
                 continue;
             }
@@ -334,6 +342,9 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
         if (!alteredColumns.isEmpty()) {
             events.add(new AlterColumnTypeEvent(tableId, alteredColumns));
         }
+        if (!alteredComments.isEmpty()) {
+            events.add(new AlterColumnCommentEvent(tableId, alteredComments));
+        }
         return events;
     }
 
@@ -362,10 +373,15 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
         return sameColumnType(candidate, newColumn) ? candidate : null;
     }
 
+    /**
+     * Type-only equality of two columns, ignoring nullability: a column whose only change is its
+     * {@code NULL}/{@code NOT NULL} flag must not surface as an {@link AlterColumnTypeEvent} (an
+     * optionality-only change is intentionally ignored).
+     */
     private static boolean sameColumnType(
             io.debezium.relational.Column a, io.debezium.relational.Column b) {
         return KafkaJsonColumnMeta.fromColumn(a)
-                .toCdcDataType(a.isOptional())
-                .equals(KafkaJsonColumnMeta.fromColumn(b).toCdcDataType(b.isOptional()));
+                .toCdcDataType(false)
+                .equals(KafkaJsonColumnMeta.fromColumn(b).toCdcDataType(false));
     }
 }

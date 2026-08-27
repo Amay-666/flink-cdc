@@ -93,6 +93,7 @@ public class KafkaJsonSchemaChangeHandler {
     public static final String TABLE_CHANGE_TYPE_RENAME_COLUMN = "RENAME_COLUMN";
     public static final String TABLE_CHANGE_TYPE_TRUNCATE_TABLE = "TRUNCATE_TABLE";
     public static final String TABLE_CHANGE_TYPE_ALTER_COLUMN_TYPE = "ALTER_COLUMN_TYPE";
+    public static final String TABLE_CHANGE_TYPE_ALTER_COLUMN_COMMENT = "ALTER_COLUMN_COMMENT";
     public static final String NEW_TABLE_ID = "newTableId";
 
     private static final DocumentWriter DOCUMENT_WRITER = DocumentWriter.defaultWriter();
@@ -276,6 +277,8 @@ public class KafkaJsonSchemaChangeHandler {
             historyDocument.set(TABLE_CHANGE_TYPE, TABLE_CHANGE_TYPE_TRUNCATE_TABLE);
         } else if (type == KafkaJsonTableChangeType.ALTER_COLUMN_TYPE) {
             historyDocument.set(TABLE_CHANGE_TYPE, TABLE_CHANGE_TYPE_ALTER_COLUMN_TYPE);
+        } else if (type == KafkaJsonTableChangeType.ALTER_COLUMN_COMMENT) {
+            historyDocument.set(TABLE_CHANGE_TYPE, TABLE_CHANGE_TYPE_ALTER_COLUMN_COMMENT);
         }
         String historyStr = DOCUMENT_WRITER.write(historyDocument);
 

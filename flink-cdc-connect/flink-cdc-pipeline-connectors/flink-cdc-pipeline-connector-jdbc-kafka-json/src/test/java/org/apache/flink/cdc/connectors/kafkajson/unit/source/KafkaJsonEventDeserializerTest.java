@@ -27,6 +27,7 @@ import org.apache.flink.cdc.common.event.OperationType;
 import org.apache.flink.cdc.common.event.RenameColumnEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.types.DataType;
+import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonEventDeserializer;
@@ -152,6 +153,52 @@ public class KafkaJsonEventDeserializerTest {
         Map<String, DataType> typeMapping = alter.getTypeMapping();
         assertThat(typeMapping).containsOnlyKeys("name");
         assertThat(typeMapping.get("name").toString()).isEqualTo("VARCHAR(300)");
+    }
+
+    @Test
+    public void testAlterColumnComment() throws Exception {
+        deserializer.deserialize(createRecord(BASE_TABLE));
+
+        Table newTable =
+                Table.editor()
+                        .tableId(new io.debezium.relational.TableId("test", null, "users"))
+                        .addColumn(column("id", "BIGINT", Types.BIGINT, false, 1))
+                        .addColumn(
+                                column(
+                                        "name",
+                                        "VARCHAR",
+                                        Types.VARCHAR,
+                                        true,
+                                        2,
+                                        255,
+                                        "nickname"))
+                        .setPrimaryKeyNames("id")
+                        .create();
+
+        List<? extends Event> events = deserializer.deserialize(alterRecord(newTable));
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0)).isInstanceOf(AlterColumnCommentEvent.class);
+        AlterColumnCommentEvent alter = (AlterColumnCommentEvent) events.get(0);
+        assertThat(alter.tableId()).isEqualTo(TABLE_ID);
+        assertThat(alter.getCommentMapping()).containsEntry("name", "nickname");
+    }
+
+    @Test
+    public void testAlterOnlyOptionalIsIgnored() throws Exception {
+        deserializer.deserialize(createRecord(BASE_TABLE));
+
+        // The only difference from BASE_TABLE is the nullability of "name" (true -> false); such an
+        // optionality-only change must not surface as any schema change event.
+        Table newTable =
+                Table.editor()
+                        .tableId(new io.debezium.relational.TableId("test", null, "users"))
+                        .addColumn(column("id", "BIGINT", Types.BIGINT, false, 1))
+                        .addColumn(column("name", "VARCHAR", Types.VARCHAR, false, 2, 255))
+                        .setPrimaryKeyNames("id")
+                        .create();
+
+        assertThat(deserializer.deserialize(alterRecord(newTable))).isEmpty();
     }
 
     @Test
@@ -528,6 +575,17 @@ public class KafkaJsonEventDeserializerTest {
 
     private static Column column(
             String name, String type, int jdbcType, boolean optional, int position, int length) {
+        return column(name, type, jdbcType, optional, position, length, null);
+    }
+
+    private static Column column(
+            String name,
+            String type,
+            int jdbcType,
+            boolean optional,
+            int position,
+            int length,
+            String comment) {
         ColumnEditor editor =
                 Column.editor()
                         .name(name)
@@ -537,6 +595,9 @@ public class KafkaJsonEventDeserializerTest {
                         .position(position);
         if (length > 0) {
             editor.length(length);
+        }
+        if (comment != null) {
+            editor.comment(comment);
         }
         return editor.create();
     }

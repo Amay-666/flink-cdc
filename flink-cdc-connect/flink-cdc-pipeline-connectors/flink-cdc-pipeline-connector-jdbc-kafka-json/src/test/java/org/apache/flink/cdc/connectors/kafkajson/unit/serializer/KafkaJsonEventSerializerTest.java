@@ -24,6 +24,7 @@ import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.schema.Column;
 import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.common.types.DataTypes;
+import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.serializer.KafkaJsonEventSerializer;
@@ -105,6 +106,27 @@ public class KafkaJsonEventSerializerTest {
                                 new ByteArrayInputStream(baos.toByteArray())));
 
         assertThat(restored).isInstanceOf(TruncateTableEvent.class);
+        assertThat(restored).isEqualTo(original);
+    }
+
+    @Test
+    public void testAlterColumnCommentEventRoundTrip() throws Exception {
+        TypeSerializer<Event> serializer =
+                new KafkaJsonEventTypeInfo().createSerializer(new ExecutionConfig());
+
+        AlterColumnCommentEvent original =
+                new AlterColumnCommentEvent(
+                        TableId.tableId("test", "users"),
+                        Collections.singletonMap("name", "nickname"));
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        serializer.serialize(original, new DataOutputViewStreamWrapper(baos));
+        Event restored =
+                serializer.deserialize(
+                        new DataInputViewStreamWrapper(
+                                new ByteArrayInputStream(baos.toByteArray())));
+
+        assertThat(restored).isInstanceOf(AlterColumnCommentEvent.class);
         assertThat(restored).isEqualTo(original);
     }
 }

@@ -249,7 +249,19 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
             return KafkaJsonDdlParsedResult.renameColumn(tableId, currentTable, newTable);
         }
         if (KafkaJsonDdlParsedResult.isPureColumnTypeChange(currentTable, newTable)) {
-            return KafkaJsonDdlParsedResult.alterColumnType(tableId, currentTable, newTable, columnChanges);
+            return KafkaJsonDdlParsedResult.alterColumnType(
+                    tableId, currentTable, newTable, columnChanges);
+        }
+        if (KafkaJsonDdlParsedResult.isPureColumnCommentChange(currentTable, newTable)) {
+            return KafkaJsonDdlParsedResult.alterColumnComment(
+                    tableId, currentTable, newTable, columnChanges);
+        }
+        if (KafkaJsonDdlParsedResult.hasOnlyIgnorableColumnChanges(currentTable, newTable)) {
+            // an ALTER that only reorders columns or toggles nullability carries no material
+            // schema change (position/optional changes are intentionally ignored)
+            LOG.debug(
+                    "Ignoring ALTER that only changes ignorable column aspects: {}", statement);
+            return null;
         }
         return KafkaJsonDdlParsedResult.alter(tableId, currentTable, newTable, columnChanges);
     }
@@ -258,8 +270,9 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
      * Compares two column definitions and adds {@link ColumnChangeInfo} entries for each detected
      * change (type, comment, position).
      *
-     * <p>Note: default value changes are intentionally ignored because Debezium cannot reliably
-     * parse expressions like {@code CURRENT_TIMESTAMP}, leading to false positives.
+     * <p>Note: default value changes and nullability changes are intentionally ignored because
+     * Debezium cannot reliably parse expressions like {@code CURRENT_TIMESTAMP} (leading to false
+     * positives) and nullability is not modeled by {@link KafkaJsonTableUtils#buildColumn}.
      */
     private static void compareColumnChanges(
             List<ColumnChangeInfo> columnChanges, Column oldColumn, Column newColumn) {
@@ -305,12 +318,11 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
         return a.equals(b);
     }
 
-    /** Checks if two columns have the same type definition (type name, length, scale, optional). */
+    /** Checks if two columns have the same type definition (type name, length, scale). */
     private static boolean sameColumnType(Column a, Column b) {
         return a.jdbcType() == b.jdbcType()
                 && a.length() == b.length()
                 && a.scale() == b.scale()
-                && a.isOptional() == b.isOptional()
                 && a.typeName().equals(b.typeName());
     }
 
@@ -332,7 +344,22 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
         return KafkaJsonTableUtils.buildColumn(
                 unquote(column.getColumnName()),
                 mysqlTypeExpression(column.getDataType()),
-                position);
+                position,
+                commentOf(column));
+    }
+
+    /** Extracts the {@code COMMENT '...'} clause of a column definition, or {@code null} if absent. */
+    @Nullable
+    private static String commentOf(SQLColumnDefinition column) {
+        SQLExpr commentExpr = column.getComment();
+        if (commentExpr == null) {
+            return null;
+        }
+        String text = commentExpr.toString();
+        if (text.length() >= 2 && text.startsWith("'") && text.endsWith("'")) {
+            return text.substring(1, text.length() - 1);
+        }
+        return text;
     }
 
     /** Strips the surrounding backticks Druid keeps on quoted identifiers (e.g. {@code `id`}). */

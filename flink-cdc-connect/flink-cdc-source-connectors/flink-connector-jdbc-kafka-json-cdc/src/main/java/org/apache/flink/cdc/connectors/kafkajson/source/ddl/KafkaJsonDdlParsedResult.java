@@ -17,8 +17,6 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.ddl;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.debezium.relational.Column;
 import io.debezium.relational.Table;
 import io.debezium.relational.TableId;
@@ -26,12 +24,7 @@ import io.debezium.relational.TableId;
 import javax.annotation.Nullable;
 
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.Set;
 
 /**
  * The result of parsing one canal DDL message: the affected table, the type of the schema change
@@ -44,8 +37,6 @@ import java.util.Set;
  * truncate is carried with the preserved schema (the truncated table is not dropped).
  */
 public class KafkaJsonDdlParsedResult {
-
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final KafkaJsonTableChangeType type;
     /** The affected table; for a {@link KafkaJsonTableChangeType#RENAME_TABLE} the old table id. */
@@ -205,11 +196,11 @@ public class KafkaJsonDdlParsedResult {
         return renameCount == 1;
     }
 
+    /** Type-only equality: jdbc type, length, scale and type name (optionality and position excluded). */
     private static boolean sameColumnType(Column a, Column b) {
         return a.jdbcType() == b.jdbcType()
                 && a.length() == b.length()
                 && a.scale() == b.scale()
-                && a.isOptional() == b.isOptional()
                 && a.typeName().equals(b.typeName());
     }
 
@@ -222,52 +213,99 @@ public class KafkaJsonDdlParsedResult {
                 KafkaJsonTableChangeType.ALTER_COLUMN_TYPE, tableId, null, oldTable, newTable, columnChanges);
     }
 
+    public static KafkaJsonDdlParsedResult alterColumnComment(
+            TableId tableId,
+            @Nullable Table oldTable,
+            Table newTable,
+            List<ColumnChangeInfo> columnChanges) {
+        return new KafkaJsonDdlParsedResult(
+                KafkaJsonTableChangeType.ALTER_COLUMN_COMMENT,
+                tableId,
+                null,
+                oldTable,
+                newTable,
+                columnChanges);
+    }
+
+    /**
+     * Returns whether the change from {@code oldTable} to {@code newTable} is a pure column type
+     * change: the two tables have the same columns (same names and count), no comment changes and
+     * exactly one column whose type (jdbc type/length/scale/type name) differs. Position and
+     * optionality differences are treated as ignorable and do not disqualify the classification.
+     */
     public static boolean isPureColumnTypeChange(Table oldTable, Table newTable) {
+        return isPureColumnAspectChange(oldTable, newTable, true, false);
+    }
+
+    /**
+     * Returns whether the change from {@code oldTable} to {@code newTable} is a pure column comment
+     * change: the two tables have the same columns (same names and count), no type changes and
+     * exactly one column whose comment differs. Position and optionality differences are treated as
+     * ignorable and do not disqualify the classification.
+     */
+    public static boolean isPureColumnCommentChange(Table oldTable, Table newTable) {
+        return isPureColumnAspectChange(oldTable, newTable, false, true);
+    }
+
+    private static boolean isPureColumnAspectChange(
+            Table oldTable, Table newTable, boolean checkType, boolean checkComment) {
         List<Column> oldColumns = oldTable.columns();
         List<Column> newColumns = newTable.columns();
         if (oldColumns.size() != newColumns.size()) {
             return false;
         }
-        int columnTypeChangeCount = 0;
+        int changedCount = 0;
         for (Column oldColumn : oldColumns) {
-            Optional<Column> newColumnOptional = newColumns.stream().filter(newColumn -> newColumn.name().equals(oldColumn.name())).findFirst();
-            if (!newColumnOptional.isPresent()) {
-                return false;
+            Column newColumn = findColumn(newColumns, oldColumn.name());
+            if (newColumn == null) {
+                return false; // a renamed/added/dropped column disqualifies a pure column change
             }
-            Column newColumn = newColumnOptional.get();
-            Map<String, Object> oldColumnMap =
-                    OBJECT_MAPPER.convertValue(oldColumn, new TypeReference<Map<String, Object>>() {});
-            Map<String, Object> newColumnMap =
-                    OBJECT_MAPPER.convertValue(newColumn, new TypeReference<Map<String, Object>>() {});
-
-            Set<String> diffKeys = differingKeys(oldColumnMap, newColumnMap);
-
-            if (!diffKeys.contains("position")
-                    && !diffKeys.contains("charsetName")
-                    && !diffKeys.contains("autoIncremented")
-                    && !diffKeys.contains("generated")
-                    && !diffKeys.contains("comment")
-                    && !sameColumnType(oldColumn, newColumn)
-                // && !diffKeys.contains("defaultValueExpression")
-                // && !diffKeys.contains("hasDefaultValue")
-                // && !diffKeys.contains("enumValues")
-            ) {
-                columnTypeChangeCount++;
+            boolean typeDiffers = !sameColumnType(oldColumn, newColumn);
+            boolean commentDiffers = !equalsSafe(oldColumn.comment(), newColumn.comment());
+            if ((checkType && typeDiffers) || (checkComment && commentDiffers)) {
+                changedCount++;
+            } else if (typeDiffers || commentDiffers) {
+                return false; // the other aspect changed somewhere: a mixed alter, not a pure subtype
             }
         }
-        return columnTypeChangeCount == 1;
+        return changedCount == 1;
     }
 
-    /** Returns the keys whose values differ between the two maps. */
-    private static Set<String> differingKeys(Map<String, Object> a, Map<String, Object> b) {
-        Set<String> keys = new HashSet<>(a.keySet());
-        keys.addAll(b.keySet());
-        Set<String> differing = new HashSet<>();
-        for (String key : keys) {
-            if (!Objects.equals(a.get(key), b.get(key))) {
-                differing.add(key);
+    /**
+     * Returns whether the change from {@code oldTable} to {@code newTable} carries no material
+     * column change: the same columns under the same names with the same type and comment, differing
+     * only in aspects that are ignored for schema-change events (position, optionality, default
+     * value, charset, auto-increment, generated flag). The DDL parsers use this to skip an {@code
+     * ALTER} that only reorders columns or toggles nullability.
+     */
+    public static boolean hasOnlyIgnorableColumnChanges(Table oldTable, Table newTable) {
+        List<Column> oldColumns = oldTable.columns();
+        List<Column> newColumns = newTable.columns();
+        if (oldColumns.size() != newColumns.size()) {
+            return false;
+        }
+        for (Column oldColumn : oldColumns) {
+            Column newColumn = findColumn(newColumns, oldColumn.name());
+            if (newColumn == null
+                    || !sameColumnType(oldColumn, newColumn)
+                    || !equalsSafe(oldColumn.comment(), newColumn.comment())) {
+                return false;
+            }
+            // position, optionality, default value, charset, auto-increment, generated -> ignorable
+        }
+        return true;
+    }
+
+    private static Column findColumn(List<Column> columns, String name) {
+        for (Column column : columns) {
+            if (column.name().equals(name)) {
+                return column;
             }
         }
-        return differing;
+        return null;
+    }
+
+    private static boolean equalsSafe(String a, String b) {
+        return a == null ? b == null : a.equals(b);
     }
 }

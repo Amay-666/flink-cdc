@@ -27,6 +27,7 @@ import org.apache.flink.cdc.common.event.DropColumnEvent;
 import org.apache.flink.cdc.common.event.RenameColumnEvent;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
+import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterTableCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
@@ -44,15 +45,16 @@ import org.apache.flink.core.memory.DataOutputView;
 import java.io.IOException;
 
 /**
- * A {@link TypeSerializer} for {@link SchemaChangeEvent} that additionally handles {@link
- * RenameTableEvent} and {@link TruncateTableEvent}.
+ * A {@link TypeSerializer} for {@link SchemaChangeEvent} that additionally handles the connector's
+ * custom event types ({@link RenameTableEvent}, {@link TruncateTableEvent}, {@link
+ * DropTableEvent}, {@link AlterTableCommentEvent} and {@link AlterColumnCommentEvent}).
  *
  * <p>This is the canal-connector-local copy of the released {@code SchemaChangeEventSerializer},
- * with the discriminator replaced by the connector's own {@link KafkaJsonSchemaChangeTag} so that a
- * {@link RenameTableEvent} or {@link TruncateTableEvent} — which the released {@code
- * SchemaChangeEventType} enum has no values for — can be serialized alongside the five released
- * event types. The five known events reuse the released per-event serializers and their byte
- * formats; only the {@code RENAME_TABLE} and {@code TRUNCATE_TABLE} tags are new.
+ * with the discriminator replaced by the connector's own {@link KafkaJsonSchemaChangeTag} so that
+ * the custom events — which the released {@code SchemaChangeEventType} enum has no values for —
+ * can be serialized alongside the five released event types. The five known events reuse the
+ * released per-event serializers and their byte formats; the custom events use the connector's own
+ * per-event serializers.
  */
 public final class KafkaJsonSchemaChangeEventSerializer
         extends TypeSerializerSingleton<SchemaChangeEvent> {
@@ -106,6 +108,8 @@ public final class KafkaJsonSchemaChangeEventSerializer
             return KafkaJsonDropTableEventSerializer.INSTANCE.copy((DropTableEvent) from);
         } else if (from instanceof AlterTableCommentEvent) {
             return KafkaJsonAlterTableCommentEventSerializer.INSTANCE.copy((AlterTableCommentEvent) from);
+        } else if (from instanceof AlterColumnCommentEvent) {
+            return KafkaJsonAlterColumnCommentEventSerializer.INSTANCE.copy((AlterColumnCommentEvent) from);
         } else {
             throw new IllegalArgumentException("Unknown schema change event: " + from);
         }
@@ -147,6 +151,10 @@ public final class KafkaJsonSchemaChangeEventSerializer
             enumSerializer.serialize(KafkaJsonSchemaChangeTag.TRUNCATE_TABLE, target);
             KafkaJsonTruncateTableEventSerializer.INSTANCE.serialize(
                     (TruncateTableEvent) record, target);
+        } else if (record instanceof AlterColumnCommentEvent) {
+            enumSerializer.serialize(KafkaJsonSchemaChangeTag.ALTER_COLUMN_COMMENT, target);
+            KafkaJsonAlterColumnCommentEventSerializer.INSTANCE.serialize(
+                    (AlterColumnCommentEvent) record, target);
         } else {
             throw new IllegalArgumentException("Unknown schema change event: " + record);
         }
@@ -170,6 +178,8 @@ public final class KafkaJsonSchemaChangeEventSerializer
                 return KafkaJsonRenameTableEventSerializer.INSTANCE.deserialize(source);
             case TRUNCATE_TABLE:
                 return KafkaJsonTruncateTableEventSerializer.INSTANCE.deserialize(source);
+            case ALTER_COLUMN_COMMENT:
+                return KafkaJsonAlterColumnCommentEventSerializer.INSTANCE.deserialize(source);
             default:
                 throw new IllegalArgumentException("Unknown schema change event class: " + tag);
         }
@@ -201,7 +211,14 @@ public final class KafkaJsonSchemaChangeEventSerializer
         }
     }
 
-    /** The per-event discriminator written before each serialized schema change. */
+    /**
+     * The per-event discriminator written before each serialized schema change.
+     *
+     * <p>The ordinals are part of the serialized format: new tags are appended, never reordered or
+     * removed. {@code RENAME_TABLE}/{@code TRUNCATE_TABLE}/{@code ALTER_COLUMN_COMMENT} (and, in the
+     * next iteration, {@code DROP_TABLE}/{@code ALTER_TABLE_COMMENT}) are the connector's own tags
+     * for the event types the released {@code SchemaChangeEventType} enum has no values for.
+     */
     enum KafkaJsonSchemaChangeTag {
         ADD_COLUMN,
         DROP_COLUMN,
@@ -209,6 +226,7 @@ public final class KafkaJsonSchemaChangeEventSerializer
         RENAME_COLUMN,
         ALTER_COLUMN_TYPE,
         RENAME_TABLE,
-        TRUNCATE_TABLE
+        TRUNCATE_TABLE,
+        ALTER_COLUMN_COMMENT
     }
 }

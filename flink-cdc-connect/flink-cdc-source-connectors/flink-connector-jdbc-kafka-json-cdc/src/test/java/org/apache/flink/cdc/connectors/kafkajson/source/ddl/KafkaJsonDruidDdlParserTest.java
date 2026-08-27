@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 
 import java.sql.Types;
 import java.util.Collections;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -113,6 +114,78 @@ class KafkaJsonDruidDdlParserTest {
         assertEquals("VARCHAR", name.typeName());
         assertEquals(100, name.length());
         assertEquals(2, name.position());
+    }
+
+    @Test
+    void testParseAlterModifyColumnType() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        baseTable(),
+                        "ALTER TABLE `test`.`users` MODIFY COLUMN `name` varchar(100)");
+
+        assertEquals(KafkaJsonTableChangeType.ALTER_COLUMN_TYPE, result.getType());
+        // the column-level change carries the old and the new type
+        List<ColumnChangeInfo> changes = result.getColumnChanges();
+        assertEquals(1, changes.size());
+        ColumnChangeInfo change = changes.get(0);
+        assertEquals("name", change.getColumnName());
+        assertEquals(KafkaJsonTableChangeType.ALTER_COLUMN_TYPE, change.getChangeType());
+    }
+
+    @Test
+    void testParseAlterModifyColumnComment() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        baseTable(),
+                        "ALTER TABLE `test`.`users` MODIFY COLUMN `name` varchar(255) COMMENT 'nickname'");
+
+        assertEquals(KafkaJsonTableChangeType.ALTER_COLUMN_COMMENT, result.getType());
+        assertEquals("nickname", result.getNewTable().columnWithName("name").comment());
+        List<ColumnChangeInfo> changes = result.getColumnChanges();
+        assertEquals(1, changes.size());
+        assertEquals(KafkaJsonTableChangeType.ALTER_COLUMN_COMMENT, changes.get(0).getChangeType());
+    }
+
+    @Test
+    void testParseAlterModifyOnlyOptionalIsIgnored() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        baseTable(),
+                        "ALTER TABLE `test`.`users` MODIFY COLUMN `name` varchar(255) NULL");
+
+        assertNull(result);
+    }
+
+    @Test
+    void testParseAlterModifyNoChangeIsIgnored() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        baseTable(),
+                        "ALTER TABLE `test`.`users` MODIFY COLUMN `name` varchar(255)");
+
+        assertNull(result);
+    }
+
+    @Test
+    void testCreateTableCapturesColumnComment() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        null,
+                        "CREATE TABLE `test`.`users` "
+                                + "(`id` bigint(20) NOT NULL COMMENT 'primary key', "
+                                + "`name` varchar(255) DEFAULT NULL)");
+
+        assertEquals("primary key", result.getNewTable().columnWithName("id").comment());
     }
 
     @Test
