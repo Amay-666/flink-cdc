@@ -28,6 +28,7 @@ import org.apache.flink.cdc.common.event.RenameColumnEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.types.DataType;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
+import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonEventDeserializer;
@@ -164,14 +165,7 @@ public class KafkaJsonEventDeserializerTest {
                         .tableId(new io.debezium.relational.TableId("test", null, "users"))
                         .addColumn(column("id", "BIGINT", Types.BIGINT, false, 1))
                         .addColumn(
-                                column(
-                                        "name",
-                                        "VARCHAR",
-                                        Types.VARCHAR,
-                                        true,
-                                        2,
-                                        255,
-                                        "nickname"))
+                                column("name", "VARCHAR", Types.VARCHAR, true, 2, 255, "nickname"))
                         .setPrimaryKeyNames("id")
                         .create();
 
@@ -346,7 +340,18 @@ public class KafkaJsonEventDeserializerTest {
         TableChanges changes = new TableChanges();
         changes.drop(tableForDrop);
 
-        assertThat(deserializer.deserialize(schemaChangeRecord(changes))).isEmpty();
+        List<? extends Event> events =
+                deserializer.deserialize(schemaChangeRecord(changes, "DROP TABLE `users`"));
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0)).isInstanceOf(DropTableEvent.class);
+        DropTableEvent drop = (DropTableEvent) events.get(0);
+        assertThat(drop.tableId()).isEqualTo(TABLE_ID);
+        // The pre-drop schema comes from the registry, not from the DROP table change (which the
+        // source handler serializes as an empty stub table).
+        assertThat(drop.getSchema().getColumns()).hasSize(2);
+        assertThat(drop.getSchema().getColumns().get(0).getName()).isEqualTo("id");
+        assertThat(drop.getSql()).isEqualTo("DROP TABLE `users`");
     }
 
     @Test
@@ -528,9 +533,16 @@ public class KafkaJsonEventDeserializerTest {
     }
 
     private static SourceRecord schemaChangeRecord(TableChanges changes) {
+        return schemaChangeRecord(changes, null);
+    }
+
+    private static SourceRecord schemaChangeRecord(TableChanges changes, String sql) {
         try {
             Array array = new FlinkJsonTableChangeSerializer().serialize(changes);
             Document historyDoc = Document.create().set(HistoryRecord.Fields.TABLE_CHANGES, array);
+            if (sql != null) {
+                historyDoc.set(HistoryRecord.Fields.DDL_STATEMENTS, sql);
+            }
             String historyRecordStr = DocumentWriter.defaultWriter().write(historyDoc);
 
             Schema keySchema =

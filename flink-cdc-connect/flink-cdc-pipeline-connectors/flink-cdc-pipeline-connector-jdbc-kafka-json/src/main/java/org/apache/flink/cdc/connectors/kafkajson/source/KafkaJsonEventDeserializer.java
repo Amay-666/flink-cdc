@@ -23,6 +23,7 @@ import org.apache.flink.cdc.common.event.CreateTableEvent;
 import org.apache.flink.cdc.common.event.Event;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
+import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.serializer.KafkaJsonEventTypeInfo;
@@ -102,9 +103,11 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
                 Array tableChanges =
                         historyRecord.document().getArray(HistoryRecord.Fields.TABLE_CHANGES);
                 TableChanges changes = TABLE_CHANGE_SERIALIZER.deserialize(tableChanges, true);
+                String sql =
+                        historyRecord.document().getString(HistoryRecord.Fields.DDL_STATEMENTS);
                 List<SchemaChangeEvent> events = new ArrayList<>();
                 for (TableChanges.TableChange tableChange : changes) {
-                    events.addAll(convertTableChange(tableChange));
+                    events.addAll(convertTableChange(tableChange, sql));
                 }
                 return events;
             } catch (IOException e) {
@@ -240,7 +243,8 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
         return Collections.singletonList(new TruncateTableEvent(tableId, schema, sql));
     }
 
-    private List<SchemaChangeEvent> convertTableChange(TableChanges.TableChange tableChange) {
+    private List<SchemaChangeEvent> convertTableChange(
+            TableChanges.TableChange tableChange, String sql) {
         TableId tableId = KafkaJsonSchemaUtils.toCommonTableId(tableChange.getId());
         switch (tableChange.getType()) {
             case CREATE:
@@ -263,8 +267,16 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
                 return SchemaChangeUtil.inferMinimalSchemaChanges(
                         tableId, oldTable.columns(), newTable.columns());
             case DROP:
+                // The DROP table change from the source handler carries an empty stub table (the
+                // serializer requires a table), so the pre-drop schema is read from the registry
+                // like the truncate handler does.
+                io.debezium.relational.Table droppedTable = tables.forTable(tableChange.getId());
                 tables.removeTable(tableChange.getId());
-                return Collections.emptyList();
+                org.apache.flink.cdc.common.schema.Schema dropSchema =
+                        droppedTable == null
+                                ? org.apache.flink.cdc.common.schema.Schema.newBuilder().build()
+                                : KafkaJsonSchemaUtils.toSchema(droppedTable);
+                return Collections.singletonList(new DropTableEvent(tableId, dropSchema, sql));
             default:
                 return Collections.emptyList();
         }

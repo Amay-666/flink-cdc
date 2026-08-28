@@ -128,8 +128,8 @@ public class SchemaChangeUtil {
     /**
      * Returns the column's CDC {@link DataType} with nullability pinned to nullable, for change
      * detection. {@code convertToCdcType()} never embeds nullability, so comparing two columns
-     * through this helper makes the nullability component cancel out and only real type
-     * differences (name, length, precision, ...) affect the comparison.
+     * through this helper makes the nullability component cancel out and only real type differences
+     * (name, length, precision, ...) affect the comparison.
      */
     private static DataType dataTypeIgnoringNullability(Column column) {
         return KafkaJsonColumnMeta.fromColumn(column).toCdcDataType(true);
