@@ -98,7 +98,7 @@ public class KafkaJsonSchemaUtils {
         LOG.info("Read list of available databases");
         final List<String> databaseNames = new ArrayList<>();
         jdbc.query(
-                "SHOW DATABASES WHERE `database` NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')",
+                "SHOW DATABASES WHERE lower(`database`) NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')",
                 rs -> {
                     while (rs.next()) {
                         databaseNames.add(rs.getString(1));

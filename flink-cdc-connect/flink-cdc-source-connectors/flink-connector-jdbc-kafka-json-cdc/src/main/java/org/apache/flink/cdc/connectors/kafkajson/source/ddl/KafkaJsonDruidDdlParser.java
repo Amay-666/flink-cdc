@@ -171,9 +171,7 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
                     String newName = unquote(rename.getTo().getSimpleName());
                     Column oldColumn = table.columnWithName(oldName);
                     if (oldColumn != null) {
-                        int position = positionOf(table, oldName);
-                        table.removeColumn(oldName);
-                        table.addColumn(oldColumn.edit().name(newName).position(position).create());
+                        table.renameColumn(oldName, newName);
                     }
                 }
             } else if (item instanceof SQLAlterTableAddColumn) {
@@ -232,9 +230,9 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
                                         KafkaJsonTableChangeType.RENAME_COLUMN,
                                         oldName,
                                         newName));
+                        table.renameColumn(oldName, newName);
                     }
-                    table.removeColumn(oldName);
-                    table.addColumn(newColumn);
+                    table.updateColumn(newColumn);
                 }
             }
             // other items (indexes, primary key, ...) are not modeled by the Debezium
@@ -259,8 +257,7 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
         if (KafkaJsonDdlParsedResult.hasOnlyIgnorableColumnChanges(currentTable, newTable)) {
             // an ALTER that only reorders columns or toggles nullability carries no material
             // schema change (position/optional changes are intentionally ignored)
-            LOG.debug(
-                    "Ignoring ALTER that only changes ignorable column aspects: {}", statement);
+            LOG.debug("Ignoring ALTER that only changes ignorable column aspects: {}", statement);
             return null;
         }
         return KafkaJsonDdlParsedResult.alter(tableId, currentTable, newTable, columnChanges);
@@ -348,7 +345,9 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
                 commentOf(column));
     }
 
-    /** Extracts the {@code COMMENT '...'} clause of a column definition, or {@code null} if absent. */
+    /**
+     * Extracts the {@code COMMENT '...'} clause of a column definition, or {@code null} if absent.
+     */
     @Nullable
     private static String commentOf(SQLColumnDefinition column) {
         SQLExpr commentExpr = column.getComment();

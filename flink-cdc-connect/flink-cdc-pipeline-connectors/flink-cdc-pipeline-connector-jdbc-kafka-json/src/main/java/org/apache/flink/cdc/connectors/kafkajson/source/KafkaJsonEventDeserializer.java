@@ -19,22 +19,16 @@ package org.apache.flink.cdc.connectors.kafkajson.source;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.cdc.common.annotation.Internal;
-import org.apache.flink.cdc.common.event.AddColumnEvent;
-import org.apache.flink.cdc.common.event.AlterColumnTypeEvent;
 import org.apache.flink.cdc.common.event.CreateTableEvent;
-import org.apache.flink.cdc.common.event.DropColumnEvent;
 import org.apache.flink.cdc.common.event.Event;
-import org.apache.flink.cdc.common.event.RenameColumnEvent;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
-import org.apache.flink.cdc.common.types.DataType;
-import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.serializer.KafkaJsonEventTypeInfo;
 import org.apache.flink.cdc.connectors.kafkajson.source.handler.KafkaJsonSchemaChangeHandler;
-import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonColumnMeta;
 import org.apache.flink.cdc.connectors.kafkajson.utils.KafkaJsonSchemaUtils;
+import org.apache.flink.cdc.connectors.kafkajson.utils.SchemaChangeUtil;
 import org.apache.flink.cdc.debezium.event.DebeziumEventDeserializationSchema;
 import org.apache.flink.cdc.debezium.event.DebeziumSchemaDataTypeInference;
 import org.apache.flink.cdc.debezium.history.FlinkJsonTableChangeSerializer;
@@ -53,13 +47,8 @@ import org.apache.kafka.connect.source.SourceRecord;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 import static org.apache.flink.cdc.connectors.base.utils.SourceRecordUtils.getHistoryRecord;
 
@@ -69,6 +58,10 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
 
     private static final long serialVersionUID = 1L;
 
+    /**
+     * The name of the schema change event key; it must match the key name {@link
+     * KafkaJsonSchemaChangeHandler} uses when it serializes schema change events.
+     */
     public static final String SCHEMA_CHANGE_EVENT_KEY_NAME =
             "io.debezium.connector.kafka.json.SchemaChangeKey";
 
@@ -265,123 +258,15 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
                     // for an existing table, which the downstream SchemaManager rejects.
                     return Collections.emptyList();
                 }
-                return diffTable(tableId, oldTable, newTable);
+                // todo: we should introduce ddl parser to handle SchemaChangeEvent, now we just
+                // diff the table columns.
+                return SchemaChangeUtil.inferMinimalSchemaChanges(
+                        tableId, oldTable.columns(), newTable.columns());
             case DROP:
                 tables.removeTable(tableChange.getId());
                 return Collections.emptyList();
             default:
                 return Collections.emptyList();
         }
-    }
-
-    /**
-     * Diffs the old and the new table and produces the column-level schema change events. A column
-     * that is gone in the new table but re-appears at the same position with the same type under a
-     * different name is treated as a rename ({@link RenameColumnEvent}) instead of a {@code DROP}+
-     * {@code ADD} pair. A changed column type yields an {@link AlterColumnTypeEvent} and a changed
-     * column comment an {@link AlterColumnCommentEvent}; a column that only toggles nullability is
-     * ignored.
-     */
-    private List<SchemaChangeEvent> diffTable(
-            TableId tableId,
-            io.debezium.relational.Table oldTable,
-            io.debezium.relational.Table newTable) {
-        Map<String, io.debezium.relational.Column> oldColumns =
-                oldTable.columns().stream()
-                        .collect(
-                                Collectors.toMap(
-                                        io.debezium.relational.Column::name, column -> column));
-
-        List<AddColumnEvent.ColumnWithPosition> addedColumns = new ArrayList<>();
-        Map<String, DataType> alteredColumns = new HashMap<>();
-        Map<String, String> alteredComments = new HashMap<>();
-        Map<String, String> renamedColumns = new HashMap<>();
-        Set<String> usedOldColumns = new HashSet<>();
-        for (io.debezium.relational.Column newColumn : newTable.columns()) {
-            io.debezium.relational.Column oldColumn = oldColumns.get(newColumn.name());
-            if (oldColumn != null) {
-                usedOldColumns.add(newColumn.name());
-                if (!sameColumnType(oldColumn, newColumn)) {
-                    alteredColumns.put(
-                            newColumn.name(),
-                            KafkaJsonColumnMeta.fromColumn(newColumn)
-                                    .toCdcDataType(newColumn.isOptional()));
-                }
-                if (!Objects.equals(oldColumn.comment(), newColumn.comment())) {
-                    alteredComments.put(newColumn.name(), newColumn.comment());
-                }
-                continue;
-            }
-            io.debezium.relational.Column renameSource =
-                    findRenameSource(oldTable, newTable, newColumn, usedOldColumns);
-            if (renameSource != null) {
-                renamedColumns.put(renameSource.name(), newColumn.name());
-                usedOldColumns.add(renameSource.name());
-            } else {
-                addedColumns.add(
-                        new AddColumnEvent.ColumnWithPosition(
-                                KafkaJsonSchemaUtils.toColumn(newColumn)));
-            }
-        }
-        List<String> droppedColumns =
-                oldTable.columns().stream()
-                        .map(io.debezium.relational.Column::name)
-                        .filter(oldName -> !usedOldColumns.contains(oldName))
-                        .collect(Collectors.toList());
-
-        List<SchemaChangeEvent> events = new ArrayList<>();
-        if (!renamedColumns.isEmpty()) {
-            events.add(new RenameColumnEvent(tableId, renamedColumns));
-        }
-        if (!addedColumns.isEmpty()) {
-            events.add(new AddColumnEvent(tableId, addedColumns));
-        }
-        if (!droppedColumns.isEmpty()) {
-            events.add(new DropColumnEvent(tableId, droppedColumns));
-        }
-        if (!alteredColumns.isEmpty()) {
-            events.add(new AlterColumnTypeEvent(tableId, alteredColumns));
-        }
-        if (!alteredComments.isEmpty()) {
-            events.add(new AlterColumnCommentEvent(tableId, alteredComments));
-        }
-        return events;
-    }
-
-    /**
-     * Returns the old column a new column with no same-name counterpart was renamed from: the old
-     * column at the same position whose type matches, whose name no longer exists in the new table
-     * and which is not already the source of another rename. {@code null} when the new column is a
-     * genuine addition.
-     */
-    private static io.debezium.relational.Column findRenameSource(
-            io.debezium.relational.Table oldTable,
-            io.debezium.relational.Table newTable,
-            io.debezium.relational.Column newColumn,
-            Set<String> usedOldColumns) {
-        List<io.debezium.relational.Column> oldColumns = oldTable.columns();
-        int position = newColumn.position();
-        if (position < 1 || position > oldColumns.size()) {
-            return null;
-        }
-        io.debezium.relational.Column candidate = oldColumns.get(position - 1);
-        if (candidate == null
-                || usedOldColumns.contains(candidate.name())
-                || newTable.columnWithName(candidate.name()) != null) {
-            return null;
-        }
-        return sameColumnType(candidate, newColumn) ? candidate : null;
-    }
-
-    /**
-     * Type-only equality of two columns, ignoring nullability: a column whose only change is its
-     * {@code NULL}/{@code NOT NULL} flag must not surface as an {@link AlterColumnTypeEvent} (an
-     * optionality-only change is intentionally ignored).
-     */
-    private static boolean sameColumnType(
-            io.debezium.relational.Column a, io.debezium.relational.Column b) {
-        return KafkaJsonColumnMeta.fromColumn(a)
-                .toCdcDataType(false)
-                .equals(KafkaJsonColumnMeta.fromColumn(b).toCdcDataType(false));
     }
 }

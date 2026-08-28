@@ -81,8 +81,9 @@ public class KafkaJsonRecordConverter {
      * Returns the ordering event time (millis) of a message for the configured {@link EventTime}
      * mode, or {@code null} when the message carries no usable time. For a canal flatMessage it is
      * the binlog execution time {@code es} / the canal send time {@code ts} / the decoded TiDB
-     * commit TSO ({@code _tidb.commitTs}, or {@code _tidb.watermarkTs} for a watermark event); for a
-     * Debezium message it is {@code source.ts_ms} / {@code payload.ts_ms} / the decoded commit TSO.
+     * commit TSO ({@code _tidb.commitTs}, or {@code _tidb.watermarkTs} for a watermark event); for
+     * a Debezium message it is {@code source.ts_ms} / {@code payload.ts_ms} / the decoded commit
+     * TSO.
      */
     public static Long eventTime(KafkaJsonMessage message, EventTime eventTimeMode) {
         return message.getEventTimeValue(eventTimeMode);
@@ -120,13 +121,13 @@ public class KafkaJsonRecordConverter {
         switch (op) {
             case "INSERT":
             case "QUERY":
-                return convertRows(
+                return convertCanalRows(
                         message, topic, partition, kafkaOffset, Envelope.Operation.CREATE);
             case "UPDATE":
-                return convertRows(
+                return convertCanalRows(
                         message, topic, partition, kafkaOffset, Envelope.Operation.UPDATE);
             case "DELETE":
-                return convertRows(
+                return convertCanalRows(
                         message, topic, partition, kafkaOffset, Envelope.Operation.DELETE);
             case "TIDB_WATERMARK":
                 // TiCDC emits these marker events (isDdl=false but type=TIDB_WATERMARK, data=null)
@@ -213,7 +214,7 @@ public class KafkaJsonRecordConverter {
         }
     }
 
-    private List<SourceRecord> convertRows(
+    private List<SourceRecord> convertCanalRows(
             CanalMessage message,
             String topic,
             int partition,
@@ -326,9 +327,9 @@ public class KafkaJsonRecordConverter {
     }
 
     /**
-     * Returns the registered (JDBC) schema of a Debezium message's table. A Debezium message carries
-     * no {@code mysqlType}/{@code sqlType}, so there is no fallback build: the table must have been
-     * registered by the snapshot phase.
+     * Returns the registered (JDBC) schema of a Debezium message's table. A Debezium message
+     * carries no {@code mysqlType}/{@code sqlType}, so there is no fallback build: the table must
+     * have been registered by the snapshot phase.
      */
     private Table resolveTable(DebeziumMessage message) {
         TableId tableId =
