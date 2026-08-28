@@ -24,6 +24,7 @@ import org.apache.flink.cdc.common.event.RenameColumnEvent;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.types.DataType;
+import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonColumnMeta;
 
 import io.debezium.relational.Column;
@@ -32,17 +33,19 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Computes the minimal set of column-level schema change events that transforms one column list
- * into another using rename / add / drop / alter-type operations.
+ * into another using rename / add / drop / alter-type / alter-comment operations. A column that
+ * only toggles its nullability is treated as unchanged.
  */
 public class SchemaChangeUtil {
 
     /**
      * Finds the minimum schema change events to transform beforeCols into afterCols using recursion
      * with memoization. Available operations: rename column, add column at last, drop column, alter
-     * column type. Recursion depth bounded by total column count.
+     * column type, alter column comment. Recursion depth bounded by total column count.
      */
     public static List<SchemaChangeEvent> inferMinimalSchemaChanges(
             TableId cdcTableId, List<Column> beforeCols, List<Column> afterCols) {
@@ -69,7 +72,8 @@ public class SchemaChangeUtil {
      * beforeCols} (0..n) and {@code j} is the current index into {@code afterCols} (0..m). Boundary
      * cases ({@code i == n} or {@code j == m}) return immediately without list access. At each
      * non-boundary state, either drop before[i] (cost 1) or match before[i] to after[j] (cost =
-     * rename(0/1) + alterType(0/1)). Unmatched after columns are added at the end.
+     * rename(0/1) + alterType(0/1) + alterComment(0/1)). Unmatched after columns are added at the
+     * end.
      */
     private static int minCost(
             int i,
@@ -103,24 +107,27 @@ public class SchemaChangeUtil {
     }
 
     /**
-     * Computes the min cost of matching a before column to an after column (0, 1, or 2). if column
-     * name is same and type is same, cost = 0; if column name is same and type is different, cost =
-     * 1(alter type); if column name is different and type is same, cost = 1(rename); if column name
-     * is different and type is different, cost = 2(rename + alter type);
+     * Computes the min cost of matching a before column to an after column (0 to 3): +1 when the
+     * name differs (rename), +1 when the type differs ignoring nullability (alter type), +1 when
+     * the comment differs (alter comment). A nullability-only change costs 0.
      */
     private static int columnMatchCost(Column before, Column after) {
         int cost = 0;
         if (!before.name().equals(after.name())) {
             cost++;
         }
-        DataType beforeType =
-                KafkaJsonColumnMeta.fromColumn(before).toCdcDataType(before.isOptional());
-        DataType afterType =
-                KafkaJsonColumnMeta.fromColumn(after).toCdcDataType(after.isOptional());
-        if (!beforeType.equals(afterType)) {
+        if (!dataTypeIgnoringNullability(before).equals(dataTypeIgnoringNullability(after))) {
+            cost++;
+        }
+        if (!Objects.equals(before.comment(), after.comment())) {
             cost++;
         }
         return cost;
+    }
+
+    /** Returns the column's CDC {@link DataType} with nullability ignored, for change detection. */
+    private static DataType dataTypeIgnoringNullability(Column column) {
+        return KafkaJsonColumnMeta.fromColumn(column).toCdcDataType(false);
     }
 
     /**
@@ -145,7 +152,7 @@ public class SchemaChangeUtil {
                     columnMatchCost(beforeCols.get(i), afterCols.get(j))
                             + memoOrBase(i + 1, j + 1, n, m, memo);
 
-            if (dropCost <= matchCost) {
+            if (dropCost < matchCost) {
                 events.add(
                         new DropColumnEvent(
                                 cdcTableId, Collections.singletonList(beforeCols.get(i).name())));
@@ -160,14 +167,18 @@ public class SchemaChangeUtil {
                                     cdcTableId, Collections.singletonMap(bc.name(), ac.name())));
                 }
 
-                DataType beforeType =
-                        KafkaJsonColumnMeta.fromColumn(bc).toCdcDataType(bc.isOptional());
-                DataType afterType =
-                        KafkaJsonColumnMeta.fromColumn(ac).toCdcDataType(ac.isOptional());
-                if (!beforeType.equals(afterType)) {
+                if (!dataTypeIgnoringNullability(bc).equals(dataTypeIgnoringNullability(ac))) {
+                    DataType afterType =
+                            KafkaJsonColumnMeta.fromColumn(ac).toCdcDataType(ac.isOptional());
                     events.add(
                             new AlterColumnTypeEvent(
                                     cdcTableId, Collections.singletonMap(ac.name(), afterType)));
+                }
+
+                if (!Objects.equals(bc.comment(), ac.comment())) {
+                    events.add(
+                            new AlterColumnCommentEvent(
+                                    cdcTableId, Collections.singletonMap(ac.name(), ac.comment())));
                 }
 
                 i++;
@@ -183,10 +194,10 @@ public class SchemaChangeUtil {
             i++;
         }
 
-        // Add remaining after columns at last. Adds are always trailing because the only
-        // available operation is "add column at last" (PostgreSQL ALTER TABLE ADD COLUMN always
-        // appends). Surviving before-columns (after drops/renames/alter-types) map to a prefix
-        // of the after-columns; the unmatched suffix can only be fulfilled by appending.
+        // Add remaining after columns at last. Adds are always trailing because the only available
+        // operation is "add column at last". Surviving before-columns (after drops/renames/alter-
+        // types) map to a prefix of the after-columns; the unmatched suffix can only be fulfilled
+        // by appending.
         while (j < m) {
             events.add(
                     new AddColumnEvent(
