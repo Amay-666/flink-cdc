@@ -38,6 +38,25 @@ limitations under the License.
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Reuse the event-type-agnostic sink/coordination machinery of flink-cdc-runtime:
+             DataSinkWriterOperatorFactory, SchemaEvolutionClient, the schema-coordination RPC DTOs
+             and CommittableMessageTypeInfo. Not shaded: the runtime is provided by the Flink CDC
+             environment at deployment. -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-cdc-runtime</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- HTTP client for Doris StreamLoad / DDL execution. Pure Java (no Kotlin stdlib), with a
+             connection pool and async support, so it beats HttpURLConnection for the frequent
+             StreamLoad PUTs. Shaded into the connector jar. -->
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp</artifactId>
+            <version>3.14.9</version>
+        </dependency>
+
         <!-- Test-jar of mysql-cdc for MySqlContainer/MySqlVersion/UniqueDatabase (mirrors
              flink-cdc-pipeline-connector-mysql). -->
         <dependency>
@@ -176,6 +195,9 @@ limitations under the License.
                                     <include>com.esri.geometry:esri-geometry-api</include>
                                     <include>com.zaxxer:HikariCP</include>
                                     <include>com.alibaba:druid</include>
+                                    <!--  OkHttp 3.14.9 + okio: HTTP client for the Doris StreamLoad / DDL  -->
+                                    <include>com.squareup.okhttp3:*</include>
+                                    <include>com.squareup.okio:*</include>
                                     <!--  Include fixed version 30.1.1-jre-14.0 of flink shaded guava  -->
                                     <include>org.apache.flink:flink-shaded-guava</include>
                                 </includes>
@@ -233,6 +255,18 @@ limitations under the License.
                                     <pattern>com.alibaba</pattern>
                                     <shadedPattern>
                                         org.apache.flink.cdc.connectors.shaded.com.alibaba
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.squareup.okhttp3</pattern>
+                                    <shadedPattern>
+                                        org.apache.flink.cdc.connectors.shaded.com.squareup.okhttp3
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.squareup.okio</pattern>
+                                    <shadedPattern>
+                                        org.apache.flink.cdc.connectors.shaded.com.squareup.okio
                                     </shadedPattern>
                                 </relocation>
                             </relocations>
