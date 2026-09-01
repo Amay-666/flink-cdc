@@ -178,8 +178,7 @@ public class KafkaJsonSchemaManager {
                 return false;
             }
             List<String> existedColumnNames = latestSchema.get().getColumnNames();
-            for (Map.Entry<String, String> entry :
-                    renameColumnEvent.getNameMapping().entrySet()) {
+            for (Map.Entry<String, String> entry : renameColumnEvent.getNameMapping().entrySet()) {
                 if (existedColumnNames.contains(entry.getKey())
                         || !existedColumnNames.contains(entry.getValue())) {
                     return false;
@@ -491,8 +490,7 @@ public class KafkaJsonSchemaManager {
         }
 
         @Override
-        public KafkaJsonSchemaManager deserialize(int version, byte[] serialized)
-                throws IOException {
+        public KafkaJsonSchemaManager deserialize(int version, byte[] serialized) throws IOException {
             try (ByteArrayInputStream bais = new ByteArrayInputStream(serialized);
                     DataInputStream in = new DataInputStream(bais)) {
                 switch (version) {
@@ -502,8 +500,7 @@ public class KafkaJsonSchemaManager {
                             Map<TableId, SortedMap<Integer, Schema>> schemas =
                                     deserializeSchemaMap(version, in);
                             // In legacy mode, original schema and evolved schema never differs
-                            return new KafkaJsonSchemaManager(
-                                    schemas, schemas, SchemaChangeBehavior.EVOLVE);
+                            return new KafkaJsonSchemaManager(schemas, schemas, SchemaChangeBehavior.EVOLVE);
                         }
                     case 2:
                         {
@@ -513,8 +510,7 @@ public class KafkaJsonSchemaManager {
                                     deserializeSchemaMap(version, in);
                             SchemaChangeBehavior behavior =
                                     SchemaChangeBehavior.valueOf(in.readUTF());
-                            return new KafkaJsonSchemaManager(
-                                    originalSchemas, evolvedSchemas, behavior);
+                            return new KafkaJsonSchemaManager(originalSchemas, evolvedSchemas, behavior);
                         }
                     default:
                         throw new RuntimeException("Unknown serialize version: " + version);

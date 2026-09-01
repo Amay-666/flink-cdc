@@ -59,8 +59,7 @@ import static org.apache.flink.cdc.runtime.operators.schema.event.CoordinationRe
  * metadata applier accepts all events.
  */
 public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
-    private static final Logger LOG =
-            LoggerFactory.getLogger(KafkaJsonSchemaRegistryRequestHandler.class);
+    private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonSchemaRegistryRequestHandler.class);
 
     /** The {@link MetadataApplier} for every table. */
     private final MetadataApplier metadataApplier;

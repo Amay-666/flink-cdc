@@ -56,8 +56,7 @@ public class KafkaJsonSchemaRegistryProvider implements OperatorCoordinator.Prov
     public OperatorCoordinator create(OperatorCoordinator.Context context) throws Exception {
         CoordinatorExecutorThreadFactory coordinatorThreadFactory =
                 new CoordinatorExecutorThreadFactory(
-                        "kafka-json-schema-evolution-coordinator",
-                        context.getUserCodeClassloader());
+                        "kafka-json-schema-evolution-coordinator", context.getUserCodeClassloader());
         ExecutorService coordinatorExecutor =
                 Executors.newSingleThreadExecutor(coordinatorThreadFactory);
         return new KafkaJsonSchemaRegistry(

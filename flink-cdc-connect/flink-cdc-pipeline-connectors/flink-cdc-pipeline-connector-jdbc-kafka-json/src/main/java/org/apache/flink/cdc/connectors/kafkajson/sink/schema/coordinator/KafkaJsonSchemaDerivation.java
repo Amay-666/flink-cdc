@@ -18,6 +18,7 @@
 package org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordinator;
 
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
+import org.apache.flink.cdc.common.sink.MetadataApplier;
 
 import java.util.Collections;
 import java.util.List;
@@ -27,10 +28,12 @@ import java.util.List;
  *
  * <p>The connector does not support route rules (table merging / renaming onto a sink schema): the
  * released {@code SchemaDerivation} rewrites routed events through {@code
- * ChangeEventUtils.recreateSchemaChangeEvent}, which calls {@code getType()} and cannot represent
- * the connector's five custom events. Rather than failing deep inside the pipeline, route rules are
- * rejected up front by the coordinator, so this derivation is a pure pass-through — every event is
- * forwarded unchanged to the metadata applier.
+ * ChangeEventUtils.recreateSchemaChangeEvent}, which only recognizes the five standard events by
+ * {@code instanceof} and throws {@code UnsupportedOperationException} for the connector's five
+ * custom events. Rather than failing deep inside the pipeline, route rules are rejected up front by
+ * the coordinator, so this derivation is a pure pass-through — every event is forwarded unchanged
+ * to the metadata applier. Note that the DDL itself is executed by the {@link MetadataApplier}, not
+ * here; this class only decides which (rewritten) events are handed downstream.
  */
 public class KafkaJsonSchemaDerivation {
 

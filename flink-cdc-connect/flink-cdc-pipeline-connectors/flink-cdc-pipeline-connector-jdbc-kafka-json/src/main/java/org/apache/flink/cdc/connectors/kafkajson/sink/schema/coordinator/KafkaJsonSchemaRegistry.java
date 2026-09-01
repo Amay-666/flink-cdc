@@ -69,8 +69,7 @@ import static org.apache.flink.cdc.runtime.operators.schema.event.CoordinationRe
  * {@link GetOriginalSchemaRequest}, which the partitioning operator relies on to rebuild its hash
  * functions.
  */
-public class KafkaJsonSchemaRegistry
-        implements OperatorCoordinator, CoordinationRequestHandler {
+public class KafkaJsonSchemaRegistry implements OperatorCoordinator, CoordinationRequestHandler {
 
     private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonSchemaRegistry.class);
 
@@ -82,14 +81,14 @@ public class KafkaJsonSchemaRegistry
     /** A single-thread executor to handle async execution of the coordinator. */
     private final ExecutorService coordinatorExecutor;
 
-    /** Tracks the subtask failed reason to throw a more meaningful exception in {@link
-     * #subtaskReset}. */
+    /**
+     * Tracks the subtask failed reason to throw a more meaningful exception in {@link
+     * #subtaskReset}.
+     */
     private final Map<Integer, Throwable> failedReasons;
 
     /** Metadata applier for applying schema changes to external system. */
     private final MetadataApplier metadataApplier;
-
-    private final SchemaChangeBehavior schemaChangeBehavior;
 
     /** The request handler that handle all requests and events. */
     private KafkaJsonSchemaRegistryRequestHandler requestHandler;
@@ -98,6 +97,8 @@ public class KafkaJsonSchemaRegistry
     private KafkaJsonSchemaManager schemaManager;
 
     private KafkaJsonSchemaDerivation schemaDerivation;
+
+    private final SchemaChangeBehavior schemaChangeBehavior;
 
     /**
      * Current parallelism. Use this to verify if the registry has collected enough flush success
@@ -133,10 +134,7 @@ public class KafkaJsonSchemaRegistry
         LOG.info("Starting KafkaJsonSchemaRegistry for {}.", operatorName);
         this.failedReasons.clear();
         this.currentParallelism = context.currentParallelism();
-        LOG.info(
-                "Started KafkaJsonSchemaRegistry for {}. Parallelism: {}",
-                operatorName,
-                currentParallelism);
+        LOG.info("Started KafkaJsonSchemaRegistry for {}. Parallelism: {}", operatorName, currentParallelism);
     }
 
     @Override
@@ -187,8 +185,7 @@ public class KafkaJsonSchemaRegistry
                     try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
                             DataOutputStream out = new DataOutputStream(baos)) {
                         // Serialize SchemaManager
-                        int schemaManagerSerializerVersion =
-                                KafkaJsonSchemaManager.SERIALIZER.getVersion();
+                        int schemaManagerSerializerVersion = KafkaJsonSchemaManager.SERIALIZER.getVersion();
                         out.writeInt(schemaManagerSerializerVersion);
                         byte[] serializedSchemaManager =
                                 KafkaJsonSchemaManager.SERIALIZER.serialize(schemaManager);
