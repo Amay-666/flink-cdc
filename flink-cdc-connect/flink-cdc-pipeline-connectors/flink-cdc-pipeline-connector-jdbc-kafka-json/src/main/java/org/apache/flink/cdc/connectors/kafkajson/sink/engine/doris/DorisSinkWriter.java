@@ -33,7 +33,6 @@ import org.apache.flink.cdc.connectors.kafkajson.event.AlterTableCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
-import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.ddl.DorisDdlBuilder;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.http.DorisHttpClient;
 
 import org.slf4j.Logger;
@@ -41,8 +40,10 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.time.ZoneId;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -53,13 +54,19 @@ import java.util.concurrent.ScheduledFuture;
  *
  * <p>Holds a local view of each table's schema (evolved by standard and custom schema-change
  * events), converts {@link DataChangeEvent}s to StreamLoad-ready JSON rows via {@link
- * DorisRowConverter}, buffers them per table and flushes via {@link DorisHttpClient#streamLoad}
- * when a buffer fills, when the periodic flush timer fires, on every {@code FlushEvent} (a schema
- * change blocks upstream data until every subtask has flushed — this method is the data landing
- * point of that protocol) and on close.
+ * DorisRowConverter}, buffers them in per-table FIFO queues and flushes via {@link
+ * DorisHttpClient#streamLoad} when a queue fills, when the total buffered rows pass {@code
+ * sink.buffer.max-buffered-rows} (a bounded global cache, spilling the largest queue so many small
+ * tables cannot grow memory without limit), when the periodic flush timer fires, on every {@code
+ * FlushEvent} (a schema change blocks upstream data until every subtask has flushed — this method
+ * is the data landing point of that protocol) and on close. Throughput is observable via {@link
+ * DorisWriteMetrics}.
  *
- * <p>DELETE events map to a batch-delete marker ({@link DorisDdlBuilder#DELETE_SIGN_COLUMN}) on
- * the UNIQUE-model table; INSERT/UPDATE/REPLACE are all upserts keyed by the primary key.
+ * <p>Every row is upserted keyed by the primary key on the UNIQUE-model table. DELETE events are
+ * converted from their pre-image and carry {@link DorisHttpClient#DELETE_SIGN_COLUMN} set to {@code
+ * true}; the writer buffers upserts and deletes in arrival order in one per-table queue and flushes
+ * them in a single StreamLoad batch (the marker column tells Doris which rows to delete), so a
+ * delete and a later upsert of the same key land in the order they were emitted.
  */
 public class DorisSinkWriter implements SinkWriter<Event> {
 
@@ -74,7 +81,18 @@ public class DorisSinkWriter implements SinkWriter<Event> {
     /** Latest schema per table, evolved by the schema-change events flowing downstream. */
     private final Map<TableId, Schema> schemaMaps = new HashMap<>();
     private final Map<TableId, DorisRowConverter> rowConverters = new HashMap<>();
-    private final Map<TableId, List<Map<String, Object>>> buffer = new HashMap<>();
+
+    /**
+     * Per-table FIFO queues of rows awaiting StreamLoad. Upserts and deletes share one queue so a
+     * single batch preserves arrival order; delete rows carry {@link
+     * DorisHttpClient#DELETE_SIGN_COLUMN} set to {@code true}.
+     */
+    private final Map<TableId, ArrayDeque<Map<String, Object>>> buffer = new HashMap<>();
+
+    private final DorisWriteMetrics metrics;
+
+    /** Total rows across all table queues, for the bounded global cache. */
+    private int bufferedRows;
 
     private volatile boolean closed;
     private ScheduledFuture<?> flushTimer;
@@ -83,6 +101,7 @@ public class DorisSinkWriter implements SinkWriter<Event> {
             DorisDataSinkOptions options, ZoneId pipelineZoneId, Sink.InitContext initContext) {
         this.options = options;
         this.pipelineZoneId = pipelineZoneId;
+        this.metrics = new DorisWriteMetrics(initContext.metricGroup());
         this.httpClient =
                 new DorisHttpClient(
                         options.getFenodes(),
@@ -105,6 +124,7 @@ public class DorisSinkWriter implements SinkWriter<Event> {
 
     @Override
     public void flush(boolean endOfInput) throws IOException {
+        metrics.recordFlush();
         flushBuffered();
     }
 
@@ -130,19 +150,29 @@ public class DorisSinkWriter implements SinkWriter<Event> {
         }
         Map<String, Object> row;
         if (event.op() == OperationType.DELETE) {
+            // Deletes are keyed by their pre-image. With batch delete enabled the row carries the
+            // delete-sign marker and the MERGE batch removes it; with it disabled the pre-image is
+            // upserted instead (the row is kept, not removed).
             row = converter.convert(event.before(), schema);
-            if (options.isEnableBatchDelete()) {
-                row.put(DorisDdlBuilder.DELETE_SIGN_COLUMN, true);
-            }
+            row.put(DorisHttpClient.DELETE_SIGN_COLUMN, options.isEnableBatchDelete());
         } else {
             // INSERT / UPDATE / REPLACE are all upserts in the Doris UNIQUE model.
             row = converter.convert(event.after(), schema);
+            row.put(DorisHttpClient.DELETE_SIGN_COLUMN, false);
         }
-        List<Map<String, Object>> rows = buffer.computeIfAbsent(tableId, t -> new ArrayList<>());
-        rows.add(row);
-        if (rows.size() >= options.getBufferSize()) {
+        buffer.computeIfAbsent(tableId, t -> new ArrayDeque<>()).add(row);
+        bufferedRows++;
+        metrics.recordWriteRow();
+        if (buffer.get(tableId).size() >= options.getBufferSize()) {
             flushTable(tableId);
         }
+        // Bounded global cache: per-table thresholds alone can let buffered rows grow without
+        // limit once the pipeline tracks many tables, so spill the largest table queue whenever
+        // the total row count passes the configured cap.
+        while (bufferedRows > options.getMaxBufferedRows()) {
+            flushLargestTable();
+        }
+        metrics.setBufferedRows(bufferedRows);
     }
 
     private void applySchemaChange(SchemaChangeEvent event) {
@@ -165,9 +195,13 @@ public class DorisSinkWriter implements SinkWriter<Event> {
                 buffer.put(rename.getNewTableId(), buffer.remove(rename.getOldTableId()));
             }
         } else if (event instanceof DropTableEvent) {
+            ArrayDeque<Map<String, Object>> dropped = buffer.remove(event.tableId());
+            if (dropped != null) {
+                bufferedRows -= dropped.size();
+                metrics.setBufferedRows(bufferedRows);
+            }
             schemaMaps.remove(event.tableId());
             rowConverters.remove(event.tableId());
-            buffer.remove(event.tableId());
         } else if (event instanceof TruncateTableEvent) {
             // The blocking protocol flushes all buffered rows before the truncate DDL is applied
             // and no data flows until the truncate event has been broadcast downstream, so the
@@ -187,21 +221,59 @@ public class DorisSinkWriter implements SinkWriter<Event> {
     }
 
     private void flushBuffered() throws IOException {
-        for (TableId tableId : new ArrayList<>(buffer.keySet())) {
+        for (TableId tableId : new HashSet<>(buffer.keySet())) {
             flushTable(tableId);
         }
     }
 
+    private void flushLargestTable() throws IOException {
+        TableId largest = null;
+        int largestSize = -1;
+        for (Map.Entry<TableId, ArrayDeque<Map<String, Object>>> entry : buffer.entrySet()) {
+            int size = entry.getValue().size();
+            if (size > largestSize) {
+                largestSize = size;
+                largest = entry.getKey();
+            }
+        }
+        if (largest != null) {
+            flushTable(largest);
+        }
+    }
+
     private void flushTable(TableId tableId) throws IOException {
-        List<Map<String, Object>> rows = buffer.remove(tableId);
+        ArrayDeque<Map<String, Object>> rows = buffer.remove(tableId);
         if (rows == null || rows.isEmpty()) {
             return;
         }
-        httpClient.streamLoad(
+        bufferedRows -= rows.size();
+        doStreamLoad(
                 options.mapDatabase(tableId),
                 options.mapTable(tableId),
                 newLabel(tableId),
-                rows);
+                drain(rows));
+        metrics.setBufferedRows(bufferedRows);
+    }
+
+    private void doStreamLoad(
+            String database, String table, String label, List<Map<String, Object>> rows)
+            throws IOException {
+        try {
+            int bytes = httpClient.streamLoad(database, table, label, rows);
+            metrics.recordStreamLoad(bytes);
+        } catch (IOException e) {
+            metrics.recordStreamLoadFailure();
+            throw e;
+        }
+    }
+
+    private static List<Map<String, Object>> drain(ArrayDeque<Map<String, Object>> rows) {
+        List<Map<String, Object>> batch = new ArrayList<>(rows.size());
+        Map<String, Object> row;
+        while ((row = rows.poll()) != null) {
+            batch.add(row);
+        }
+        return batch;
     }
 
     private void schedulePeriodicFlush(Sink.InitContext initContext) {

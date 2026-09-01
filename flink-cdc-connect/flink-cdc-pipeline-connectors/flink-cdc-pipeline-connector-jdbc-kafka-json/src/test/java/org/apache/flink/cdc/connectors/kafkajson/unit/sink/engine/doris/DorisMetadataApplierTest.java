@@ -59,12 +59,11 @@ public class DorisMetadataApplierTest {
 
             assertThat(server.recorded).hasSize(1);
             RecordedRequest request = server.recorded.get(0);
-            assertThat(request.path).isEqualTo("/api/query/shop");
+            assertThat(request.path).isEqualTo("/api/query/default_cluster/shop");
             assertThat(request.body)
                     .isEqualTo(
-                            "{\"sql\":\"CREATE TABLE IF NOT EXISTS `shop`.`orders` "
-                                    + "(`id` INT) UNIQUE KEY(`id`) DISTRIBUTED BY HASH(`id`) BUCKETS AUTO "
-                                    + "PROPERTIES (\\\"enable_batch_delete_by_default\\\" = \\\"true\\\")\"}");
+                            "{\"stmt\":\"CREATE TABLE IF NOT EXISTS `shop`.`orders` "
+                                    + "(`id` INT) UNIQUE KEY(`id`) DISTRIBUTED BY HASH(`id`) BUCKETS AUTO\"}");
         }
     }
 
@@ -82,10 +81,10 @@ public class DorisMetadataApplierTest {
 
             assertThat(server.recorded).hasSize(2);
             assertThat(server.recorded.get(0).body).contains("CREATE TABLE IF NOT EXISTS");
-            assertThat(server.recorded.get(1).path).isEqualTo("/api/query/shop");
+            assertThat(server.recorded.get(1).path).isEqualTo("/api/query/default_cluster/shop");
             assertThat(server.recorded.get(1).body)
                     .isEqualTo(
-                            "{\"sql\":\"ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` COMMENT 'display name'\"}");
+                            "{\"stmt\":\"ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` COMMENT 'display name'\"}");
         }
     }
 
@@ -138,7 +137,7 @@ public class DorisMetadataApplierTest {
                                     .build()));
 
             assertThat(server.recorded).hasSize(1);
-            assertThat(server.recorded.get(0).path).isEqualTo("/api/query/dws_shop");
+            assertThat(server.recorded.get(0).path).isEqualTo("/api/query/default_cluster/dws_shop");
             assertThat(server.recorded.get(0).body)
                     .contains("CREATE TABLE IF NOT EXISTS `dws_shop`.`ods_orders`");
         }

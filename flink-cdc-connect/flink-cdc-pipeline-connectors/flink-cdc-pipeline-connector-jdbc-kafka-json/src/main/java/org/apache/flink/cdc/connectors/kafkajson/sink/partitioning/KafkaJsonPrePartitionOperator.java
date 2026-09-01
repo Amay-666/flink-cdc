@@ -28,6 +28,8 @@ import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.connectors.kafkajson.serializer.KafkaJsonEventSerializer;
 import org.apache.flink.cdc.runtime.operators.sink.SchemaEvolutionClient;
 import org.apache.flink.cdc.runtime.partitioning.PartitioningEvent;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.runtime.jobgraph.tasks.TaskOperatorEventGateway;
 import org.apache.flink.runtime.state.StateSnapshotContext;
@@ -68,6 +70,12 @@ public class KafkaJsonPrePartitionOperator extends AbstractStreamOperator<Partit
     private transient SchemaEvolutionClient schemaEvolutionClient;
     private transient LoadingCache<TableId, HashFunction<DataChangeEvent>> cachedHashFunctions;
 
+    /** Pipeline throughput counters — every event emitted by the source/schema operator flows here. */
+    private transient Counter dataChangeCounter;
+    private transient Counter schemaChangeCounter;
+    private transient Counter flushCounter;
+    private transient Counter recordsOutCounter;
+
     public KafkaJsonPrePartitionOperator(
             OperatorID schemaOperatorId,
             int downstreamParallelism,
@@ -85,21 +93,29 @@ public class KafkaJsonPrePartitionOperator extends AbstractStreamOperator<Partit
                 getContainingTask().getEnvironment().getOperatorCoordinatorEventGateway();
         schemaEvolutionClient = new SchemaEvolutionClient(toCoordinator, schemaOperatorId);
         cachedHashFunctions = createCache();
+        MetricGroup metrics = getRuntimeContext().getMetricGroup();
+        dataChangeCounter = metrics.counter("dataChangeEvents");
+        schemaChangeCounter = metrics.counter("schemaChangeEvents");
+        flushCounter = metrics.counter("flushEvents");
+        recordsOutCounter = metrics.counter("recordsOut");
     }
 
     @Override
     public void processElement(StreamRecord<Event> element) throws Exception {
         Event event = element.getValue();
         if (event instanceof SchemaChangeEvent) {
+            schemaChangeCounter.inc();
             // Update hash function
             TableId tableId = ((SchemaChangeEvent) event).tableId();
             cachedHashFunctions.put(tableId, recreateHashFunction(tableId));
             // Broadcast SchemaChangeEvent
             broadcastEvent(event);
         } else if (event instanceof FlushEvent) {
+            flushCounter.inc();
             // Broadcast FlushEvent
             broadcastEvent(event);
         } else if (event instanceof DataChangeEvent) {
+            dataChangeCounter.inc();
             // Partition DataChangeEvent by table ID and primary keys
             partitionBy((DataChangeEvent) event);
         }
@@ -114,6 +130,7 @@ public class KafkaJsonPrePartitionOperator extends AbstractStreamOperator<Partit
                                                 .get(dataChangeEvent.tableId())
                                                 .hashcode(dataChangeEvent)
                                         % downstreamParallelism)));
+        recordsOutCounter.inc();
     }
 
     private void broadcastEvent(Event toBroadcast) {
@@ -123,6 +140,7 @@ public class KafkaJsonPrePartitionOperator extends AbstractStreamOperator<Partit
             Event copiedEvent = KafkaJsonEventSerializer.INSTANCE.copy(toBroadcast);
             output.collect(new StreamRecord<>(new PartitioningEvent(copiedEvent, i)));
         }
+        recordsOutCounter.inc(downstreamParallelism);
     }
 
     private Schema loadLatestSchemaFromRegistry(TableId tableId) {

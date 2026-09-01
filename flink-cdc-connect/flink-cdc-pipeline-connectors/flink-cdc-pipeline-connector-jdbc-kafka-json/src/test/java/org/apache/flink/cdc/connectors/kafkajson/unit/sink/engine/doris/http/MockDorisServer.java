@@ -69,10 +69,16 @@ public class MockDorisServer implements Closeable {
     public static class Response {
         public final int status;
         public final byte[] body;
+        public final Map<String, String> headers;
 
         public Response(int status, String body) {
+            this(status, body, null);
+        }
+
+        public Response(int status, String body, Map<String, String> headers) {
             this.status = status;
             this.body = body.getBytes(StandardCharsets.UTF_8);
+            this.headers = headers;
         }
 
         public static Response ok(String json) {
@@ -92,6 +98,9 @@ public class MockDorisServer implements Closeable {
                         RecordedRequest request = RecordedRequest.from(exchange);
                         recorded.add(request);
                         Response response = responder.apply(request);
+                        if (response.headers != null) {
+                            response.headers.forEach(exchange.getResponseHeaders()::add);
+                        }
                         byte[] body = response.body == null ? new byte[0] : response.body;
                         exchange.sendResponseHeaders(response.status, body.length);
                         try (OutputStream os = exchange.getResponseBody()) {

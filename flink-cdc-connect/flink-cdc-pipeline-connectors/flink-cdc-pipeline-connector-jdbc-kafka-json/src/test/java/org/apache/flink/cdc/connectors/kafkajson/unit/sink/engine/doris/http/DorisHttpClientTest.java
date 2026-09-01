@@ -28,6 +28,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -58,6 +59,7 @@ public class DorisHttpClientTest {
             assertThat(request.headers.get("format")).isEqualTo("json");
             assertThat(request.headers.get("strip_outer_array")).isEqualTo("true");
             assertThat(request.headers.get("Authorization")).isEqualTo(basicAuth("root", "123456"));
+            assertThat(request.headers).containsEntry("hidden_columns", "__DORIS_DELETE_SIGN__");
             assertThat(request.body).isEqualTo("[{\"id\":1}]");
         }
     }
@@ -128,6 +130,66 @@ public class DorisHttpClientTest {
     }
 
     @Test
+    public void testStreamLoadFollowsFeRedirectToBackend() throws IOException {
+        // The FE answers the first PUT with a 307 pointing at the BE; the load is then re-issued
+        // against the Location, as the real Doris FE redirects StreamLoad to the backend. The
+        // redirect target can only be known after the mock is bound, so it is captured lazily.
+        AtomicReference<String> backend = new AtomicReference<>();
+        AtomicInteger requests = new AtomicInteger();
+        try (MockDorisServer server =
+                new MockDorisServer(
+                        req ->
+                                requests.getAndIncrement() == 0
+                                        ? new Response(
+                                                307,
+                                                "",
+                                                Collections.singletonMap(
+                                                        "Location",
+                                                        backend.get()
+                                                                + "/api/shop/orders/_stream_load"))
+                                        : Response.ok("{\"Status\":\"Success\"}"))) {
+            backend.set("http://" + server.endpoint());
+            DorisHttpClient client = client(server);
+
+            int bytes =
+                    client.streamLoad(
+                            "shop",
+                            "orders",
+                            "cdc_label_1",
+                            Collections.singletonList(Collections.singletonMap("id", 1)));
+
+            assertThat(bytes).isEqualTo(10);
+            assertThat(server.recorded).hasSize(2);
+            // The FE request carries the Expect header Doris requires...
+            assertThat(server.recorded.get(0).headers).containsEntry("Expect", "100-continue");
+            // ...and the backend request carries the body and the load headers.
+            assertThat(server.recorded.get(1).path).isEqualTo("/api/shop/orders/_stream_load");
+            assertThat(server.recorded.get(1).body).isEqualTo("[{\"id\":1}]");
+            assertThat(server.recorded.get(1).headers).containsEntry("label", "cdc_label_1");
+        }
+    }
+
+    @Test
+    public void testEveryStreamLoadCarriesHiddenColumnsHeader() throws IOException {
+        try (MockDorisServer server =
+                new MockDorisServer(req -> Response.ok("{\"Status\":\"Success\"}"))) {
+            DorisHttpClient client = client(server);
+
+            client.streamLoad(
+                    "shop",
+                    "orders",
+                    "cdc_label_1",
+                    Collections.singletonList(Collections.emptyMap()));
+
+            assertThat(server.recorded).hasSize(1);
+            // The delete-sign column is declared via hidden_columns so Doris applies its per-row
+            // upsert/delete semantics on every batch, without a merge_type.
+            assertThat(server.recorded.get(0).headers)
+                    .containsEntry("hidden_columns", "__DORIS_DELETE_SIGN__");
+        }
+    }
+
+    @Test
     public void testExecuteSqlSuccess() throws IOException {
         try (MockDorisServer server =
                 new MockDorisServer(req -> Response.ok("{\"code\":0,\"msg\":\"OK\"}"))) {
@@ -138,8 +200,8 @@ public class DorisHttpClientTest {
             assertThat(server.recorded).hasSize(1);
             RecordedRequest request = server.recorded.get(0);
             assertThat(request.method).isEqualTo("POST");
-            assertThat(request.path).isEqualTo("/api/query/shop");
-            assertThat(request.body).isEqualTo("{\"sql\":\"CREATE TABLE `orders` (`id` INT)\"}");
+            assertThat(request.path).isEqualTo("/api/query/default_cluster/shop");
+            assertThat(request.body).isEqualTo("{\"stmt\":\"CREATE TABLE `orders` (`id` INT)\"}");
         }
     }
 

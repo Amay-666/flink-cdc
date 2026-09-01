@@ -71,8 +71,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * flushed its buffered rows (the {@code FlushEvent} broadcast), only then is the DDL executed over
  * the mock, and only then is data released under the new schema.
  *
- * <p>The mock records the order of the DDL requests ({@code POST /api/query/{db}}) and the
- * StreamLoad requests ({@code PUT /api/{db}/{table}/_stream_load}), so the test can assert that all
+ * <p>The mock records the order of the DDL requests ({@code POST
+ * /api/query/default_cluster/{db}}) and the StreamLoad requests ({@code PUT
+ * /api/{db}/{table}/_stream_load}), so the test can assert that all
  * pre-DDL rows hit Doris <em>before</em> the DDL and the post-DDL row <em>after</em> it. The source
  * is a single-parallelism bounded stream routed with {@code .global()} so the schema-change event
  * is fully applied before any data event is seen by the partitioning operator (which requires the
@@ -113,7 +114,7 @@ public class KafkaJsonDdlBlockingITCase {
 
             assertThat(all.size()).isGreaterThanOrEqualTo(4);
             // The CREATE TABLE is the very first request: no data can flow before it is applied.
-            assertThat(all.get(0).path).isEqualTo("/api/query/shop");
+            assertThat(all.get(0).path).isEqualTo("/api/query/default_cluster/shop");
             assertThat(all.get(0).body).contains("CREATE TABLE IF NOT EXISTS");
             assertThat(ddls).hasSize(2);
             assertThat(ddls.get(1).body).contains("ALTER TABLE").contains("ADD COLUMN");
@@ -219,7 +220,7 @@ public class KafkaJsonDdlBlockingITCase {
 
     private static List<RecordedRequest> ddlRequests(List<RecordedRequest> all) {
         return all.stream()
-                .filter(r -> r.path.equals("/api/query/shop"))
+                .filter(r -> r.path.equals("/api/query/default_cluster/shop"))
                 .collect(Collectors.toList());
     }
 

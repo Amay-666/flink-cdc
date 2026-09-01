@@ -51,9 +51,13 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
     public static final ConfigOption<Boolean> ENABLE_BATCH_DELETE =
             ConfigOptions.key("sink.enable.batch-delete").booleanType().defaultValue(true);
 
-    /** Number of buffered rows before a forced flush. */
+    /** Number of buffered rows before a forced flush of that table. */
     public static final ConfigOption<Integer> BUFFER_SIZE =
             ConfigOptions.key("sink.buffer.size").intType().defaultValue(1024);
+
+    /** Upper bound on the total rows buffered across all tables before a forced flush. */
+    public static final ConfigOption<Integer> MAX_BUFFERED_ROWS =
+            ConfigOptions.key("sink.buffer.max-buffered-rows").intType().defaultValue(50_000);
 
     /** Max time rows may sit in the buffer before a flush is triggered. */
     public static final ConfigOption<Duration> FLUSH_INTERVAL =
@@ -71,6 +75,18 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
 
     public DorisDataSinkOptions(Configuration config) {
         super(config);
+    }
+
+    @Override
+    public DorisDataSinkOptions withDatabaseMapping(TableIdMapping mapping) {
+        super.withDatabaseMapping(mapping);
+        return this;
+    }
+
+    @Override
+    public DorisDataSinkOptions withTableMapping(TableIdMapping mapping) {
+        super.withTableMapping(mapping);
+        return this;
     }
 
     public String getFenodes() {
@@ -91,6 +107,10 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
 
     public int getBufferSize() {
         return getConfig().get(BUFFER_SIZE);
+    }
+
+    public int getMaxBufferedRows() {
+        return getConfig().get(MAX_BUFFERED_ROWS);
     }
 
     public Duration getFlushInterval() {

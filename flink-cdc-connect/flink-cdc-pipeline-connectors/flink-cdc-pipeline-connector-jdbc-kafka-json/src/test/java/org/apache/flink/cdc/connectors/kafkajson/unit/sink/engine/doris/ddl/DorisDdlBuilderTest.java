@@ -76,8 +76,7 @@ public class DorisDdlBuilderTest {
                         "CREATE TABLE IF NOT EXISTS `shop`.`orders` "
                                 + "(`id` INT COMMENT 'primary id', `name` VARCHAR(16) COMMENT 'the name') "
                                 + "COMMENT 'order table' "
-                                + "UNIQUE KEY(`id`) DISTRIBUTED BY HASH(`id`) BUCKETS AUTO "
-                                + "PROPERTIES (\"enable_batch_delete_by_default\" = \"true\")");
+                                + "UNIQUE KEY(`id`) DISTRIBUTED BY HASH(`id`) BUCKETS AUTO");
     }
 
     @Test
@@ -122,8 +121,7 @@ public class DorisDdlBuilderTest {
                                 + "(`c_char` CHAR(8), `c_bool` BOOLEAN, `c_dec` DECIMAL(20, 4), "
                                 + "`c_date` DATE, `c_ts` DATETIMEV2(6), `c_ltz` DATETIMEV2(3), "
                                 + "`c_tz` DATETIMEV2(6), `c_arr` STRING, `c_map` STRING) "
-                                + "UNIQUE KEY(`c_char`) DISTRIBUTED BY HASH(`c_char`) BUCKETS AUTO "
-                                + "PROPERTIES (\"enable_batch_delete_by_default\" = \"true\")");
+                                + "UNIQUE KEY(`c_char`) DISTRIBUTED BY HASH(`c_char`) BUCKETS AUTO");
     }
 
     @Test

@@ -51,9 +51,11 @@ import static org.apache.flink.cdc.common.types.DataTypeChecks.getScale;
  *
  * <p>Tables are created in the UNIQUE model when the source schema declares a primary key (the
  * primary key doubles as the distribution key), or the DUPLICATE model otherwise. The distribution
- * uses {@code BUCKETS AUTO} so Doris picks the bucket count. When batch delete is enabled the
- * {@code enable_batch_delete_by_default} property is set, allowing DELETE data rows to carry the
- * {@link #DELETE_SIGN_COLUMN} marker consumed by StreamLoad.
+ * uses {@code BUCKETS AUTO} so Doris picks the bucket count. Deletes are written by the sink in the
+ * same StreamLoad batches through the {@code __DORIS_DELETE_SIGN__} marker column (declared via the
+ * {@code hidden_columns} header), which the UNIQUE model accepts without any extra table property
+ * ({@code enable_batch_delete_by_default}, the legacy batch-delete switch, is rejected by Doris 2.x
+ * and is therefore not emitted).
  *
  * <p>Each event maps to a list of single-statement DDL strings (a multi-column event produces one
  * {@code ALTER TABLE} per column), which the {@link
@@ -65,9 +67,6 @@ import static org.apache.flink.cdc.common.types.DataTypeChecks.getScale;
 public class DorisDdlBuilder implements Serializable {
 
     private static final long serialVersionUID = 1L;
-
-    /** Column marker for DELETE rows in a StreamLoad batch (Doris batch-delete feature). */
-    public static final String DELETE_SIGN_COLUMN = "__DORIS_DELETE_SIGN__";
 
     private final DorisDataSinkOptions options;
 
@@ -112,11 +111,6 @@ public class DorisDdlBuilder implements Serializable {
                     .append(") DISTRIBUTED BY HASH(")
                     .append(quoteColumns(primaryKeys))
                     .append(") BUCKETS AUTO");
-        }
-        // The batch-delete property is only valid on UNIQUE-model tables; DUPLICATE tables cannot
-        // delete and must not carry the property.
-        if (options.isEnableBatchDelete() && !primaryKeys.isEmpty()) {
-            sql.append(" PROPERTIES (\"enable_batch_delete_by_default\" = \"true\")");
         }
         return singleton(sql.toString());
     }

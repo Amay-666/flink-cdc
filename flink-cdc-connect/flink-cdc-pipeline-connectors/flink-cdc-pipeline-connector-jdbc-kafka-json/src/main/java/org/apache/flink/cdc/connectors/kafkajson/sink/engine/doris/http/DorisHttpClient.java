@@ -48,11 +48,16 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <ul>
  *   <li>{@code PUT /api/{database}/{table}/_stream_load} — batch JSON write. The body is a JSON
- *       array ({@code strip_outer_array=true}). A failed load is retried with the <em>same</em>
+ *       array ({@code strip_outer_array=true}). Doris 2.x answers the PUT on the FE with a {@code
+ *       307} whose {@code Location} points at the BE owning the tablets; OkHttp does not follow
+ *       redirects for {@code PUT}, so the client performs the two-step dance itself — it asks the
+ *       FE first (which requires an {@code Expect: 100-continue} header) and re-issues the load
+ *       against the backend it redirects to. A failed load is retried with the <em>same</em>
  *       {@code label}, which Doris deduplicates, making retries idempotent.
- *   <li>{@code POST /api/query/{database}} with body {@code {"sql": ...}} — DDL execution (requires
- *       {@code is_execute_sql_in_http=true} on the FE). Application-level failures are surfaced
- *       immediately because DDL is not idempotent; only network-level errors are retried.
+ *   <li>{@code POST /api/query/default_cluster/{database}} with body {@code {"stmt": ...}} — DDL
+ *       execution (requires {@code is_execute_sql_in_http=true} on the FE). Application-level
+ *       failures are surfaced immediately because DDL is not idempotent; only network-level errors
+ *       are retried.
  * </ul>
  */
 public class DorisHttpClient implements Closeable {
@@ -61,6 +66,17 @@ public class DorisHttpClient implements Closeable {
 
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    /** The FE answers a StreamLoad PUT with this and a {@code Location} pointing at the BE. */
+    private static final int HTTP_TEMP_REDIRECT = 307;
+
+    /**
+     * Column name of the per-row delete marker carried in the imported data. A row with this column
+     * set to {@code true} is deleted (matched by primary key); {@code false} upserts it. Doris
+     * applies the semantics directly from the {@code hidden_columns} header — no {@code merge_type}
+     * is needed.
+     */
+    public static final String DELETE_SIGN_COLUMN = "__DORIS_DELETE_SIGN__";
 
     private final String[] fenodes;
     private final int maxRetries;
@@ -88,53 +104,56 @@ public class DorisHttpClient implements Closeable {
     /**
      * Stream-loads a batch of rows into the Doris table.
      *
+     * <p>Every row must carry {@link #DELETE_SIGN_COLUMN} — {@code true} deletes the row (matched by
+     * primary key), {@code false} upserts it — so one batch can mix upserts and deletes in arrival
+     * order. The {@code hidden_columns} header declares the marker column so Doris applies its
+     * semantics without an extra {@code merge_type}.
+     *
      * @param database target database (already mapped via the dialect options)
      * @param table target table (already mapped via the dialect options)
      * @param label the load label, deduplicated by Doris across retries
-     * @param rows the rows to write, each a column-name to JSON-ready value map
+     * @param rows the rows to write, each a column-name to JSON-ready value map including the
+     *     {@link #DELETE_SIGN_COLUMN} marker
+     * @return the number of bytes sent in the request body (for write-throughput metrics)
      */
-    public void streamLoad(
+    public int streamLoad(
             String database, String table, String label, List<Map<String, Object>> rows)
             throws IOException {
         if (rows.isEmpty()) {
-            return;
+            return 0;
         }
-        Request request =
-                new Request.Builder()
-                        .url(feEndpoint() + "/api/" + database + "/" + table + "/_stream_load")
-                        .put(RequestBody.create(JSON, OBJECT_MAPPER.writeValueAsBytes(rows)))
-                        .addHeader("label", label)
-                        .addHeader("format", "json")
-                        .addHeader("strip_outer_array", "true")
-                        .addHeader("Authorization", authorizationHeader)
-                        .build();
+        byte[] body = OBJECT_MAPPER.writeValueAsBytes(rows);
+        // Doris 2.x answers the StreamLoad PUT on the FE with a 307 whose Location points at the BE
+        // owning the tablets. OkHttp does not follow redirects for PUT, so the two-step dance is
+        // performed here: the FE is asked first (it requires the Expect: 100-continue header) and,
+        // when it redirects, the load is re-issued against the backend. A non-redirecting FE (or a
+        // test stub) evaluates the response directly.
+        Request feRequest =
+                loadRequest(
+                        feEndpoint() + "/api/" + database + "/" + table + "/_stream_load",
+                        body,
+                        label,
+                        true);
         for (int attempt = 0; ; attempt++) {
             try {
-                try (Response response = client.newCall(request).execute()) {
-                    if (!response.isSuccessful()) {
-                        throw new IOException(
-                                "HTTP "
-                                        + response.code()
-                                        + " for StreamLoad of "
-                                        + database
-                                        + "."
-                                        + table);
+                try (Response response = client.newCall(feRequest).execute()) {
+                    if (response.code() == HTTP_TEMP_REDIRECT) {
+                        String location = response.header("Location");
+                        if (location == null) {
+                            throw new IOException(
+                                    "FE redirected StreamLoad of "
+                                            + database
+                                            + "."
+                                            + table
+                                            + " without a Location header.");
+                        }
+                        // The FE bakes the credentials into the redirect target; OkHttp strips the
+                        // Authorization header on a cross-host redirect, so strip the userinfo and
+                        // let the load request's Authorization header carry the credentials.
+                        return performStreamLoad(
+                                stripUserInfo(location), body, database, table, label);
                     }
-                    String responseBody =
-                            response.body() != null ? response.body().string() : "";
-                    String status = OBJECT_MAPPER.readTree(responseBody).path("Status").asText();
-                    if ("Success".equals(status) || "Label Already Exists".equals(status)) {
-                        return;
-                    }
-                    throw new IOException(
-                            "StreamLoad failed for "
-                                    + database
-                                    + "."
-                                    + table
-                                    + " (label "
-                                    + label
-                                    + "): "
-                                    + responseBody);
+                    return evaluateStreamLoad(response, database, table, label, body.length);
                 }
             } catch (IOException e) {
                 // A StreamLoad failure is retried with the same label (idempotent in Doris).
@@ -153,16 +172,94 @@ public class DorisHttpClient implements Closeable {
         }
     }
 
+    /** Re-issues a load against the backend URL from the FE redirect, retrying with the same label. */
+    private int performStreamLoad(
+            String beUrl, byte[] body, String database, String table, String label)
+            throws IOException {
+        Request request = loadRequest(beUrl, body, label, false);
+        for (int attempt = 0; ; attempt++) {
+            try {
+                try (Response response = client.newCall(request).execute()) {
+                    return evaluateStreamLoad(response, database, table, label, body.length);
+                }
+            } catch (IOException e) {
+                if (attempt >= maxRetries) {
+                    throw e;
+                }
+                LOG.warn(
+                        "StreamLoad attempt {} for {}.{} failed: {}. Retrying with label {}.",
+                        attempt + 1,
+                        database,
+                        table,
+                        e.getMessage(),
+                        label);
+                sleepQuietly(attempt);
+            }
+        }
+    }
+
+    private Request loadRequest(String url, byte[] body, String label, boolean expectContinue) {
+        Request.Builder builder =
+                new Request.Builder()
+                        .url(url)
+                        .put(RequestBody.create(JSON, body))
+                        .addHeader("label", label)
+                        .addHeader("format", "json")
+                        .addHeader("strip_outer_array", "true")
+                        // hidden_columns declares the per-row delete marker so Doris applies its
+                        // semantics (true = delete by key, false = upsert) without any merge_type.
+                        .addHeader("hidden_columns", DELETE_SIGN_COLUMN)
+                        .addHeader("Authorization", authorizationHeader);
+        if (expectContinue) {
+            // The FE's StreamLoad handler rejects a request without this header.
+            builder.addHeader("Expect", "100-continue");
+        }
+        return builder.build();
+    }
+
+    private int evaluateStreamLoad(
+            Response response, String database, String table, String label, int bytes)
+            throws IOException {
+        if (!response.isSuccessful()) {
+            throw new IOException(
+                    "HTTP "
+                            + response.code()
+                            + " for StreamLoad of "
+                            + database
+                            + "."
+                            + table);
+        }
+        String responseBody = response.body() != null ? response.body().string() : "";
+        String status = OBJECT_MAPPER.readTree(responseBody).path("Status").asText();
+        if ("Success".equals(status) || "Label Already Exists".equals(status)) {
+            return bytes;
+        }
+        throw new IOException(
+                "StreamLoad failed for "
+                        + database
+                        + "."
+                        + table
+                        + " (label "
+                        + label
+                        + "): "
+                        + responseBody);
+    }
+
+    /** Removes the {@code user:password@} prefix the FE bakes into its redirect target. */
+    private static String stripUserInfo(String location) {
+        return location.replaceFirst("^([a-zA-Z][a-zA-Z0-9+.-]*://)[^@/]*@", "$1");
+    }
+
     /** Executes a DDL statement in the given database. */
     public void executeSql(String database, String sql) throws IOException {
         Request request =
                 new Request.Builder()
-                        .url(feEndpoint() + "/api/query/" + database)
+                        .url(feEndpoint() + "/api/query/default_cluster/" + database)
                         .post(
                                 RequestBody.create(
                                         JSON,
                                         OBJECT_MAPPER.writeValueAsBytes(
-                                                Collections.singletonMap("sql", sql))))
+                                                Collections.singletonMap("stmt", sql))))
                         .addHeader("Authorization", authorizationHeader)
                         .build();
         for (int attempt = 0; ; attempt++) {

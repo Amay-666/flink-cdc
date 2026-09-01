@@ -96,7 +96,10 @@ public class DorisSinkWriterTest {
                 writer.write(insertEvent(2), null);
                 assertThat(server.recorded).hasSize(1);
                 assertThat(server.recorded.get(0).path).isEqualTo("/api/shop/orders/_stream_load");
-                assertThat(server.recorded.get(0).body).isEqualTo("[{\"id\":1},{\"id\":2}]");
+                assertThat(server.recorded.get(0).body)
+                        .isEqualTo(
+                                "[{\"id\":1,\"__DORIS_DELETE_SIGN__\":false},"
+                                        + "{\"id\":2,\"__DORIS_DELETE_SIGN__\":false}]");
             }
         }
     }
@@ -112,22 +115,27 @@ public class DorisSinkWriterTest {
                 writer.flush(false);
                 assertThat(server.recorded).hasSize(1);
                 assertThat(server.recorded.get(0).path).isEqualTo("/api/shop/orders/_stream_load");
-                assertThat(server.recorded.get(0).body).isEqualTo("[{\"id\":1}]");
+                assertThat(server.recorded.get(0).body)
+                        .isEqualTo("[{\"id\":1,\"__DORIS_DELETE_SIGN__\":false}]");
             }
         }
     }
 
     @Test
-    public void testDeleteMapsToDeleteMarker() throws Exception {
+    public void testDeleteMapsToDeleteSignColumn() throws Exception {
         try (MockDorisServer server = server()) {
             try (DorisSinkWriter writer = writer(server, options(server))) {
                 writer.write(new CreateTableEvent(ORDERS, ORDERS_SCHEMA), null);
                 writer.write(DataChangeEvent.deleteEvent(ORDERS, record(1)), null);
                 writer.flush(false);
 
+                // The delete row carries the __DORIS_DELETE_SIGN__ marker in the same batch the
+                // upserts use; Doris removes the row when the marker is true.
                 assertThat(server.recorded).hasSize(1);
                 assertThat(server.recorded.get(0).body)
                         .isEqualTo("[{\"id\":1,\"__DORIS_DELETE_SIGN__\":true}]");
+                assertThat(server.recorded.get(0).headers)
+                        .containsEntry("hidden_columns", "__DORIS_DELETE_SIGN__");
             }
         }
     }
@@ -145,7 +153,8 @@ public class DorisSinkWriterTest {
                 writer.flush(false);
 
                 assertThat(server.recorded).hasSize(1);
-                assertThat(server.recorded.get(0).body).isEqualTo("[{\"id\":1}]");
+                assertThat(server.recorded.get(0).body)
+                        .isEqualTo("[{\"id\":1,\"__DORIS_DELETE_SIGN__\":false}]");
             }
         }
     }
@@ -170,7 +179,8 @@ public class DorisSinkWriterTest {
 
                 time.fireAll();
                 assertThat(server.recorded).hasSize(1);
-                assertThat(server.recorded.get(0).body).isEqualTo("[{\"id\":1}]");
+                assertThat(server.recorded.get(0).body)
+                        .isEqualTo("[{\"id\":1,\"__DORIS_DELETE_SIGN__\":false}]");
             }
         }
     }
@@ -200,7 +210,9 @@ public class DorisSinkWriterTest {
                 assertThat(server.recorded.get(0).path)
                         .isEqualTo("/api/shop/orders_v2/_stream_load");
                 assertThat(server.recorded.get(0).body)
-                        .isEqualTo("[{\"id\":1,\"name\":\"a\"},{\"id\":2,\"name\":\"b\"}]");
+                        .isEqualTo(
+                                "[{\"id\":1,\"name\":\"a\",\"__DORIS_DELETE_SIGN__\":false},"
+                                        + "{\"id\":2,\"name\":\"b\",\"__DORIS_DELETE_SIGN__\":false}]");
             }
         }
     }
@@ -233,7 +245,8 @@ public class DorisSinkWriterTest {
 
             writer.close();
             assertThat(server.recorded).hasSize(1);
-            assertThat(server.recorded.get(0).body).isEqualTo("[{\"id\":1}]");
+            assertThat(server.recorded.get(0).body)
+                    .isEqualTo("[{\"id\":1,\"__DORIS_DELETE_SIGN__\":false}]");
         }
     }
 
