@@ -30,9 +30,16 @@ import io.debezium.relational.TableSchema;
 import io.debezium.relational.Tables;
 import io.debezium.relational.history.TableChanges;
 import io.debezium.relational.history.TableChanges.TableChange;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -51,6 +58,8 @@ import java.util.Set;
  * snapshot splitter.
  */
 public class KafkaJsonSchema extends io.debezium.relational.RelationalDatabaseSchema {
+
+    private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonSchema.class);
 
     // cache the schema for each table (used by the snapshot splitter)
     private final Map<TableId, TableChange> schemasByTableId = new HashMap<>();
@@ -141,10 +150,71 @@ public class KafkaJsonSchema extends io.debezium.relational.RelationalDatabaseSc
                 false);
 
         Table table = Objects.requireNonNull(tables.forTable(tableId));
+        if (table.primaryKeyColumnNames().isEmpty()) {
+            // The JDBC readSchema only reports the PRIMARY KEY. A table without one but with a
+            // UNIQUE KEY (common with TiDB/TiCDC, which keys tables on a unique index) is promoted
+            // so the snapshot splitter, the schema-change records and the downstream events all key
+            // on the unique columns.
+            List<String> uniqueKeyColumns = readFirstUniqueKeyColumns(jdbc, tableId);
+            if (!uniqueKeyColumns.isEmpty()) {
+                table = table.edit().setPrimaryKeyNames(uniqueKeyColumns).create();
+            }
+        }
         TableChange tableChange =
                 new TableChanges.TableChange(TableChanges.TableChangeType.CREATE, table);
         this.schemasByTableId.put(tableId, tableChange);
         // register in the record factory so the fetch task can build records for this table
         recordFactory.registerTable(table);
+    }
+
+    /**
+     * Returns the columns of the first non-PRIMARY unique index of the table, in key order, or an
+     * empty list when the table has no unique index (or the lookup fails). {@code
+     * DatabaseMetaData#getIndexInfo} with {@code unique = true} reports every unique index — the
+     * primary key first — so the {@code PRIMARY} entry is skipped and the next index is the
+     * fallback candidate.
+     */
+    private List<String> readFirstUniqueKeyColumns(JdbcConnection jdbc, TableId tableId) {
+        try {
+            Map<String, List<String>> uniqueKeys = new LinkedHashMap<>();
+            try (ResultSet resultSet =
+                    jdbc.connection()
+                            .getMetaData()
+                            .getIndexInfo(
+                                    tableId.catalog(),
+                                    tableId.schema(),
+                                    tableId.table(),
+                                    true,
+                                    false)) {
+                while (resultSet.next()) {
+                    String indexName = resultSet.getString("INDEX_NAME");
+                    if (indexName == null || "PRIMARY".equalsIgnoreCase(indexName)) {
+                        continue; // the primary key is handled by readSchema above
+                    }
+                    if (resultSet.getShort("NON_UNIQUE") != 0) {
+                        continue; // uniqueOnly=true already filters these; keep it defensive
+                    }
+                    String columnName = resultSet.getString("COLUMN_NAME");
+                    if (columnName != null) {
+                        // MySQL reports the rows of one index in ORDINAL_POSITION order
+                        uniqueKeys
+                                .computeIfAbsent(indexName, key -> new ArrayList<>())
+                                .add(columnName);
+                    }
+                }
+            }
+            return uniqueKeys.values().stream()
+                    .filter(columns -> !columns.isEmpty())
+                    .findFirst()
+                    .orElse(Collections.emptyList());
+        } catch (SQLException e) {
+            // A unique-key lookup failure must not abort the snapshot: fall back to a keyless table
+            // (the caller logs at DEBUG level through the usual DDL/table-resolution path).
+            LOG.warn(
+                    "Failed to read unique keys of {}; no primary-key fallback applied",
+                    tableId,
+                    e);
+            return Collections.emptyList();
+        }
     }
 }

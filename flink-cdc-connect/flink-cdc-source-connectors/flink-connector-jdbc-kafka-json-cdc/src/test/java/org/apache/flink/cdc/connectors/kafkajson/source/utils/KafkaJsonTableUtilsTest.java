@@ -124,6 +124,21 @@ class KafkaJsonTableUtilsTest {
     }
 
     @Test
+    void testTidbUniqueKeyInPkNamesBecomesPrimaryKey() {
+        // TiCDC's canal-json protocol carries the keyed columns (a UNIQUE KEY when the table has no
+        // PRIMARY KEY) in pkNames; buildTable must key the reconstructed table on them.
+        Map<String, String> mysqlType = new HashMap<>();
+        mysqlType.put("id", "bigint(20)");
+        mysqlType.put("email", "varchar(64)");
+        Map<String, String> row = new HashMap<>();
+        row.put("id", "1");
+        row.put("email", "a@b.com");
+        Table table = KafkaJsonTableUtils.buildTable(message(mysqlType, row, "email"));
+        assertEquals(Collections.singletonList("email"), table.primaryKeyColumnNames());
+        assertEquals(2, table.columns().size());
+    }
+
+    @Test
     void testNoPrimaryKey() {
         Map<String, String> mysqlType = new HashMap<>();
         mysqlType.put("id", "int(11)");

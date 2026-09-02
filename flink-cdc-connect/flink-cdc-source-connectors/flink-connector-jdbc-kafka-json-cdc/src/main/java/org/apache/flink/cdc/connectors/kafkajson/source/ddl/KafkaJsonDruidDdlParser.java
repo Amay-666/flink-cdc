@@ -34,8 +34,11 @@ import com.alibaba.druid.sql.ast.statement.SQLAlterTableStatement;
 import com.alibaba.druid.sql.ast.statement.SQLColumnDefinition;
 import com.alibaba.druid.sql.ast.statement.SQLCreateTableStatement;
 import com.alibaba.druid.sql.ast.statement.SQLDropTableStatement;
+import com.alibaba.druid.sql.ast.statement.SQLPrimaryKey;
+import com.alibaba.druid.sql.ast.statement.SQLSelectOrderByItem;
 import com.alibaba.druid.sql.ast.statement.SQLTableElement;
 import com.alibaba.druid.sql.ast.statement.SQLTruncateStatement;
+import com.alibaba.druid.sql.ast.statement.SQLUniqueConstraint;
 import com.alibaba.druid.sql.dialect.mysql.ast.statement.MySqlAlterTableChangeColumn;
 import com.alibaba.druid.sql.dialect.mysql.ast.statement.MySqlAlterTableModifyColumn;
 import com.alibaba.druid.sql.dialect.mysql.ast.statement.MySqlRenameTableStatement;
@@ -50,6 +53,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.stream.Collectors;
@@ -74,31 +78,47 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
     public KafkaJsonDdlParsedResult parse(
             String database, TableId tableId, @Nullable Table currentTable, String ddl) {
         try {
-            SQLStatement statement = SQLUtils.parseSingleMysqlStatement(ddl);
-            if (statement instanceof SQLCreateTableStatement) {
-                return parseCreate((SQLCreateTableStatement) statement, tableId);
-            }
-            if (statement instanceof MySqlRenameTableStatement) {
-                return parseRenameTable(
-                        (MySqlRenameTableStatement) statement, tableId, currentTable);
-            }
-            if (statement instanceof SQLAlterTableStatement) {
-                return parseAlter((SQLAlterTableStatement) statement, tableId, currentTable);
-            }
-            if (statement instanceof SQLDropTableStatement) {
-                return KafkaJsonDdlParsedResult.drop(tableId, currentTable);
-            }
-            if (statement instanceof SQLTruncateStatement) {
-                return currentTable != null
-                        ? KafkaJsonDdlParsedResult.truncate(tableId, currentTable)
-                        : null;
-            }
-            LOG.debug("Ignoring DDL statement that does not change the table schema: {}", ddl);
-            return null;
+            return parseStatement(database, tableId, currentTable, ddl);
         } catch (Exception e) {
+            // TiDB accepts idempotence modifiers standard MySQL does not (e.g. "ADD COLUMN IF NOT
+            // EXISTS" / "DROP COLUMN IF EXISTS"), which Druid's MySQL grammar rejects. Strip them
+            // and retry so a committed TiDB DDL is not silently dropped; the Debezium ANTLR parser
+            // handles these modifiers natively and needs no retry.
+            String stripped = KafkaJsonDdlSqlNormalizer.stripIfExistsClauses(ddl);
+            if (!stripped.equals(ddl)) {
+                try {
+                    return parseStatement(database, tableId, currentTable, stripped);
+                } catch (Exception ignored) {
+                    // fall through to the warning below with the original statement
+                }
+            }
             LOG.warn("Failed to parse DDL with the Druid parser: {}", ddl, e);
             return null;
         }
+    }
+
+    private static KafkaJsonDdlParsedResult parseStatement(
+            String database, TableId tableId, @Nullable Table currentTable, String ddl) {
+        SQLStatement statement = SQLUtils.parseSingleMysqlStatement(ddl);
+        if (statement instanceof SQLCreateTableStatement) {
+            return parseCreate((SQLCreateTableStatement) statement, tableId);
+        }
+        if (statement instanceof MySqlRenameTableStatement) {
+            return parseRenameTable((MySqlRenameTableStatement) statement, tableId, currentTable);
+        }
+        if (statement instanceof SQLAlterTableStatement) {
+            return parseAlter((SQLAlterTableStatement) statement, tableId, currentTable);
+        }
+        if (statement instanceof SQLDropTableStatement) {
+            return KafkaJsonDdlParsedResult.drop(tableId, currentTable);
+        }
+        if (statement instanceof SQLTruncateStatement) {
+            return currentTable != null
+                    ? KafkaJsonDdlParsedResult.truncate(tableId, currentTable)
+                    : null;
+        }
+        LOG.debug("Ignoring DDL statement that does not change the table schema: {}", ddl);
+        return null;
     }
 
     private static KafkaJsonDdlParsedResult parseCreate(
@@ -113,8 +133,41 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
         List<String> primaryKeyNames = statement.getPrimaryKeyNames();
         if (primaryKeyNames != null && !primaryKeyNames.isEmpty()) {
             table.setPrimaryKeyNames(primaryKeyNames);
+        } else {
+            // A table without a PRIMARY KEY but with a UNIQUE KEY still has a keyed identity:
+            // TiDB/TiCDC captures and deletes/upserts such a table on the unique columns. Promote
+            // the first declared unique key so the schema change and downstream events key on it.
+            List<String> uniqueKeyNames = firstUniqueKeyColumns(statement);
+            if (!uniqueKeyNames.isEmpty()) {
+                table.setPrimaryKeyNames(uniqueKeyNames);
+            }
         }
         return KafkaJsonDdlParsedResult.create(tableId, table.create());
+    }
+
+    /**
+     * Returns the column names of the first {@code UNIQUE} constraint of a {@code CREATE TABLE}, or
+     * an empty list when the statement declares none. {@code PRIMARY KEY} (a {@link SQLPrimaryKey})
+     * is excluded — it is handled via {@code getPrimaryKeyNames} — and plain indexes do not
+     * implement {@link SQLUniqueConstraint}.
+     */
+    private static List<String> firstUniqueKeyColumns(SQLCreateTableStatement statement) {
+        for (SQLTableElement element : statement.getTableElementList()) {
+            if (element instanceof SQLPrimaryKey || !(element instanceof SQLUniqueConstraint)) {
+                continue;
+            }
+            List<SQLSelectOrderByItem> columns = ((SQLUniqueConstraint) element).getColumns();
+            if (columns == null || columns.isEmpty()) {
+                continue;
+            }
+            return columns.stream()
+                    .map(SQLSelectOrderByItem::getExpr)
+                    .filter(SQLName.class::isInstance)
+                    .map(SQLName.class::cast)
+                    .map(column -> unquote(column.getSimpleName()))
+                    .collect(Collectors.toList());
+        }
+        return Collections.emptyList();
     }
 
     /**

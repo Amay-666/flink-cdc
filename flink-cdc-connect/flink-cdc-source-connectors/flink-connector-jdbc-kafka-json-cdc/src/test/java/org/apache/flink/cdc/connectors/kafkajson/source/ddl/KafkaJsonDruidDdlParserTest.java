@@ -25,10 +25,12 @@ import io.debezium.relational.TableId;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Types;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -67,6 +69,69 @@ class KafkaJsonDruidDdlParserTest {
     }
 
     @Test
+    void testCreateTableWithoutPrimaryKeyFallsBackToUniqueKey() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        null,
+                        "CREATE TABLE `test`.`users` ("
+                                + "`id` bigint(20) NOT NULL, "
+                                + "`email` varchar(255) NOT NULL, "
+                                + "UNIQUE KEY `uk_email` (`email`))");
+
+        assertEquals(KafkaJsonTableChangeType.CREATE, result.getType());
+        Table table = result.getNewTable();
+        // no PRIMARY KEY: the declared unique key becomes the primary key
+        assertEquals(Collections.singletonList("email"), table.primaryKeyColumnNames());
+        assertEquals(2, table.columns().size());
+    }
+
+    @Test
+    void testCreateTableFallsBackToCompositeUniqueKey() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        null,
+                        "CREATE TABLE `test`.`users` ("
+                                + "`tenant` bigint(20) NOT NULL, "
+                                + "`email` varchar(255) NOT NULL, "
+                                + "UNIQUE KEY `uk_tenant_email` (`tenant`,`email`))");
+
+        assertEquals(
+                Arrays.asList("tenant", "email"), result.getNewTable().primaryKeyColumnNames());
+    }
+
+    @Test
+    void testCreateTablePrefersPrimaryKeyOverUniqueKey() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        null,
+                        "CREATE TABLE `test`.`users` ("
+                                + "`id` bigint(20) NOT NULL, "
+                                + "`email` varchar(255) NOT NULL, "
+                                + "PRIMARY KEY (`id`), "
+                                + "UNIQUE KEY `uk_email` (`email`))");
+
+        assertEquals(Collections.singletonList("id"), result.getNewTable().primaryKeyColumnNames());
+    }
+
+    @Test
+    void testCreateTableWithoutAnyKeyKeepsNoPrimaryKey() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        null,
+                        "CREATE TABLE `test`.`users` (`id` bigint(20) NOT NULL, `name` varchar(255))");
+
+        assertEquals(Collections.emptyList(), result.getNewTable().primaryKeyColumnNames());
+    }
+
+    @Test
     void testParseAlterAddColumn() {
         KafkaJsonDdlParsedResult result =
                 parser.parse(
@@ -98,6 +163,67 @@ class KafkaJsonDruidDdlParserTest {
         assertEquals(1, table.columns().size());
         assertNull(table.columnWithName("name"));
         assertEquals("id", table.columns().get(0).name());
+    }
+
+    @Test
+    void testParseAlterAddColumnIfNotExists() {
+        // TiDB emits "ADD COLUMN IF NOT EXISTS", which Druid's MySQL grammar rejects without the
+        // retry that strips the idempotence modifier; the schema change must still be captured.
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        baseTable(),
+                        "ALTER TABLE `test`.`users` ADD COLUMN IF NOT EXISTS `age` int");
+
+        assertEquals(KafkaJsonTableChangeType.ALTER, result.getType());
+        Table table = result.getNewTable();
+        assertEquals(3, table.columns().size());
+        Column age = table.columnWithName("age");
+        assertEquals("INT", age.typeName());
+        assertEquals(Types.INTEGER, age.jdbcType());
+        assertEquals(3, age.position());
+    }
+
+    @Test
+    void testParseAlterDropColumnIfExists() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        baseTable(),
+                        "ALTER TABLE `test`.`users` DROP COLUMN IF EXISTS `name`");
+
+        assertEquals(KafkaJsonTableChangeType.ALTER, result.getType());
+        Table table = result.getNewTable();
+        assertEquals(1, table.columns().size());
+        assertNull(table.columnWithName("name"));
+        assertEquals("id", table.columns().get(0).name());
+    }
+
+    @Test
+    void testParseAlterAddIndexIfNotExistsIsIgnored() {
+        // Index changes do not affect the column model: even with the TiDB modifier the statement
+        // is recognized and dropped, not treated as an unparsable DDL.
+        assertNull(
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        baseTable(),
+                        "ALTER TABLE `test`.`users` ADD INDEX IF NOT EXISTS `idx_name` (`name`)"));
+    }
+
+    @Test
+    void testParseTiDbIfExistsModifierIsCaseInsensitive() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        baseTable(),
+                        "alter table `test`.`users` add column if not exists `age` int");
+
+        assertEquals(KafkaJsonTableChangeType.ALTER, result.getType());
+        assertNotNull(result.getNewTable().columnWithName("age"));
     }
 
     @Test
