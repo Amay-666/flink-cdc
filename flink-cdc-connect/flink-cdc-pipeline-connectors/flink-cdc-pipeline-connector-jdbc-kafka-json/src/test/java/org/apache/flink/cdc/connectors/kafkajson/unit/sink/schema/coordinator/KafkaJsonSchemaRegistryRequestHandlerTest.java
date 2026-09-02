@@ -17,6 +17,7 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.unit.sink.schema.coordinator;
 
+import org.apache.flink.cdc.common.event.AlterColumnTypeEvent;
 import org.apache.flink.cdc.common.event.CreateTableEvent;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
@@ -28,6 +29,7 @@ import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordinator.KafkaJsonSchemaDerivation;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordinator.KafkaJsonSchemaManager;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordinator.KafkaJsonSchemaRegistryRequestHandler;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordinator.OldSchemaAwareMetadataApplier;
 import org.apache.flink.cdc.runtime.operators.schema.event.CoordinationResponseUtils;
 import org.apache.flink.cdc.runtime.operators.schema.event.SchemaChangeRequest;
 import org.apache.flink.cdc.runtime.operators.schema.event.SchemaChangeResponse;
@@ -41,7 +43,9 @@ import org.apache.flink.runtime.operators.coordination.OperatorCoordinator;
 import org.junit.Test;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -72,7 +76,10 @@ public class KafkaJsonSchemaRegistryRequestHandlerTest {
             handler.registerSinkWriter(1);
 
             SchemaChangeResponse response =
-                    send(handler, new SchemaChangeRequest(ORDERS, new CreateTableEvent(ORDERS, SCHEMA), 0));
+                    send(
+                            handler,
+                            new SchemaChangeRequest(
+                                    ORDERS, new CreateTableEvent(ORDERS, SCHEMA), 0));
             assertThat(response.isAccepted()).isTrue();
             assertThat(response.getSchemaChangeEvents())
                     .containsExactly(new CreateTableEvent(ORDERS, SCHEMA));
@@ -168,6 +175,49 @@ public class KafkaJsonSchemaRegistryRequestHandlerTest {
         }
     }
 
+    @Test
+    public void testAlterColumnTypePassesPreChangeSchemaToCapableApplier() throws Exception {
+        // An AlterColumnTypeEvent carries only the new types. An applier implementing
+        // OldSchemaAwareMetadataApplier must receive the pre-change schema, resolved from the
+        // schema manager before the change is applied.
+        OldSchemaAwareRecordingMetadataApplier applier =
+                new OldSchemaAwareRecordingMetadataApplier();
+        try (KafkaJsonSchemaRegistryRequestHandler handler = handler(applier)) {
+            handler.registerSinkWriter(0);
+
+            Schema v1 =
+                    Schema.newBuilder()
+                            .physicalColumn("id", DataTypes.INT())
+                            .physicalColumn("name", DataTypes.VARCHAR(100))
+                            .primaryKey("id")
+                            .build();
+            SchemaChangeRequest createRequest =
+                    new SchemaChangeRequest(ORDERS, new CreateTableEvent(ORDERS, v1), 0);
+            assertThat(send(handler, createRequest).isAccepted()).isTrue();
+            handler.flushSuccess(ORDERS, 0, 1);
+            awaitResult(handler);
+
+            AlterColumnTypeEvent alter =
+                    new AlterColumnTypeEvent(
+                            ORDERS, Collections.singletonMap("name", DataTypes.VARCHAR(300)));
+            SchemaChangeRequest alterRequest = new SchemaChangeRequest(ORDERS, alter, 0);
+            assertThat(send(handler, alterRequest).isAccepted()).isTrue();
+            handler.flushSuccess(ORDERS, 0, 1);
+            SchemaChangeResultResponse result = awaitResult(handler);
+            assertThat(result.getFinishedSchemaChangeEvents()).containsExactly(alter);
+
+            // The seam handed the applier the pre-change schema: the column was VARCHAR(100) before
+            // this event, and the manager has since evolved past it.
+            assertThat(applier.applied.get(applier.applied.size() - 1)).isEqualTo(alter);
+            assertThat(applier.oldSchema).isPresent();
+            assertThat(applier.oldSchema.get().getColumn("name"))
+                    .hasValueSatisfying(
+                            column ->
+                                    assertThat(column.getType()).isEqualTo(DataTypes.VARCHAR(100)));
+            assertThat(context.failures).isEmpty();
+        }
+    }
+
     private KafkaJsonSchemaRegistryRequestHandler handler(MetadataApplier applier) {
         return new KafkaJsonSchemaRegistryRequestHandler(
                 applier,
@@ -208,6 +258,27 @@ public class KafkaJsonSchemaRegistryRequestHandlerTest {
         @Override
         public void applySchemaChange(SchemaChangeEvent schemaChangeEvent) {
             applied.add(schemaChangeEvent);
+        }
+    }
+
+    /**
+     * A {@link MetadataApplier} that additionally implements {@link OldSchemaAwareMetadataApplier}
+     * and records the pre-change schema an {@link AlterColumnTypeEvent} was applied against.
+     */
+    private static class OldSchemaAwareRecordingMetadataApplier
+            implements MetadataApplier, OldSchemaAwareMetadataApplier {
+        final List<SchemaChangeEvent> applied = new ArrayList<>();
+        Optional<Schema> oldSchema = Optional.empty();
+
+        @Override
+        public void applySchemaChange(SchemaChangeEvent schemaChangeEvent) {
+            applied.add(schemaChangeEvent);
+        }
+
+        @Override
+        public void applyAlterColumnType(AlterColumnTypeEvent event, Optional<Schema> oldSchema) {
+            applied.add(event);
+            this.oldSchema = oldSchema;
         }
     }
 

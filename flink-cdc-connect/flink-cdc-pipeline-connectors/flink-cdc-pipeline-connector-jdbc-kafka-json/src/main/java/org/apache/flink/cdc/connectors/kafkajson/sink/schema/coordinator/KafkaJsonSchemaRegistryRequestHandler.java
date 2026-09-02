@@ -17,11 +17,13 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordinator;
 
+import org.apache.flink.cdc.common.event.AlterColumnTypeEvent;
 import org.apache.flink.cdc.common.event.CreateTableEvent;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.exceptions.UnsupportedSchemaChangeEventException;
 import org.apache.flink.cdc.common.pipeline.SchemaChangeBehavior;
+import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.common.sink.MetadataApplier;
 import org.apache.flink.cdc.common.utils.Preconditions;
 import org.apache.flink.cdc.runtime.operators.schema.event.SchemaChangeProcessingResponse;
@@ -38,6 +40,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -49,17 +52,20 @@ import static org.apache.flink.cdc.runtime.operators.schema.event.CoordinationRe
 /**
  * A handler to deal with all requests and events for {@link KafkaJsonSchemaRegistry}.
  *
- * <p>This mirrors the released {@code SchemaRegistryRequestHandler} state machine —
- * {@code IDLE → WAITING_FOR_FLUSH → APPLYING → FINISHED} with {@code BUSY} requests queued by
- * subtask — so that a schema change blocks upstream data flow until every sink subtask has flushed,
- * then applies the DDL and lets the data flow resume. Two deviations make the connector's custom
- * events safe: the derivation is a pure pass-through (no {@code lenientize} switch on {@code
- * getType()}), and {@link #applySchemaChange} gates on {@code instanceof CreateTableEvent} instead
- * of {@code getType()} and drops the {@code acceptsSchemaEvolutionType} check — the connector's
- * metadata applier accepts all events.
+ * <p>This mirrors the released {@code SchemaRegistryRequestHandler} state machine — {@code IDLE →
+ * WAITING_FOR_FLUSH → APPLYING → FINISHED} with {@code BUSY} requests queued by subtask — so that a
+ * schema change blocks upstream data flow until every sink subtask has flushed, then applies the
+ * DDL and lets the data flow resume. Two deviations make the connector's custom events safe: the
+ * derivation is a pure pass-through (no {@code lenientize} switch on {@code getType()}), and {@link
+ * #applySchemaChange} gates on {@code instanceof CreateTableEvent} instead of {@code getType()} and
+ * drops the {@code acceptsSchemaEvolutionType} check — the connector's metadata applier accepts all
+ * events. An {@code AlterColumnTypeEvent} additionally carries no old type, so when the applier
+ * implements {@link OldSchemaAwareMetadataApplier} the handler resolves the pre-change schema from
+ * {@link KafkaJsonSchemaManager} and passes it along.
  */
 public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
-    private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonSchemaRegistryRequestHandler.class);
+    private static final Logger LOG =
+            LoggerFactory.getLogger(KafkaJsonSchemaRegistryRequestHandler.class);
 
     /** The {@link MetadataApplier} for every table. */
     private final MetadataApplier metadataApplier;
@@ -226,7 +232,20 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                 continue;
             }
             try {
-                metadataApplier.applySchemaChange(changeEvent);
+                if (changeEvent instanceof AlterColumnTypeEvent
+                        && metadataApplier instanceof OldSchemaAwareMetadataApplier) {
+                    // An AlterColumnTypeEvent only carries the new types; an engine that needs the
+                    // old (pre-change) types to react — Doris, which cannot shrink a CHAR/VARCHAR
+                    // column the way MySQL/TiDB can — gets them from the pre-change evolved schema.
+                    // It is resolved before applyEvolvedSchemaChange below, so it still reflects
+                    // this event's "before" state.
+                    Optional<Schema> oldSchema =
+                            schemaManager.getLatestEvolvedSchema(changeEvent.tableId());
+                    ((OldSchemaAwareMetadataApplier) metadataApplier)
+                            .applyAlterColumnType((AlterColumnTypeEvent) changeEvent, oldSchema);
+                } else {
+                    metadataApplier.applySchemaChange(changeEvent);
+                }
                 LOG.info("Applied schema change {} to table {}.", changeEvent, tableId);
                 schemaManager.applyEvolvedSchemaChange(changeEvent);
                 currentFinishedSchemaChanges.add(changeEvent);

@@ -17,6 +17,7 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris;
 
+import org.apache.flink.cdc.common.event.AlterColumnTypeEvent;
 import org.apache.flink.cdc.common.event.CreateTableEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.exceptions.SchemaEvolveException;
@@ -34,6 +35,7 @@ import org.apache.flink.configuration.Configuration;
 import org.junit.Test;
 
 import java.util.Collections;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -107,9 +109,7 @@ public class DorisMetadataApplierTest {
                     // the (null) cause into getMessage().
                     .satisfies(
                             e ->
-                                    assertThat(
-                                                    ((SchemaEvolveException) e)
-                                                            .getExceptionMessage())
+                                    assertThat(((SchemaEvolveException) e).getExceptionMessage())
                                             .contains("code 1105"));
             // No retry on an application-level DDL error.
             assertThat(server.recorded).hasSize(1);
@@ -137,9 +137,56 @@ public class DorisMetadataApplierTest {
                                     .build()));
 
             assertThat(server.recorded).hasSize(1);
-            assertThat(server.recorded.get(0).path).isEqualTo("/api/query/default_cluster/dws_shop");
+            assertThat(server.recorded.get(0).path)
+                    .isEqualTo("/api/query/default_cluster/dws_shop");
             assertThat(server.recorded.get(0).body)
                     .contains("CREATE TABLE IF NOT EXISTS `dws_shop`.`ods_orders`");
+        }
+    }
+
+    @Test
+    public void testApplyAlterColumnTypeGrowthEmitsModify() throws Exception {
+        Schema oldSchema =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("name", DataTypes.VARCHAR(100))
+                        .primaryKey("id")
+                        .build();
+        try (MockDorisServer server =
+                new MockDorisServer(req -> Response.ok("{\"code\":0,\"msg\":\"OK\"}"))) {
+            DorisMetadataApplier applier = applier(server);
+
+            applier.applyAlterColumnType(
+                    new AlterColumnTypeEvent(
+                            ORDERS, Collections.singletonMap("name", DataTypes.VARCHAR(300))),
+                    Optional.of(oldSchema));
+
+            assertThat(server.recorded).hasSize(1);
+            assertThat(server.recorded.get(0).body)
+                    .isEqualTo(
+                            "{\"stmt\":\"ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` VARCHAR(900)\"}");
+        }
+    }
+
+    @Test
+    public void testApplyAlterColumnTypeShrinkSendsNoRequest() throws Exception {
+        Schema oldSchema =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("name", DataTypes.VARCHAR(300))
+                        .primaryKey("id")
+                        .build();
+        try (MockDorisServer server =
+                new MockDorisServer(req -> Response.ok("{\"code\":0,\"msg\":\"OK\"}"))) {
+            DorisMetadataApplier applier = applier(server);
+
+            applier.applyAlterColumnType(
+                    new AlterColumnTypeEvent(
+                            ORDERS, Collections.singletonMap("name", DataTypes.VARCHAR(100))),
+                    Optional.of(oldSchema));
+
+            // The shrink is skipped with a warning; no DDL reaches Doris.
+            assertThat(server.recorded).isEmpty();
         }
     }
 

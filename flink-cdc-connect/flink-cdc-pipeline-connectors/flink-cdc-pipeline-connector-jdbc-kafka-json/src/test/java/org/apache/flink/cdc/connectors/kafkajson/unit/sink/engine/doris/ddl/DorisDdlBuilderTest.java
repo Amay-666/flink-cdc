@@ -42,6 +42,7 @@ import org.junit.Test;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -69,12 +70,13 @@ public class DorisDdlBuilderTest {
                         .comment("order table")
                         .build();
 
-        List<String> sqls = defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
+        List<String> sqls =
+                defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
 
         assertThat(sqls)
                 .containsExactly(
                         "CREATE TABLE IF NOT EXISTS `shop`.`orders` "
-                                + "(`id` INT COMMENT 'primary id', `name` VARCHAR(16) COMMENT 'the name') "
+                                + "(`id` INT COMMENT 'primary id', `name` VARCHAR(48) COMMENT 'the name') "
                                 + "COMMENT 'order table' "
                                 + "UNIQUE KEY(`id`) DISTRIBUTED BY HASH(`id`) BUCKETS AUTO");
     }
@@ -87,12 +89,13 @@ public class DorisDdlBuilderTest {
                         .physicalColumn("name", DataTypes.VARCHAR(16))
                         .build();
 
-        List<String> sqls = defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
+        List<String> sqls =
+                defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
 
         assertThat(sqls)
                 .containsExactly(
                         "CREATE TABLE IF NOT EXISTS `shop`.`orders` "
-                                + "(`id` INT, `name` VARCHAR(16)) "
+                                + "(`id` INT, `name` VARCHAR(48)) "
                                 + "DUPLICATE KEY(`id`) DISTRIBUTED BY HASH(`id`) BUCKETS AUTO");
     }
 
@@ -109,11 +112,13 @@ public class DorisDdlBuilderTest {
                         .physicalColumn("c_ltz", DataTypes.TIMESTAMP_LTZ(3))
                         .physicalColumn("c_tz", DataTypes.TIMESTAMP_TZ())
                         .physicalColumn("c_arr", DataTypes.ARRAY(DataTypes.INT()))
-                        .physicalColumn("c_map", DataTypes.MAP(DataTypes.VARCHAR(8), DataTypes.INT()))
+                        .physicalColumn(
+                                "c_map", DataTypes.MAP(DataTypes.VARCHAR(8), DataTypes.INT()))
                         .primaryKey("c_char")
                         .build();
 
-        List<String> sqls = defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
+        List<String> sqls =
+                defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
 
         assertThat(sqls.get(0))
                 .isEqualTo(
@@ -132,13 +137,12 @@ public class DorisDdlBuilderTest {
                         new ColumnWithPosition(
                                 Column.physicalColumn("addr", DataTypes.VARCHAR(64), "address")));
 
-        List<String> sqls =
-                defaultBuilder().buildAddColumnSql(new AddColumnEvent(ORDERS, added));
+        List<String> sqls = defaultBuilder().buildAddColumnSql(new AddColumnEvent(ORDERS, added));
 
         assertThat(sqls)
                 .containsExactly(
                         "ALTER TABLE `shop`.`orders` ADD COLUMN `age` INT",
-                        "ALTER TABLE `shop`.`orders` ADD COLUMN `addr` VARCHAR(64) COMMENT 'address'");
+                        "ALTER TABLE `shop`.`orders` ADD COLUMN `addr` VARCHAR(192) COMMENT 'address'");
     }
 
     @Test
@@ -163,8 +167,7 @@ public class DorisDdlBuilderTest {
                                         ORDERS, Collections.singletonMap("old_name", "new_name")));
 
         assertThat(sqls)
-                .containsExactly(
-                        "ALTER TABLE `shop`.`orders` RENAME COLUMN `old_name` `new_name`");
+                .containsExactly("ALTER TABLE `shop`.`orders` RENAME COLUMN `old_name` `new_name`");
     }
 
     @Test
@@ -173,9 +176,116 @@ public class DorisDdlBuilderTest {
                 defaultBuilder()
                         .buildAlterColumnTypeSql(
                                 new AlterColumnTypeEvent(
-                                        ORDERS, Collections.singletonMap("price", DataTypes.DOUBLE())));
+                                        ORDERS,
+                                        Collections.singletonMap("price", DataTypes.DOUBLE())));
 
-        assertThat(sqls).containsExactly("ALTER TABLE `shop`.`orders` MODIFY COLUMN `price` DOUBLE");
+        assertThat(sqls)
+                .containsExactly("ALTER TABLE `shop`.`orders` MODIFY COLUMN `price` DOUBLE");
+    }
+
+    @Test
+    public void testAlterColumnTypeSkipsShrinkWithOldSchema() {
+        // Doris cannot reduce a VARCHAR length while MySQL/TiDB can; knowing the old type, the
+        // builder drops the shrink with a warning instead of sending a statement Doris rejects.
+        Schema oldSchema =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("name", DataTypes.VARCHAR(300))
+                        .primaryKey("id")
+                        .build();
+
+        List<String> sqls =
+                defaultBuilder()
+                        .buildAlterColumnTypeSql(
+                                new AlterColumnTypeEvent(
+                                        ORDERS,
+                                        Collections.singletonMap("name", DataTypes.VARCHAR(100))),
+                                Optional.of(oldSchema));
+
+        assertThat(sqls).isEmpty();
+    }
+
+    @Test
+    public void testAlterColumnTypeEmitsGrowthWithOldSchema() {
+        Schema oldSchema =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("name", DataTypes.VARCHAR(100))
+                        .primaryKey("id")
+                        .build();
+
+        List<String> sqls =
+                defaultBuilder()
+                        .buildAlterColumnTypeSql(
+                                new AlterColumnTypeEvent(
+                                        ORDERS,
+                                        Collections.singletonMap("name", DataTypes.VARCHAR(300))),
+                                Optional.of(oldSchema));
+
+        assertThat(sqls)
+                .containsExactly("ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` VARCHAR(900)");
+    }
+
+    @Test
+    public void testAlterColumnTypeWithoutOldSchemaDoesNotGuessShrink() {
+        // Without the pre-change schema the change is emitted as-is: the builder never guesses.
+        List<String> sqls =
+                defaultBuilder()
+                        .buildAlterColumnTypeSql(
+                                new AlterColumnTypeEvent(
+                                        ORDERS,
+                                        Collections.singletonMap("name", DataTypes.VARCHAR(100))));
+
+        assertThat(sqls)
+                .containsExactly("ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` VARCHAR(300)");
+    }
+
+    @Test
+    public void testAlterColumnTypeCrossFamilyIsNotAShrink() {
+        // VARCHAR -> CHAR is a type conversion, not a same-family length reduction; the shrink test
+        // only compares equal type roots, so the change is emitted.
+        Schema oldSchema =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("name", DataTypes.VARCHAR(100))
+                        .primaryKey("id")
+                        .build();
+
+        List<String> sqls =
+                defaultBuilder()
+                        .buildAlterColumnTypeSql(
+                                new AlterColumnTypeEvent(
+                                        ORDERS,
+                                        Collections.singletonMap("name", DataTypes.CHAR(100))),
+                                Optional.of(oldSchema));
+
+        assertThat(sqls)
+                .containsExactly("ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` CHAR(100)");
+    }
+
+    @Test
+    public void testCreateTableVarcharLengthMappingCapsAtDorisMaximum() {
+        // A MySQL/TiDB VARCHAR counts characters; Doris measures bytes (max 3/char). The largest
+        // value still under the cap is 21844 chars (65532 bytes); anything larger clamps to 65533.
+        Schema belowCap =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("name", DataTypes.VARCHAR(21844))
+                        .primaryKey("id")
+                        .build();
+        Schema aboveCap =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("name", DataTypes.VARCHAR(21845))
+                        .primaryKey("id")
+                        .build();
+
+        List<String> sqls =
+                defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, belowCap));
+        assertThat(sqls.get(0)).contains("`name` VARCHAR(65532)");
+
+        sqls = defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, aboveCap));
+        assertThat(sqls.get(0)).contains("`name` VARCHAR(65533)");
     }
 
     @Test
@@ -190,20 +300,21 @@ public class DorisDdlBuilderTest {
                                                 .physicalColumn("id", DataTypes.INT())
                                                 .build()));
 
-        assertThat(sqls)
-                .containsExactly("ALTER TABLE `shop`.`orders` RENAME `orders_v2`");
+        assertThat(sqls).containsExactly("ALTER TABLE `shop`.`orders` RENAME `orders_v2`");
     }
 
     @Test
     public void testDropTable() {
-        List<String> sqls = defaultBuilder().buildDropTableSql(new DropTableEvent(ORDERS, null, null));
+        List<String> sqls =
+                defaultBuilder().buildDropTableSql(new DropTableEvent(ORDERS, null, null));
 
         assertThat(sqls).containsExactly("DROP TABLE IF EXISTS `shop`.`orders`");
     }
 
     @Test
     public void testTruncateTable() {
-        List<String> sqls = defaultBuilder().buildTruncateTableSql(new TruncateTableEvent(ORDERS, null));
+        List<String> sqls =
+                defaultBuilder().buildTruncateTableSql(new TruncateTableEvent(ORDERS, null));
 
         assertThat(sqls).containsExactly("TRUNCATE TABLE `shop`.`orders`");
     }
@@ -227,7 +338,8 @@ public class DorisDdlBuilderTest {
                                         ORDERS, Collections.singletonMap("name", "display name")));
 
         assertThat(sqls)
-                .containsExactly("ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` COMMENT 'display name'");
+                .containsExactly(
+                        "ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` COMMENT 'display name'");
     }
 
     @Test
@@ -235,8 +347,7 @@ public class DorisDdlBuilderTest {
         Configuration config = new Configuration();
         config.set(KafkaJsonDataSinkOptions.DATABASE_PREFIX, "dws_");
         config.set(KafkaJsonDataSinkOptions.TABLE_PREFIX, "ods_");
-        DorisDdlBuilder builder =
-                builder(new DorisDataSinkOptions(config));
+        DorisDdlBuilder builder = builder(new DorisDataSinkOptions(config));
 
         Schema schema =
                 Schema.newBuilder().physicalColumn("id", DataTypes.INT()).primaryKey("id").build();
@@ -254,7 +365,8 @@ public class DorisDdlBuilderTest {
                         .comment("an \"order's\" comment")
                         .build();
 
-        List<String> sqls = defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
+        List<String> sqls =
+                defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
 
         assertThat(sqls.get(0))
                 .contains("`id` INT COMMENT 'it''s the id'")

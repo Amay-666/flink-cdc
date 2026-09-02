@@ -25,6 +25,7 @@ import org.apache.flink.cdc.common.event.RenameColumnEvent;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.exceptions.SchemaEvolveException;
 import org.apache.flink.cdc.common.exceptions.UnsupportedSchemaChangeEventException;
+import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.common.sink.MetadataApplier;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterTableCommentEvent;
@@ -33,11 +34,13 @@ import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.ddl.DorisDdlBuilder;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.http.DorisHttpClient;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordinator.OldSchemaAwareMetadataApplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Applies schema changes to Doris over HTTP.
@@ -50,8 +53,13 @@ import java.util.List;
  *
  * <p>The HTTP client is created lazily because this object is serialized from the client to the
  * JobManager; {@link okhttp3.OkHttpClient} is not serializable.
+ *
+ * <p>Implements {@link OldSchemaAwareMetadataApplier}: when the coordinator applies an {@link
+ * AlterColumnTypeEvent} it also resolves the pre-change schema (an event only carries the new
+ * types), which lets {@link DorisDdlBuilder} recognise a {@code CHAR}/{@code VARCHAR} shrink — a
+ * change Doris rejects but MySQL/TiDB allows — and skip it with a warning.
  */
-public class DorisMetadataApplier implements MetadataApplier {
+public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMetadataApplier {
 
     private static final Logger LOG = LoggerFactory.getLogger(DorisMetadataApplier.class);
 
@@ -65,18 +73,28 @@ public class DorisMetadataApplier implements MetadataApplier {
     }
 
     @Override
-    public void applySchemaChange(SchemaChangeEvent schemaChangeEvent) throws SchemaEvolveException {
+    public void applySchemaChange(SchemaChangeEvent schemaChangeEvent)
+            throws SchemaEvolveException {
+        applySqls(schemaChangeEvent, buildSqls(schemaChangeEvent));
+    }
+
+    @Override
+    public void applyAlterColumnType(AlterColumnTypeEvent event, Optional<Schema> oldSchema)
+            throws SchemaEvolveException {
+        // The old schema lets the builder recognise a CHAR/VARCHAR length reduction and skip it
+        // (Doris rejects shrinking such a column; see DorisDdlBuilder.buildAlterColumnTypeSql).
+        applySqls(event, ddlBuilder.buildAlterColumnTypeSql(event, oldSchema));
+    }
+
+    private void applySqls(SchemaChangeEvent event, List<String> sqls)
+            throws SchemaEvolveException {
         try {
-            List<String> sqls = buildSqls(schemaChangeEvent);
             for (String sql : sqls) {
-                LOG.info(
-                        "Applying Doris DDL [{}]: {}",
-                        schemaChangeEvent.tableId(),
-                        sql);
-                client().executeSql(options.mapDatabase(schemaChangeEvent.tableId()), sql);
+                LOG.info("Applying Doris DDL [{}]: {}", event.tableId(), sql);
+                client().executeSql(options.mapDatabase(event.tableId()), sql);
             }
         } catch (Exception e) {
-            throw new SchemaEvolveException(schemaChangeEvent, e.getMessage(), null);
+            throw new SchemaEvolveException(event, e.getMessage(), null);
         }
     }
 
