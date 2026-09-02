@@ -38,6 +38,8 @@ import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSink
 
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.StringJoiner;
@@ -78,41 +80,70 @@ public class DorisDdlBuilder implements Serializable {
         TableId tableId = event.tableId();
         Schema schema = event.getSchema();
         StringJoiner columns = new StringJoiner(", ");
+        List<String> primaryKeys = schema.primaryKeys();
+        HashSet<String> pkSet = new LinkedHashSet<>(primaryKeys);
+        List<Column> orderedColumns = new ArrayList<>();
+        for (String pk : primaryKeys) {
+            schema.getColumn(pk)
+                    .filter(Column::isPhysical) // metadata columns are virtual and have no
+                    // storage in Doris
+                    .ifPresent(orderedColumns::add);
+        }
         for (Column column : schema.getColumns()) {
-            if (!column.isPhysical()) {
-                // metadata columns are virtual and have no storage in Doris
-                continue;
+            if (column.isPhysical() && !pkSet.contains(column.getName())) {
+                orderedColumns.add(column);
             }
+        }
+        for (Column column : orderedColumns) {
             columns.add(
                     quote(column.getName())
                             + " "
                             + convertDataType(column.getType())
                             + commentSql(column.getComment()));
         }
-        StringBuilder sql = new StringBuilder("CREATE TABLE IF NOT EXISTS ")
-                .append(qualified(tableId))
-                .append(" (")
-                .append(columns)
-                .append(")");
+        StringBuilder sql =
+                new StringBuilder("CREATE TABLE IF NOT EXISTS ")
+                        .append(qualified(tableId))
+                        .append(" (")
+                        .append(columns)
+                        .append(")");
         if (schema.comment() != null && !schema.comment().isEmpty()) {
             sql.append(" COMMENT '").append(escapeSql(schema.comment())).append("'");
         }
-        List<String> primaryKeys = schema.primaryKeys();
         if (primaryKeys.isEmpty()) {
             String distributeKey = firstPhysicalColumn(schema);
             sql.append(" DUPLICATE KEY(")
                     .append(quote(distributeKey))
                     .append(") DISTRIBUTED BY HASH(")
-                    .append(quote(distributeKey))
-                    .append(") BUCKETS AUTO");
+                    .append(quote(distributeKey));
         } else {
             sql.append(" UNIQUE KEY(")
                     .append(quoteColumns(primaryKeys))
                     .append(") DISTRIBUTED BY HASH(")
-                    .append(quoteColumns(primaryKeys))
-                    .append(") BUCKETS AUTO");
+                    .append(quoteColumns(primaryKeys));
+        }
+        int tableBuckets = options.getTableBuckets();
+        if (tableBuckets > 0) {
+            sql.append(") BUCKETS ").append(tableBuckets);
+        } else {
+            sql.append(") BUCKETS AUTO");
+        }
+        if (options.getTableProperties() != null) {
+            sql.append(" PROPERTIES (")
+                    .append(buildTableProperties(options.getTableProperties()))
+                    .append(")");
         }
         return singleton(sql.toString());
+    }
+
+    private String buildTableProperties(Map<String, String> tableProperties) {
+        return tableProperties.entrySet().stream()
+                .map(
+                        entry ->
+                                quoteProperty(entry.getKey())
+                                        + " = "
+                                        + quoteProperty(entry.getValue()))
+                .collect(Collectors.joining(", "));
     }
 
     public List<String> buildAddColumnSql(AddColumnEvent event) {
@@ -271,6 +302,10 @@ public class DorisDdlBuilder implements Serializable {
 
     private static String quote(String name) {
         return "`" + name.replace("`", "``") + "`";
+    }
+
+    private static String quoteProperty(String property) {
+        return "\"" + property + "\"";
     }
 
     private static String quoteColumns(List<String> columns) {

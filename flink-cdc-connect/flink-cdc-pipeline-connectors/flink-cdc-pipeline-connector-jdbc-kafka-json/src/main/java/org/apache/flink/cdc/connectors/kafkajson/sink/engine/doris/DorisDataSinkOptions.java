@@ -73,6 +73,14 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
     public static final ConfigOption<Integer> MAX_RETRIES =
             ConfigOptions.key("sink.max-retries").intType().defaultValue(3);
 
+    /** Extra properties passed through to the Doris table DDL. */
+    public static final ConfigOption<Map<String, String>> TABLE_PROPERTIES =
+            ConfigOptions.key("sink.table.properties").mapType().noDefaultValue();
+
+    /** Number of buckets for the target table. default value is 0, which means auto bucket. */
+    public static final ConfigOption<Integer> TABLE_BUCKETS =
+            ConfigOptions.key("sink.table.buckets").intType().defaultValue(0);
+
     public DorisDataSinkOptions(Configuration config) {
         super(config);
     }
@@ -123,5 +131,13 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
 
     public int getMaxRetries() {
         return getConfig().get(MAX_RETRIES);
+    }
+
+    public Map<String, String> getTableProperties() {
+        return getConfig().get(TABLE_PROPERTIES);
+    }
+
+    public int getTableBuckets() {
+        return getConfig().get(TABLE_BUCKETS);
     }
 }
