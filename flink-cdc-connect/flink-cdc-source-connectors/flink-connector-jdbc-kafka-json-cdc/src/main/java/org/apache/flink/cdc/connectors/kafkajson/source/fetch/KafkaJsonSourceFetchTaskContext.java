@@ -64,8 +64,8 @@ import javax.annotation.Nullable;
 import java.sql.SQLException;
 
 /**
- * The fetch task context of the Kafka Changelog Json source, shared by {@link KafkaJsonScanFetchTask} and {@link
- * KafkaJsonStreamFetchTask}.
+ * The fetch task context of the Kafka Changelog Json source, shared by {@link
+ * KafkaJsonScanFetchTask} and {@link KafkaJsonStreamFetchTask}.
  *
  * <p>It owns the {@link ChangeEventQueue} that both fetch tasks enqueue {@link DataChangeEvent}s
  * into, the {@link JdbcSourceEventDispatcher} used to dispatch the low/high/end watermark events of
@@ -108,7 +108,8 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
 
         if (schema == null) {
             this.recordFactory = new KafkaJsonRecordFactory(kafkaJsonSourceConfig);
-            this.recordConverter = new KafkaJsonRecordConverter(recordFactory, kafkaJsonSourceConfig);
+            this.recordConverter =
+                    new KafkaJsonRecordConverter(recordFactory, kafkaJsonSourceConfig);
             this.schema = new KafkaJsonSchema(kafkaJsonSourceConfig, recordFactory);
         }
         // register the table schemas carried by the split so the snapshot read can resolve them.
@@ -199,7 +200,8 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
             kafkaConsumer =
                     new KafkaConsumer<>(
                             KafkaJsonKafkaUtils.buildConsumerProps(
-                                    kafkaJsonSourceConfig, kafkaJsonSourceConfig.getKafkaGroupId()));
+                                    kafkaJsonSourceConfig,
+                                    kafkaJsonSourceConfig.getKafkaGroupId()));
         }
         return kafkaConsumer;
     }

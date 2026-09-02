@@ -88,7 +88,8 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
     /** Creates a new {@link KafkaJsonSourceConfig} for the given subtask {@code subtaskId}. */
     @Override
     public KafkaJsonSourceConfig create(int subtaskId) {
-        // Extension seam: the 'canal' flatMessage format and the 'debezium' envelope format are both
+        // Extension seam: the 'canal' flatMessage format and the 'debezium' envelope format are
+        // both
         // implemented (see docs/DEBEZIUM_PLAN.md); the MySQL source and 'tidb' (an alias that
         // reuses the MySQL-compatible JDBC/dialect path, since TiDB speaks the MySQL wire protocol)
         // are implemented. Declared-but-unimplemented combinations fail fast here, at job setup,

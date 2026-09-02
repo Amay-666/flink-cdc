@@ -31,9 +31,10 @@ import java.io.Serializable;
  *
  * <p>The abstraction carries only what the stream pipeline needs uniformly: the message format
  * ({@link #getFormat()}), the message kind ({@link MessageType}), the affected table and the
- * event-time value. Everything that genuinely differs between the formats — most notably how the DML
- * rows are represented (canal carries string rows, Debezium carries typed structs) — stays on the
- * concrete subclasses, which the pipeline dispatches on by format (see docs/DEBEZIUM_PLAN.md §2.3-1).
+ * event-time value. Everything that genuinely differs between the formats — most notably how the
+ * DML rows are represented (canal carries string rows, Debezium carries typed structs) — stays on
+ * the concrete subclasses, which the pipeline dispatches on by format (see docs/DEBEZIUM_PLAN.md
+ * §2.3-1).
  */
 public abstract class KafkaJsonMessage implements Serializable {
 

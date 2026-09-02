@@ -43,8 +43,8 @@ import java.util.function.Supplier;
  * a Debezium / TiCDC connector).
  *
  * <p>This class is the skeleton entry point. The {@code createEnumerator} / {@code
- * restoreEnumerator} wiring is inherited from the base framework; {@code createReader} is overridden
- * only to build the {@link KafkaJsonSourceReader}, whose {@code
+ * restoreEnumerator} wiring is inherited from the base framework; {@code createReader} is
+ * overridden only to build the {@link KafkaJsonSourceReader}, whose {@code
  * IncrementalSourceReaderWithCommit} base forwards the checkpoint-complete callback to the dialect
  * so the consumed Kafka offsets can be committed to the consumer group (see the reader's javadoc).
  */

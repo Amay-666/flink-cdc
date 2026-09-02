@@ -159,8 +159,7 @@ class DebeziumMessageParserTest {
     @Test
     void testTombstoneNullPayload() {
         DebeziumMessage message =
-                PARSER.parse(
-                        "{\"schema\":{\"type\":\"struct\",\"fields\":[]},\"payload\":null}");
+                PARSER.parse("{\"schema\":{\"type\":\"struct\",\"fields\":[]},\"payload\":null}");
         assertEquals(MessageType.UNKNOWN, message.getMessageType());
         assertNull(message.getPayload());
         assertNull(message.getDatabase());

@@ -39,15 +39,16 @@ class CanalMessageParserTest {
     @Test
     void testParseInsert() {
         CanalMessage message =
-                new CanalMessageParser().parse(
-                        "{"
-                                + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
-                                + "\"database\":\"test\",\"es\":1598752886000,\"id\":1,"
-                                + "\"isDdl\":false,\"mysqlType\":{\"id\":\"bigint(20)\","
-                                + "\"name\":\"varchar(255)\"},\"old\":null,"
-                                + "\"pkNames\":[\"id\"],\"sql\":\"\","
-                                + "\"sqlType\":{\"id\":-5,\"name\":12},"
-                                + "\"table\":\"users\",\"ts\":1598752887000,\"type\":\"INSERT\"}");
+                new CanalMessageParser()
+                        .parse(
+                                "{"
+                                        + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
+                                        + "\"database\":\"test\",\"es\":1598752886000,\"id\":1,"
+                                        + "\"isDdl\":false,\"mysqlType\":{\"id\":\"bigint(20)\","
+                                        + "\"name\":\"varchar(255)\"},\"old\":null,"
+                                        + "\"pkNames\":[\"id\"],\"sql\":\"\","
+                                        + "\"sqlType\":{\"id\":-5,\"name\":12},"
+                                        + "\"table\":\"users\",\"ts\":1598752887000,\"type\":\"INSERT\"}");
         assertEquals(1, message.getId());
         assertEquals("test", message.getDatabase());
         assertEquals("users", message.getTable());
@@ -66,13 +67,14 @@ class CanalMessageParserTest {
     @Test
     void testParseUpdateWithOld() {
         CanalMessage message =
-                new CanalMessageParser().parse(
-                        "{"
-                                + "\"data\":[{\"id\":\"1\",\"name\":\"Bob\"}],"
-                                + "\"database\":\"test\",\"es\":1598752886000,\"id\":2,"
-                                + "\"isDdl\":false,\"mysqlType\":{},\"old\":[{\"name\":\"Alice\"}],"
-                                + "\"pkNames\":[\"id\"],\"sql\":\"\",\"sqlType\":{},"
-                                + "\"table\":\"users\",\"ts\":1598752887000,\"type\":\"UPDATE\"}");
+                new CanalMessageParser()
+                        .parse(
+                                "{"
+                                        + "\"data\":[{\"id\":\"1\",\"name\":\"Bob\"}],"
+                                        + "\"database\":\"test\",\"es\":1598752886000,\"id\":2,"
+                                        + "\"isDdl\":false,\"mysqlType\":{},\"old\":[{\"name\":\"Alice\"}],"
+                                        + "\"pkNames\":[\"id\"],\"sql\":\"\",\"sqlType\":{},"
+                                        + "\"table\":\"users\",\"ts\":1598752887000,\"type\":\"UPDATE\"}");
         assertEquals("UPDATE", message.getType());
         assertEquals("Bob", message.getData().get(0).get("name"));
         assertEquals("Alice", message.getOld().get(0).get("name"));
@@ -81,13 +83,14 @@ class CanalMessageParserTest {
     @Test
     void testParseDelete() {
         CanalMessage message =
-                new CanalMessageParser().parse(
-                        "{"
-                                + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
-                                + "\"database\":\"test\",\"es\":1598752886000,\"id\":3,"
-                                + "\"isDdl\":false,\"mysqlType\":{},\"old\":null,"
-                                + "\"pkNames\":[\"id\"],\"sql\":\"\",\"sqlType\":{},"
-                                + "\"table\":\"users\",\"ts\":1598752887000,\"type\":\"DELETE\"}");
+                new CanalMessageParser()
+                        .parse(
+                                "{"
+                                        + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
+                                        + "\"database\":\"test\",\"es\":1598752886000,\"id\":3,"
+                                        + "\"isDdl\":false,\"mysqlType\":{},\"old\":null,"
+                                        + "\"pkNames\":[\"id\"],\"sql\":\"\",\"sqlType\":{},"
+                                        + "\"table\":\"users\",\"ts\":1598752887000,\"type\":\"DELETE\"}");
         assertEquals("DELETE", message.getType());
         assertEquals(1, message.getData().size());
     }
@@ -95,14 +98,15 @@ class CanalMessageParserTest {
     @Test
     void testParseDdl() {
         CanalMessage message =
-                new CanalMessageParser().parse(
-                        "{"
-                                + "\"data\":null,\"database\":\"test\",\"es\":1598752886000,"
-                                + "\"id\":4,\"isDdl\":true,\"mysqlType\":null,\"old\":null,"
-                                + "\"pkNames\":null,"
-                                + "\"sql\":\"ALTER TABLE `users` ADD COLUMN `age` int\","
-                                + "\"sqlType\":null,\"table\":\"users\","
-                                + "\"ts\":1598752887000,\"type\":\"ALTER\"}");
+                new CanalMessageParser()
+                        .parse(
+                                "{"
+                                        + "\"data\":null,\"database\":\"test\",\"es\":1598752886000,"
+                                        + "\"id\":4,\"isDdl\":true,\"mysqlType\":null,\"old\":null,"
+                                        + "\"pkNames\":null,"
+                                        + "\"sql\":\"ALTER TABLE `users` ADD COLUMN `age` int\","
+                                        + "\"sqlType\":null,\"table\":\"users\","
+                                        + "\"ts\":1598752887000,\"type\":\"ALTER\"}");
         assertTrue(message.isDdl());
         assertEquals("ALTER", message.getType());
         assertEquals("ALTER TABLE `users` ADD COLUMN `age` int", message.getSql());
@@ -113,8 +117,7 @@ class CanalMessageParserTest {
     @Test
     void testMissingFieldsAreTolerated() {
         // A minimal message missing most fields must not fail parsing
-        CanalMessage message =
-                new CanalMessageParser().parse("{\"data\":[{\"id\":\"1\"}]}");
+        CanalMessage message = new CanalMessageParser().parse("{\"data\":[{\"id\":\"1\"}]}");
         assertEquals(0, message.getId());
         assertNull(message.getDatabase());
         assertNull(message.getTable());
@@ -130,11 +133,12 @@ class CanalMessageParserTest {
     void testEmptyDataWithTypeAndTable() {
         // canal emits such messages for GTID / QUERY / TRUNCATE events
         CanalMessage message =
-                new CanalMessageParser().parse(
-                        "{\"data\":[],\"database\":\"test\",\"es\":1598752886000,"
-                                + "\"id\":5,\"isDdl\":false,\"mysqlType\":{},\"old\":null,"
-                                + "\"pkNames\":null,\"sql\":\"\",\"sqlType\":{},"
-                                + "\"table\":\"users\",\"ts\":1598752887000,\"type\":\"GTID\"}");
+                new CanalMessageParser()
+                        .parse(
+                                "{\"data\":[],\"database\":\"test\",\"es\":1598752886000,"
+                                        + "\"id\":5,\"isDdl\":false,\"mysqlType\":{},\"old\":null,"
+                                        + "\"pkNames\":null,\"sql\":\"\",\"sqlType\":{},"
+                                        + "\"table\":\"users\",\"ts\":1598752887000,\"type\":\"GTID\"}");
         assertTrue(message.getData().isEmpty());
         assertEquals("GTID", message.getType());
     }
@@ -161,14 +165,15 @@ class CanalMessageParserTest {
         Map<String, String> row2 = new HashMap<>();
         row2.put("id", "2");
         CanalMessage message =
-                new CanalMessageParser().parse(
-                        "{"
-                                + "\"data\":[{\"id\":\"1\"},{\"id\":\"2\"}],"
-                                + "\"database\":\"test\",\"es\":1,\"id\":6,"
-                                + "\"isDdl\":false,\"mysqlType\":{\"id\":\"bigint(20)\"},"
-                                + "\"old\":null,\"pkNames\":[\"id\"],\"sql\":\"\","
-                                + "\"sqlType\":{\"id\":-5},\"table\":\"users\","
-                                + "\"ts\":2,\"type\":\"INSERT\"}");
+                new CanalMessageParser()
+                        .parse(
+                                "{"
+                                        + "\"data\":[{\"id\":\"1\"},{\"id\":\"2\"}],"
+                                        + "\"database\":\"test\",\"es\":1,\"id\":6,"
+                                        + "\"isDdl\":false,\"mysqlType\":{\"id\":\"bigint(20)\"},"
+                                        + "\"old\":null,\"pkNames\":[\"id\"],\"sql\":\"\","
+                                        + "\"sqlType\":{\"id\":-5},\"table\":\"users\","
+                                        + "\"ts\":2,\"type\":\"INSERT\"}");
         assertEquals(2, message.getData().size());
         assertEquals("2", message.getData().get(1).get("id"));
     }
@@ -177,12 +182,13 @@ class CanalMessageParserTest {
     void testTidbCommitTsEventTime() {
         // A TiDB DML carries the commit TSO in `_tidb.commitTs`; >> 18 gives the physical millis.
         CanalMessage message =
-                new CanalMessageParser().parse(
-                        "{"
-                                + "\"data\":[{\"id\":\"1\"}],\"database\":\"test\","
-                                + "\"es\":1598752886000,\"isDdl\":false,\"table\":\"users\","
-                                + "\"ts\":1598752887000,\"type\":\"INSERT\","
-                                + "\"_tidb\":{\"commitTs\":4398046511104}}");
+                new CanalMessageParser()
+                        .parse(
+                                "{"
+                                        + "\"data\":[{\"id\":\"1\"}],\"database\":\"test\","
+                                        + "\"es\":1598752886000,\"isDdl\":false,\"table\":\"users\","
+                                        + "\"ts\":1598752887000,\"type\":\"INSERT\","
+                                        + "\"_tidb\":{\"commitTs\":4398046511104}}");
         assertEquals(4398046511104L, message.getTidbInfo().getCommitTs());
         assertEquals(
                 Long.valueOf(16777216L),
@@ -195,12 +201,13 @@ class CanalMessageParserTest {
         // every transaction with a smaller commit TSO has been published. It yields a real event
         // time in tidb_tso mode, so the offset advances even when no DML arrives.
         CanalMessage message =
-                new CanalMessageParser().parse(
-                        "{"
-                                + "\"data\":null,\"database\":\"\",\"es\":1656559521880,"
-                                + "\"isDdl\":false,\"table\":\"\","
-                                + "\"ts\":1656559524120,\"type\":\"TIDB_WATERMARK\","
-                                + "\"_tidb\":{\"watermarkTs\":4398046511104}}");
+                new CanalMessageParser()
+                        .parse(
+                                "{"
+                                        + "\"data\":null,\"database\":\"\",\"es\":1656559521880,"
+                                        + "\"isDdl\":false,\"table\":\"\","
+                                        + "\"ts\":1656559524120,\"type\":\"TIDB_WATERMARK\","
+                                        + "\"_tidb\":{\"watermarkTs\":4398046511104}}");
         assertEquals(4398046511104L, message.getTidbInfo().getWatermarkTs());
         assertEquals(
                 Long.valueOf(16777216L),
@@ -215,10 +222,11 @@ class CanalMessageParserTest {
     void testPlainCanalMessageHasNoTso() {
         // A plain canal flatMessage carries no `_tidb`; tidb_tso yields null (no usable TSO).
         CanalMessage message =
-                new CanalMessageParser().parse(
-                        "{\"data\":[{\"id\":\"1\"}],\"database\":\"test\","
-                                + "\"es\":1,\"isDdl\":false,\"table\":\"users\","
-                                + "\"ts\":2,\"type\":\"INSERT\"}");
+                new CanalMessageParser()
+                        .parse(
+                                "{\"data\":[{\"id\":\"1\"}],\"database\":\"test\","
+                                        + "\"es\":1,\"isDdl\":false,\"table\":\"users\","
+                                        + "\"ts\":2,\"type\":\"INSERT\"}");
         assertNull(message.getTidbInfo());
         assertNull(message.getEventTimeValue(KafkaJsonSourceOptions.EventTime.TIDB_TSO));
     }

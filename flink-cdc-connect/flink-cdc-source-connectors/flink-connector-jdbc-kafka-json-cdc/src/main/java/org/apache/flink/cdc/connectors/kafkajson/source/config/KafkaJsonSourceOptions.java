@@ -155,8 +155,8 @@ public class KafkaJsonSourceOptions extends JdbcSourceOptions {
 
     /**
      * Timestamp field of a message used as the offset event time. For canal messages {@code ES} is
-     * the binlog execution time and {@code TS} the canal send time; for debezium messages {@code ES}
-     * is {@code payload.source.ts_ms} (source change time) and {@code TS} {@code payload.ts_ms}
+     * the binlog execution time and {@code TS} the canal send time; for debezium messages {@code
+     * ES} is {@code payload.source.ts_ms} (source change time) and {@code TS} {@code payload.ts_ms}
      * (connector processing time); {@code TIDB_TSO} is the TiDB commit TSO ({@code
      * payload.source.commit_ts}, right-shifted to physical millis) of the TiCDC debezium format.
      */

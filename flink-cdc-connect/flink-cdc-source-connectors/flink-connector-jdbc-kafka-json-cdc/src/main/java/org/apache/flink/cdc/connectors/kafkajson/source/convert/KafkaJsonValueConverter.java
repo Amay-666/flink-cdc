@@ -130,18 +130,19 @@ public class KafkaJsonValueConverter {
      * Converts a typed JSON value (the {@code before}/{@code after} image of a Debezium or TiCDC
      * message) for the given column.
      *
-     * <p>Debezium delivers values as typed JSON (numbers, booleans, base64 text for binary), so this
-     * is the counterpart of {@link #convert(Column, String)} for the Debezium path. Two encodings
-     * are handled:
+     * <p>Debezium delivers values as typed JSON (numbers, booleans, base64 text for binary), so
+     * this is the counterpart of {@link #convert(Column, String)} for the Debezium path. Two
+     * encodings are handled:
      *
      * <ul>
      *   <li>the Debezium temporal precision modes, which encode {@code DATE}/{@code TIME}/{@code
      *       DATETIME}/{@code TIMESTAMP} as epoch numbers (days / millis / micros / millis) that the
      *       canal {@code String} converter cannot parse — converted here under the default {@code
      *       adaptive} assumptions;
-     *   <li>the textual output of TiCDC (and of Debezium with {@code temporal.precision.mode=connect}
-     *       and {@code decimal.handling.mode=string}), which is already in the MySQL text form the
-     *       canal converter parses and is passed through unchanged.
+     *   <li>the textual output of TiCDC (and of Debezium with {@code
+     *       temporal.precision.mode=connect} and {@code decimal.handling.mode=string}), which is
+     *       already in the MySQL text form the canal converter parses and is passed through
+     *       unchanged.
      * </ul>
      *
      * <p>DECIMAL columns must NOT be decoded with Debezium {@code decimal.handling.mode=precise}:
@@ -174,7 +175,8 @@ public class KafkaJsonValueConverter {
                         return new Timestamp(node.asLong() / 1000L);
                     case java.sql.Types.TIMESTAMP_WITH_TIMEZONE: // MySQL TIMESTAMP
                         // Debezium adaptive: millis since the epoch, rendered in the server zone
-                        return OffsetDateTime.ofInstant(Instant.ofEpochMilli(node.asLong()), serverZoneId);
+                        return OffsetDateTime.ofInstant(
+                                Instant.ofEpochMilli(node.asLong()), serverZoneId);
                     default:
                         break;
                 }

@@ -24,8 +24,8 @@ import org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.Debeziu
 /**
  * Creates the {@link KafkaJsonMessageParser} for a configured {@link MessageFormat}.
  *
- * <p>This is the pluggable seam of the message parsing layer: the stream pipeline selects the parser
- * once per source (from {@code scan.message.format}) instead of hard-coding the canal format
+ * <p>This is the pluggable seam of the message parsing layer: the stream pipeline selects the
+ * parser once per source (from {@code scan.message.format}) instead of hard-coding the canal format
  * everywhere (see docs/DEBEZIUM_PLAN.md §S1).
  */
 public class KafkaJsonParserFactory {

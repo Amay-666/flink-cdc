@@ -31,16 +31,16 @@ import javax.annotation.Nullable;
  * A message in the Debezium envelope format (standard Debezium or TiCDC's Debezium-compatible
  * output): an optional {@code schema} field plus a {@code payload} that carries {@code before} /
  * {@code after} structs, the {@code source} block ({@code db}/{@code table}/{@code ts_ms}, and the
- * TiCDC-only {@code commit_ts}/{@code cluster_id}), the {@code op} and the connector processing time
- * {@code ts_ms}.
+ * TiCDC-only {@code commit_ts}/{@code cluster_id}), the {@code op} and the connector processing
+ * time {@code ts_ms}.
  *
  * <p>Implements the {@link KafkaJsonMessage} abstraction for the Debezium format. Unlike the canal
  * flatMessage, the row values are typed (JSON numbers / strings / arrays), so {@code before}/{@code
  * after} are kept as raw {@link JsonNode}s; the DML→record conversion is the Debezium-specific part
  * of the pipeline (see docs/DEBEZIUM_PLAN.md §S3).
  *
- * <p>Also covers the Debezium schema-change record shape ({@code databaseName}/{@code ddl} without a
- * {@code source} block), which a bare (schema-include=false) message or the schema-history topic
+ * <p>Also covers the Debezium schema-change record shape ({@code databaseName}/{@code ddl} without
+ * a {@code source} block), which a bare (schema-include=false) message or the schema-history topic
  * carries.
  */
 public class DebeziumMessage extends KafkaJsonMessage {

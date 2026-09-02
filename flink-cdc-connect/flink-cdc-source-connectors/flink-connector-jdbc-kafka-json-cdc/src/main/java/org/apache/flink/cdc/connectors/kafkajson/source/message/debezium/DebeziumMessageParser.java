@@ -38,9 +38,9 @@ import javax.annotation.Nullable;
  *   <li>a bare Debezium schema-change record ({@code {databaseName, ddl, ...}}).
  * </ul>
  *
- * <p>No {@code standard}/{@code ticdc} distinction is needed: the TiCDC-specific fields
- * ({@code commit_ts}/{@code cluster_id}) are tolerated by {@code ignoreUnknown=false}-free binding,
- * and a {@code source.commit_ts} presence marks a TiCDC message.
+ * <p>No {@code standard}/{@code ticdc} distinction is needed: the TiCDC-specific fields ({@code
+ * commit_ts}/{@code cluster_id}) are tolerated by {@code ignoreUnknown=false}-free binding, and a
+ * {@code source.commit_ts} presence marks a TiCDC message.
  */
 public class DebeziumMessageParser implements KafkaJsonMessageParser {
 

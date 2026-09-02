@@ -62,16 +62,17 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        new CanalMessageParser().parse(
-                                "{"
-                                        + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"},"
-                                        + "{\"id\":\"2\",\"name\":\"Bob\"}],"
-                                        + "\"database\":\"test\",\"es\":1598752886000,\"id\":1,"
-                                        + "\"isDdl\":false,"
-                                        + MYSQL_TYPE
-                                        + ",\"old\":null,\"pkNames\":[\"id\"],"
-                                        + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
-                                        + "\"ts\":1598752887000,\"type\":\"INSERT\"}"),
+                        new CanalMessageParser()
+                                .parse(
+                                        "{"
+                                                + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"},"
+                                                + "{\"id\":\"2\",\"name\":\"Bob\"}],"
+                                                + "\"database\":\"test\",\"es\":1598752886000,\"id\":1,"
+                                                + "\"isDdl\":false,"
+                                                + MYSQL_TYPE
+                                                + ",\"old\":null,\"pkNames\":[\"id\"],"
+                                                + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
+                                                + "\"ts\":1598752887000,\"type\":\"INSERT\"}"),
                         "test.users",
                         0,
                         100L);
@@ -105,15 +106,16 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(true);
         List<SourceRecord> records =
                 converter.convert(
-                        new CanalMessageParser().parse(
-                                "{"
-                                        + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
-                                        + "\"database\":\"test\",\"es\":1598752886000,\"id\":1,"
-                                        + "\"isDdl\":false,"
-                                        + MYSQL_TYPE
-                                        + ",\"old\":null,\"pkNames\":[\"id\"],"
-                                        + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
-                                        + "\"ts\":1598752887000,\"type\":\"INSERT\"}"),
+                        new CanalMessageParser()
+                                .parse(
+                                        "{"
+                                                + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
+                                                + "\"database\":\"test\",\"es\":1598752886000,\"id\":1,"
+                                                + "\"isDdl\":false,"
+                                                + MYSQL_TYPE
+                                                + ",\"old\":null,\"pkNames\":[\"id\"],"
+                                                + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
+                                                + "\"ts\":1598752887000,\"type\":\"INSERT\"}"),
                         "test.users",
                         0,
                         100L);
@@ -128,16 +130,17 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        new CanalMessageParser().parse(
-                                "{"
-                                        + "\"data\":[{\"id\":\"1\",\"name\":\"Bob\"}],"
-                                        + "\"database\":\"test\",\"es\":1598752886000,\"id\":2,"
-                                        + "\"isDdl\":false,"
-                                        + MYSQL_TYPE
-                                        + ",\"old\":[{\"name\":\"Alice\"}],"
-                                        + "\"pkNames\":[\"id\"],\"sql\":\"\",\"sqlType\":{},"
-                                        + "\"table\":\"users\",\"ts\":1598752887000,"
-                                        + "\"type\":\"UPDATE\"}"),
+                        new CanalMessageParser()
+                                .parse(
+                                        "{"
+                                                + "\"data\":[{\"id\":\"1\",\"name\":\"Bob\"}],"
+                                                + "\"database\":\"test\",\"es\":1598752886000,\"id\":2,"
+                                                + "\"isDdl\":false,"
+                                                + MYSQL_TYPE
+                                                + ",\"old\":[{\"name\":\"Alice\"}],"
+                                                + "\"pkNames\":[\"id\"],\"sql\":\"\",\"sqlType\":{},"
+                                                + "\"table\":\"users\",\"ts\":1598752887000,"
+                                                + "\"type\":\"UPDATE\"}"),
                         "test.users",
                         0,
                         100L);
@@ -154,15 +157,16 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        new CanalMessageParser().parse(
-                                "{"
-                                        + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
-                                        + "\"database\":\"test\",\"es\":1598752886000,\"id\":3,"
-                                        + "\"isDdl\":false,"
-                                        + MYSQL_TYPE
-                                        + ",\"old\":null,\"pkNames\":[\"id\"],"
-                                        + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
-                                        + "\"ts\":1598752887000,\"type\":\"DELETE\"}"),
+                        new CanalMessageParser()
+                                .parse(
+                                        "{"
+                                                + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
+                                                + "\"database\":\"test\",\"es\":1598752886000,\"id\":3,"
+                                                + "\"isDdl\":false,"
+                                                + MYSQL_TYPE
+                                                + ",\"old\":null,\"pkNames\":[\"id\"],"
+                                                + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
+                                                + "\"ts\":1598752887000,\"type\":\"DELETE\"}"),
                         "test.users",
                         0,
                         100L);
@@ -180,14 +184,15 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        new CanalMessageParser().parse(
-                                "{"
-                                        + "\"data\":null,\"database\":\"test\","
-                                        + "\"es\":1598752886000,\"id\":4,\"isDdl\":true,"
-                                        + "\"mysqlType\":null,\"old\":null,\"pkNames\":null,"
-                                        + "\"sql\":\"ALTER TABLE `users` ADD COLUMN `age` int\","
-                                        + "\"sqlType\":null,\"table\":\"users\","
-                                        + "\"ts\":1598752887000,\"type\":\"ALTER\"}"),
+                        new CanalMessageParser()
+                                .parse(
+                                        "{"
+                                                + "\"data\":null,\"database\":\"test\","
+                                                + "\"es\":1598752886000,\"id\":4,\"isDdl\":true,"
+                                                + "\"mysqlType\":null,\"old\":null,\"pkNames\":null,"
+                                                + "\"sql\":\"ALTER TABLE `users` ADD COLUMN `age` int\","
+                                                + "\"sqlType\":null,\"table\":\"users\","
+                                                + "\"ts\":1598752887000,\"type\":\"ALTER\"}"),
                         "test.users",
                         0,
                         100L);
@@ -199,14 +204,15 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        new CanalMessageParser().parse(
-                                "{"
-                                        + "\"data\":[],\"database\":\"test\","
-                                        + "\"es\":1598752886000,\"id\":5,\"isDdl\":false,"
-                                        + "\"mysqlType\":{},\"old\":null,\"pkNames\":null,"
-                                        + "\"sql\":\"\",\"sqlType\":{},"
-                                        + "\"table\":\"users\",\"ts\":1598752887000,"
-                                        + "\"type\":\"GTID\"}"),
+                        new CanalMessageParser()
+                                .parse(
+                                        "{"
+                                                + "\"data\":[],\"database\":\"test\","
+                                                + "\"es\":1598752886000,\"id\":5,\"isDdl\":false,"
+                                                + "\"mysqlType\":{},\"old\":null,\"pkNames\":null,"
+                                                + "\"sql\":\"\",\"sqlType\":{},"
+                                                + "\"table\":\"users\",\"ts\":1598752887000,"
+                                                + "\"type\":\"GTID\"}"),
                         "test.users",
                         0,
                         100L);
@@ -220,13 +226,14 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        new CanalMessageParser().parse(
-                                "{"
-                                        + "\"data\":null,\"database\":\"\",\"es\":1656559521880,"
-                                        + "\"id\":0,\"isDdl\":false,\"mysqlType\":null,"
-                                        + "\"old\":null,\"pkNames\":null,\"sql\":\"\","
-                                        + "\"sqlType\":null,\"table\":\"\","
-                                        + "\"ts\":1656559524120,\"type\":\"TIDB_WATERMARK\"}"),
+                        new CanalMessageParser()
+                                .parse(
+                                        "{"
+                                                + "\"data\":null,\"database\":\"\",\"es\":1656559521880,"
+                                                + "\"id\":0,\"isDdl\":false,\"mysqlType\":null,"
+                                                + "\"old\":null,\"pkNames\":null,\"sql\":\"\","
+                                                + "\"sqlType\":null,\"table\":\"\","
+                                                + "\"ts\":1656559524120,\"type\":\"TIDB_WATERMARK\"}"),
                         "test.users",
                         0,
                         100L);
@@ -241,15 +248,16 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        new CanalMessageParser().parse(
-                                "{"
-                                        + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
-                                        + "\"database\":\"test\",\"es\":1656559521880,\"id\":3,"
-                                        + "\"isDdl\":false,"
-                                        + MYSQL_TYPE
-                                        + ",\"old\":null,\"pkNames\":[\"id\"],"
-                                        + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
-                                        + "\"ts\":1656559524120,\"type\":\"DELETE\"}"),
+                        new CanalMessageParser()
+                                .parse(
+                                        "{"
+                                                + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
+                                                + "\"database\":\"test\",\"es\":1656559521880,\"id\":3,"
+                                                + "\"isDdl\":false,"
+                                                + MYSQL_TYPE
+                                                + ",\"old\":null,\"pkNames\":[\"id\"],"
+                                                + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
+                                                + "\"ts\":1656559524120,\"type\":\"DELETE\"}"),
                         "test.users",
                         0,
                         100L);
@@ -295,15 +303,16 @@ class KafkaJsonRecordConverterTest {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
                 converter.convert(
-                        new CanalMessageParser().parse(
-                                "{"
-                                        + "\"data\":[{\"id\":\"1\"}],"
-                                        + "\"database\":\"test\",\"es\":1,\"id\":6,"
-                                        + "\"isDdl\":false,"
-                                        + "\"mysqlType\":{\"id\":\"bigint(20)\"},"
-                                        + "\"old\":null,\"pkNames\":[\"id\"],"
-                                        + "\"sql\":\"\",\"sqlType\":{\"id\":-5},"
-                                        + "\"table\":\"users\",\"ts\":2,\"type\":\"INSERT\"}"),
+                        new CanalMessageParser()
+                                .parse(
+                                        "{"
+                                                + "\"data\":[{\"id\":\"1\"}],"
+                                                + "\"database\":\"test\",\"es\":1,\"id\":6,"
+                                                + "\"isDdl\":false,"
+                                                + "\"mysqlType\":{\"id\":\"bigint(20)\"},"
+                                                + "\"old\":null,\"pkNames\":[\"id\"],"
+                                                + "\"sql\":\"\",\"sqlType\":{\"id\":-5},"
+                                                + "\"table\":\"users\",\"ts\":2,\"type\":\"INSERT\"}"),
                         "test.users",
                         3,
                         42L);

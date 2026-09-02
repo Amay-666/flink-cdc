@@ -128,10 +128,7 @@ public class CanalMessage extends KafkaJsonMessage {
 
         @Override
         public String toString() {
-            return "{" +
-                    "commitTs=" + commitTs +
-                    ", watermarkTs=" + watermarkTs +
-                    '}';
+            return "{" + "commitTs=" + commitTs + ", watermarkTs=" + watermarkTs + '}';
         }
     }
 

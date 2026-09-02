@@ -80,9 +80,9 @@ public class KafkaJsonKafkaOffsetUtils {
     /**
      * Returns the current position of the change-log stream using the given (reusable) consumer.
      *
-     * <p>For each partition the newest message is read and its event time for the configured mode is
-     * extracted from the message content — Kafka's own record timestamp is the producer send time,
-     * not the source change time, so it can not be used as the offset ordering key.
+     * <p>For each partition the newest message is read and its event time for the configured mode
+     * is extracted from the message content — Kafka's own record timestamp is the producer send
+     * time, not the source change time, so it can not be used as the offset ordering key.
      */
     public static KafkaJsonOffset queryCurrentOffset(
             KafkaConsumer<String, String> consumer,
@@ -139,8 +139,7 @@ public class KafkaJsonKafkaOffsetUtils {
      * message format. Returns {@code -1} if the message is null/empty, unparsable, or carries no
      * usable time.
      */
-    public static long extractEventTime(
-            String message, EventTime eventTime, MessageFormat format) {
+    public static long extractEventTime(String message, EventTime eventTime, MessageFormat format) {
         if (message == null || message.isEmpty()) {
             return -1L;
         }

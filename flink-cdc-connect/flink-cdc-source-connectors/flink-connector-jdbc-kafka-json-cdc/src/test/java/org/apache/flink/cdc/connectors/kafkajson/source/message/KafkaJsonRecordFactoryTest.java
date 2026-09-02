@@ -136,7 +136,8 @@ class KafkaJsonRecordFactoryTest {
 
         // source partition / offset / topic
         assertEquals(
-                Collections.singletonMap("server", "kafka_json_cdc_source"), record.sourcePartition());
+                Collections.singletonMap("server", "kafka_json_cdc_source"),
+                record.sourcePartition());
         Map<String, ?> offset = record.sourceOffset();
         assertEquals("1598752886000", offset.get("eventTime"));
         assertEquals("0", offset.get("partition"));

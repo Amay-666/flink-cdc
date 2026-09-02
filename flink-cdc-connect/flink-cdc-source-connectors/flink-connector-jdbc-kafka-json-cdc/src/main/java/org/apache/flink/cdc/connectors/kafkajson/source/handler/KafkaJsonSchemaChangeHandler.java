@@ -174,7 +174,9 @@ public class KafkaJsonSchemaChangeHandler {
         }
     }
 
-    /** The {@code es}/{@code ts} event times of a message, per format (Debezium has neither field). */
+    /**
+     * The {@code es}/{@code ts} event times of a message, per format (Debezium has neither field).
+     */
     private static long[] eventTimesOf(KafkaJsonMessage message) {
         if (message instanceof DebeziumMessage) {
             DebeziumMessage dbz = (DebeziumMessage) message;
@@ -212,8 +214,7 @@ public class KafkaJsonSchemaChangeHandler {
         } else if (type == KafkaJsonTableChangeType.ALTER
                 || type == KafkaJsonTableChangeType.RENAME_COLUMN
                 || type == KafkaJsonTableChangeType.ALTER_COLUMN_TYPE
-                || type == KafkaJsonTableChangeType.ALTER_COLUMN_COMMENT
-        ) {
+                || type == KafkaJsonTableChangeType.ALTER_COLUMN_COMMENT) {
             // The Debezium history format carries only the post-change schema in an ALTER
             // TableChange. The pipeline deserializer derives the column-level events by diffing the
             // old and the new schema, so it needs both images: snapshot tables announce their

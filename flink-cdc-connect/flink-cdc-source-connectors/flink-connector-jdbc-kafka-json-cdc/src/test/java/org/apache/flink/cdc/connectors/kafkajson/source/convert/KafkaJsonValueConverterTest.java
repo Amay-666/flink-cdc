@@ -290,7 +290,8 @@ class KafkaJsonValueConverterTest {
         assertEquals(
                 Boolean.TRUE,
                 converter.convertFromJson(
-                        column(Types.BOOLEAN, "BOOLEAN", 1), JsonNodeFactory.instance.booleanNode(true)));
+                        column(Types.BOOLEAN, "BOOLEAN", 1),
+                        JsonNodeFactory.instance.booleanNode(true)));
         assertEquals(
                 Boolean.FALSE,
                 converter.convertFromJson(
@@ -303,7 +304,8 @@ class KafkaJsonValueConverterTest {
         assertEquals(
                 "123",
                 converter.convertFromJson(
-                        column(Types.INTEGER, "INT", 11), JsonNodeFactory.instance.numberNode(123)));
+                        column(Types.INTEGER, "INT", 11),
+                        JsonNodeFactory.instance.numberNode(123)));
         assertEquals(
                 "9223372036854775807",
                 converter.convertFromJson(
@@ -319,7 +321,8 @@ class KafkaJsonValueConverterTest {
         assertEquals(
                 1L,
                 converter.convertFromJson(
-                        column(Types.BOOLEAN, "BOOLEAN", 1), JsonNodeFactory.instance.numberNode(1)));
+                        column(Types.BOOLEAN, "BOOLEAN", 1),
+                        JsonNodeFactory.instance.numberNode(1)));
     }
 
     @Test
@@ -329,7 +332,8 @@ class KafkaJsonValueConverterTest {
         assertEquals(
                 java.sql.Date.valueOf("2020-08-13"),
                 converter.convertFromJson(
-                        column(Types.DATE, "DATE", 10), JsonNodeFactory.instance.numberNode(epochDay)));
+                        column(Types.DATE, "DATE", 10),
+                        JsonNodeFactory.instance.numberNode(epochDay)));
 
         Duration expectedTime = Duration.ofHours(15).plusMinutes(3).plusSeconds(2);
         assertEquals(
@@ -395,11 +399,7 @@ class KafkaJsonValueConverterTest {
                                 JsonNodeFactory.instance.textNode(
                                         java.util.Base64.getEncoder().encodeToString(expected))));
         // a JSON column may arrive as nested JSON instead of a JSON text
-        JsonNode objectNode =
-                JsonNodeFactory.instance
-                        .objectNode()
-                        .put("a", 1)
-                        .put("b", "x");
+        JsonNode objectNode = JsonNodeFactory.instance.objectNode().put("a", 1).put("b", "x");
         assertEquals(
                 "{\"a\":1,\"b\":\"x\"}",
                 converter.convertFromJson(column(Types.LONGVARCHAR, "JSON", 65535), objectNode));

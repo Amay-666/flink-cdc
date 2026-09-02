@@ -257,9 +257,7 @@ class KafkaJsonStreamFetchTaskTest {
         log0.add(
                 insertRecord(
                         "3", "Carol", 3400, 3400, p0, 2)); // inside the backfill window: emitted
-        log0.add(
-                insertRecord(
-                        "4", "Diana", 3600, 3600, p0, 3)); // strictly after ending: dropped
+        log0.add(insertRecord("4", "Diana", 3600, 3600, p0, 3)); // strictly after ending: dropped
 
         Map<TopicPartition, List<ConsumerRecord<String, String>>> log = new HashMap<>();
         log.put(p0, log0);

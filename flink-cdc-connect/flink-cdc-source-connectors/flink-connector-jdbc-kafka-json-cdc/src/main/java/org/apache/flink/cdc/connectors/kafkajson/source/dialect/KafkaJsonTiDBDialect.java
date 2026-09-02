@@ -41,9 +41,9 @@ import java.util.function.Supplier;
  * snapshot low/high watermark is the current TSO queried from the database (an authoritative
  * commit-clock upper bound) instead of the Kafka-sampled value, for the commit-clock event-time
  * modes ({@code es}, {@code tidb_tso}). A TiCDC watermark event is consumed like any other message:
- * it carries its TSO in {@code _tidb.watermarkTs} (see {@code CanalMessage.TidbInfo#getCommitTimeStamp}),
- * which keeps the offset advancing during quiet periods and lets the bounded backfill cross its
- * ending offset.
+ * it carries its TSO in {@code _tidb.watermarkTs} (see {@code
+ * CanalMessage.TidbInfo#getCommitTimeStamp}), which keeps the offset advancing during quiet periods
+ * and lets the bounded backfill cross its ending offset.
  *
  * <p>Selected by {@code scan.database.type=tidb} through {@link KafkaJsonDialectFactory}, as a peer
  * of the MySQL dialect (see docs/ARCHITECTURE.md).

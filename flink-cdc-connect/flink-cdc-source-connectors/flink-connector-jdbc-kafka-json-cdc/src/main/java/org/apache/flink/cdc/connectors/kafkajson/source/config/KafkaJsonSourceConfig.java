@@ -180,8 +180,8 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
      * during the snapshot, a quiet topic never produces such a message and the consumer polls
      * forever. MySQL has no continuous boundary signal (unlike TiDB's TSO watermarks), so it must
      * always skip the backfill. TiDB keeps the backfill on by default: TiCDC keeps emitting
-     * watermark events, so the bounded read always has a watermark at-or-after the ending offset
-     * to cross.
+     * watermark events, so the bounded read always has a watermark at-or-after the ending offset to
+     * cross.
      */
     @Override
     public boolean isSkipSnapshotBackfill() {

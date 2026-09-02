@@ -196,7 +196,10 @@ public class KafkaJsonDdlParsedResult {
         return renameCount == 1;
     }
 
-    /** Type-only equality: jdbc type, length, scale and type name (optionality and position excluded). */
+    /**
+     * Type-only equality: jdbc type, length, scale and type name (optionality and position
+     * excluded).
+     */
     private static boolean sameColumnType(Column a, Column b) {
         return a.jdbcType() == b.jdbcType()
                 && a.length() == b.length()
@@ -210,7 +213,12 @@ public class KafkaJsonDdlParsedResult {
             Table newTable,
             List<ColumnChangeInfo> columnChanges) {
         return new KafkaJsonDdlParsedResult(
-                KafkaJsonTableChangeType.ALTER_COLUMN_TYPE, tableId, null, oldTable, newTable, columnChanges);
+                KafkaJsonTableChangeType.ALTER_COLUMN_TYPE,
+                tableId,
+                null,
+                oldTable,
+                newTable,
+                columnChanges);
     }
 
     public static KafkaJsonDdlParsedResult alterColumnComment(
@@ -265,7 +273,8 @@ public class KafkaJsonDdlParsedResult {
             if ((checkType && typeDiffers) || (checkComment && commentDiffers)) {
                 changedCount++;
             } else if (typeDiffers || commentDiffers) {
-                return false; // the other aspect changed somewhere: a mixed alter, not a pure subtype
+                return false; // the other aspect changed somewhere: a mixed alter, not a pure
+                // subtype
             }
         }
         return changedCount == 1;
@@ -273,10 +282,10 @@ public class KafkaJsonDdlParsedResult {
 
     /**
      * Returns whether the change from {@code oldTable} to {@code newTable} carries no material
-     * column change: the same columns under the same names with the same type and comment, differing
-     * only in aspects that are ignored for schema-change events (position, optionality, default
-     * value, charset, auto-increment, generated flag). The DDL parsers use this to skip an {@code
-     * ALTER} that only reorders columns or toggles nullability.
+     * column change: the same columns under the same names with the same type and comment,
+     * differing only in aspects that are ignored for schema-change events (position, optionality,
+     * default value, charset, auto-increment, generated flag). The DDL parsers use this to skip an
+     * {@code ALTER} that only reorders columns or toggles nullability.
      */
     public static boolean hasOnlyIgnorableColumnChanges(Table oldTable, Table newTable) {
         List<Column> oldColumns = oldTable.columns();

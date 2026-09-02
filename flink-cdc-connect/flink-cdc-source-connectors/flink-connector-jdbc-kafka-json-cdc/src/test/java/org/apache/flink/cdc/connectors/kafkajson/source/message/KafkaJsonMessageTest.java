@@ -27,8 +27,9 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
-/** Unit test for the {@link KafkaJsonMessage} abstraction as implemented by {@code
- * CanalMessage}. */
+/**
+ * Unit test for the {@link KafkaJsonMessage} abstraction as implemented by {@code CanalMessage}.
+ */
 class KafkaJsonMessageTest {
 
     private static final String BASE =
@@ -36,8 +37,8 @@ class KafkaJsonMessageTest {
                     + "\"data\":[{\"id\":\"1\"}],\"isDdl\":false,\"type\":\"%s\"}";
 
     private static CanalMessage message(String type, boolean isDdl) {
-        return new CanalMessageParser().parse(
-                BASE.replace("%s", type).replace("\"isDdl\":false", "\"isDdl\":" + isDdl));
+        return new CanalMessageParser()
+                .parse(BASE.replace("%s", type).replace("\"isDdl\":false", "\"isDdl\":" + isDdl));
     }
 
     @Test
@@ -57,8 +58,7 @@ class KafkaJsonMessageTest {
 
     @Test
     void testTidbWatermarkType() {
-        assertEquals(
-                MessageType.TIDB_WATERMARK, message("TIDB_WATERMARK", false).getMessageType());
+        assertEquals(MessageType.TIDB_WATERMARK, message("TIDB_WATERMARK", false).getMessageType());
     }
 
     @Test
@@ -66,9 +66,10 @@ class KafkaJsonMessageTest {
         assertEquals(MessageType.UNKNOWN, message("GTID", false).getMessageType());
         // a message without a type field is UNKNOWN too
         CanalMessage noType =
-                new CanalMessageParser().parse(
-                        "{\"database\":\"test\",\"table\":\"users\",\"es\":1000,"
-                                + "\"data\":[{\"id\":\"1\"}],\"isDdl\":false}");
+                new CanalMessageParser()
+                        .parse(
+                                "{\"database\":\"test\",\"table\":\"users\",\"es\":1000,"
+                                        + "\"data\":[{\"id\":\"1\"}],\"isDdl\":false}");
         assertEquals(MessageType.UNKNOWN, noType.getMessageType());
     }
 

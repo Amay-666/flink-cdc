@@ -50,8 +50,7 @@ public class CanalMessageParser implements KafkaJsonMessageParser {
             return null;
         }
         try {
-            CanalMessage message =
-                    OBJECT_MAPPER.readValue(json, CanalMessage.class);
+            CanalMessage message = OBJECT_MAPPER.readValue(json, CanalMessage.class);
             if (message == null) {
                 return null;
             }

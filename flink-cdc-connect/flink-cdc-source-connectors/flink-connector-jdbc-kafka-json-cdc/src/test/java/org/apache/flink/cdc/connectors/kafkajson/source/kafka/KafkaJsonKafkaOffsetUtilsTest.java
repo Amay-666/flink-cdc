@@ -59,7 +59,8 @@ class KafkaJsonKafkaOffsetUtilsTest {
 
     @Test
     void testCanalTidbCommitTso() {
-        // A DML message carries the commit TSO in `_tidb.commitTs`; >> 18 gives the physical millis.
+        // A DML message carries the commit TSO in `_tidb.commitTs`; >> 18 gives the physical
+        // millis.
         String dml =
                 "{\"data\":[{\"id\":\"1\"}],\"database\":\"test\",\"es\":1598752886000,"
                         + "\"id\":1,\"isDdl\":false,\"mysqlType\":{},\"old\":null,"
@@ -67,8 +68,7 @@ class KafkaJsonKafkaOffsetUtilsTest {
                         + "\"ts\":1598752887000,\"type\":\"INSERT\","
                         + "\"_tidb\":{\"commitTs\":4398046511104}}";
         assertEquals(
-                16777216L,
-                KafkaJsonKafkaOffsetUtils.extractEventTime(dml, EventTime.TIDB_TSO));
+                16777216L, KafkaJsonKafkaOffsetUtils.extractEventTime(dml, EventTime.TIDB_TSO));
     }
 
     @Test
@@ -83,8 +83,12 @@ class KafkaJsonKafkaOffsetUtilsTest {
                         + "\"sqlType\":null,\"table\":\"\","
                         + "\"ts\":1656559524120,\"type\":\"TIDB_WATERMARK\","
                         + "\"_tidb\":{\"watermarkTs\":4398046511104}}";
-        assertEquals(16777216L, KafkaJsonKafkaOffsetUtils.extractEventTime(watermark, EventTime.TIDB_TSO));
-        assertEquals(1656559521880L, KafkaJsonKafkaOffsetUtils.extractEventTime(watermark, EventTime.ES));
+        assertEquals(
+                16777216L,
+                KafkaJsonKafkaOffsetUtils.extractEventTime(watermark, EventTime.TIDB_TSO));
+        assertEquals(
+                1656559521880L,
+                KafkaJsonKafkaOffsetUtils.extractEventTime(watermark, EventTime.ES));
     }
 
     @Test
@@ -153,7 +157,9 @@ class KafkaJsonKafkaOffsetUtilsTest {
         long commitTs = 4398046511104L; // 16777216 ms << 18
         String ticdc =
                 "{\"payload\":{\"after\":{\"id\":1},"
-                        + "\"source\":{\"connector\":\"tidb\",\"commit_ts\":" + commitTs + ","
+                        + "\"source\":{\"connector\":\"tidb\",\"commit_ts\":"
+                        + commitTs
+                        + ","
                         + "\"cluster_id\":\"c1\"},\"op\":\"c\",\"ts_ms\":200}}";
         assertEquals(
                 16777216L,
