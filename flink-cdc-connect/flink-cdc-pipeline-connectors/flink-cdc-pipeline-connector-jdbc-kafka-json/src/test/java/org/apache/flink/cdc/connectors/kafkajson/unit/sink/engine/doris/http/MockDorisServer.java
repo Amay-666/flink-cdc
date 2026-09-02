@@ -20,8 +20,10 @@ package org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
+import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -32,9 +34,9 @@ import java.util.TreeMap;
 import java.util.function.Function;
 
 /**
- * A JDK {@link HttpServer} standing in for the Doris FE/BE HTTP endpoints. Records every request and
- * answers through the {@code responder} supplied at construction. No external dependency — this is
- * the test double the whole sink suite runs against.
+ * A JDK {@link HttpServer} standing in for the Doris FE/BE HTTP endpoints. Records every request
+ * and answers through the {@code responder} supplied at construction. No external dependency — this
+ * is the test double the whole sink suite runs against.
  */
 public class MockDorisServer implements Closeable {
 
@@ -59,9 +61,25 @@ public class MockDorisServer implements Closeable {
             exchange.getRequestHeaders()
                     .forEach((name, values) -> headers.put(name, values.get(0)));
             String body =
-                    new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                    new String(readAllBytes(exchange.getRequestBody()), StandardCharsets.UTF_8);
             return new RecordedRequest(
                     exchange.getRequestMethod(), exchange.getRequestURI().getPath(), body, headers);
+        }
+
+        static byte[] readAllBytes(InputStream inputStream) throws IOException {
+            final int bufLen = 1024;
+            byte[] buffer = new byte[bufLen];
+            int readLen;
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+
+            try {
+                while ((readLen = inputStream.read(buffer, 0, bufLen)) != -1) {
+                    outputStream.write(buffer, 0, readLen);
+                }
+            } catch (IOException e) {
+                throw new IOException("Error while reading request body", e);
+            }
+            return outputStream.toByteArray();
         }
     }
 

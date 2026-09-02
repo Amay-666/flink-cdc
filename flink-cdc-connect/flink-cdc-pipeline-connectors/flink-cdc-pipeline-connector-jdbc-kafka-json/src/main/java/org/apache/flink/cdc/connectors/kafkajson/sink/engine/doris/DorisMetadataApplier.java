@@ -112,7 +112,8 @@ public class DorisMetadataApplier implements MetadataApplier {
                             options.getFenodes(),
                             options.getUsername(),
                             options.getPassword(),
-                            options.getMaxRetries());
+                            options.getMaxRetries(),
+                            options.getStreamLoadProperties());
         }
         return httpClient;
     }

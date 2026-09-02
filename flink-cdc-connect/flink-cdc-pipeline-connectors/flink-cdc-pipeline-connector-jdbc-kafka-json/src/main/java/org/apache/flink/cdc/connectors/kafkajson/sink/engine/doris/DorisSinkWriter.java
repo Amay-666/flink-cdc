@@ -80,6 +80,7 @@ public class DorisSinkWriter implements SinkWriter<Event> {
 
     /** Latest schema per table, evolved by the schema-change events flowing downstream. */
     private final Map<TableId, Schema> schemaMaps = new HashMap<>();
+
     private final Map<TableId, DorisRowConverter> rowConverters = new HashMap<>();
 
     /**
@@ -107,7 +108,8 @@ public class DorisSinkWriter implements SinkWriter<Event> {
                         options.getFenodes(),
                         options.getUsername(),
                         options.getPassword(),
-                        options.getMaxRetries());
+                        options.getMaxRetries(),
+                        options.getStreamLoadProperties());
         schedulePeriodicFlush(initContext);
     }
 
@@ -180,8 +182,7 @@ public class DorisSinkWriter implements SinkWriter<Event> {
             CreateTableEvent create = (CreateTableEvent) event;
             schemaMaps.put(create.tableId(), create.getSchema());
             rowConverters.put(
-                    create.tableId(),
-                    new DorisRowConverter(create.getSchema(), pipelineZoneId));
+                    create.tableId(), new DorisRowConverter(create.getSchema(), pipelineZoneId));
         } else if (event instanceof RenameTableEvent) {
             RenameTableEvent rename = (RenameTableEvent) event;
             // Subsequent data carries the new table id: re-key the local view.
@@ -214,8 +215,7 @@ public class DorisSinkWriter implements SinkWriter<Event> {
             if (current != null) {
                 Schema evolved = SchemaUtils.applySchemaChangeEvent(current, event);
                 schemaMaps.put(event.tableId(), evolved);
-                rowConverters.put(
-                        event.tableId(), new DorisRowConverter(evolved, pipelineZoneId));
+                rowConverters.put(event.tableId(), new DorisRowConverter(evolved, pipelineZoneId));
             }
         }
     }

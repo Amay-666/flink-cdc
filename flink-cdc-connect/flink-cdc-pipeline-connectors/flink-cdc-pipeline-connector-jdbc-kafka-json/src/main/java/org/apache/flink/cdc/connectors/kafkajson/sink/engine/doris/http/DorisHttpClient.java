@@ -32,6 +32,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -41,8 +42,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * HTTP client for the Doris StreamLoad API and the FE query (DDL) API.
  *
  * <p>This is the self-contained replacement for the released doris-flink connector: the connector
- * talks to Doris purely over HTTP, with no Doris jar on the classpath. The client uses OkHttp 3.14.9
- * (shaded into the connector jar) for its connection pool and efficient request/response handling.
+ * talks to Doris purely over HTTP, with no Doris jar on the classpath. The client uses OkHttp
+ * 3.14.9 (shaded into the connector jar) for its connection pool and efficient request/response
+ * handling.
  *
  * <p>Two endpoints are used:
  *
@@ -52,8 +54,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  *       307} whose {@code Location} points at the BE owning the tablets; OkHttp does not follow
  *       redirects for {@code PUT}, so the client performs the two-step dance itself — it asks the
  *       FE first (which requires an {@code Expect: 100-continue} header) and re-issues the load
- *       against the backend it redirects to. A failed load is retried with the <em>same</em>
- *       {@code label}, which Doris deduplicates, making retries idempotent.
+ *       against the backend it redirects to. A failed load is retried with the <em>same</em> {@code
+ *       label}, which Doris deduplicates, making retries idempotent.
  *   <li>{@code POST /api/query/default_cluster/{database}} with body {@code {"stmt": ...}} — DDL
  *       execution (requires {@code is_execute_sql_in_http=true} on the FE). Application-level
  *       failures are surfaced immediately because DDL is not idempotent; only network-level errors
@@ -84,7 +86,26 @@ public class DorisHttpClient implements Closeable {
     private final String authorizationHeader;
     private final AtomicInteger nextFe = new AtomicInteger();
 
+    /** Extra StreamLoad request headers/properties passed through from {@code sink.properties}. */
+    private final Map<String, String> streamLoadProperties;
+
     public DorisHttpClient(String fenodes, String username, String password, int maxRetries) {
+        this(fenodes, username, password, maxRetries, Collections.emptyMap());
+    }
+
+    /**
+     * @param streamLoadProperties arbitrary Doris StreamLoad properties (e.g. {@code columns},
+     *     {@code max_filter_ratio}, {@code timezone}) sent as request headers. A property may
+     *     override the protocol defaults ({@code format}/{@code strip_outer_array}/{@code
+     *     hidden_columns}/{@code label}); {@code Authorization} and {@code Expect} stay managed by
+     *     this client.
+     */
+    public DorisHttpClient(
+            String fenodes,
+            String username,
+            String password,
+            int maxRetries,
+            Map<String, String> streamLoadProperties) {
         this.fenodes = fenodes.split(",");
         this.maxRetries = Math.max(1, maxRetries);
         this.authorizationHeader =
@@ -93,6 +114,8 @@ public class DorisHttpClient implements Closeable {
                                 .encodeToString(
                                         (username + ":" + password)
                                                 .getBytes(StandardCharsets.UTF_8));
+        this.streamLoadProperties =
+                streamLoadProperties == null ? Collections.emptyMap() : streamLoadProperties;
         this.client =
                 new OkHttpClient.Builder()
                         .connectTimeout(30, TimeUnit.SECONDS)
@@ -104,10 +127,10 @@ public class DorisHttpClient implements Closeable {
     /**
      * Stream-loads a batch of rows into the Doris table.
      *
-     * <p>Every row must carry {@link #DELETE_SIGN_COLUMN} — {@code true} deletes the row (matched by
-     * primary key), {@code false} upserts it — so one batch can mix upserts and deletes in arrival
-     * order. The {@code hidden_columns} header declares the marker column so Doris applies its
-     * semantics without an extra {@code merge_type}.
+     * <p>Every row must carry {@link #DELETE_SIGN_COLUMN} — {@code true} deletes the row (matched
+     * by primary key), {@code false} upserts it — so one batch can mix upserts and deletes in
+     * arrival order. The {@code hidden_columns} header declares the marker column so Doris applies
+     * its semantics without an extra {@code merge_type}.
      *
      * @param database target database (already mapped via the dialect options)
      * @param table target table (already mapped via the dialect options)
@@ -172,7 +195,9 @@ public class DorisHttpClient implements Closeable {
         }
     }
 
-    /** Re-issues a load against the backend URL from the FE redirect, retrying with the same label. */
+    /**
+     * Re-issues a load against the backend URL from the FE redirect, retrying with the same label.
+     */
     private int performStreamLoad(
             String beUrl, byte[] body, String database, String table, String label)
             throws IOException {
@@ -199,20 +224,26 @@ public class DorisHttpClient implements Closeable {
     }
 
     private Request loadRequest(String url, byte[] body, String label, boolean expectContinue) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("label", label);
+        headers.put("format", "json");
+        headers.put("strip_outer_array", "true");
+        // hidden_columns declares the per-row delete marker so Doris applies its
+        // semantics (true = delete by key, false = upsert) without any merge_type.
+        headers.put("hidden_columns", DELETE_SIGN_COLUMN);
+        // sink.properties pass-through: user-supplied StreamLoad properties override the defaults
+        // above (e.g. format=csv, columns=..., max_filter_ratio=..., timezone=...).
+        headers.putAll(streamLoadProperties);
         Request.Builder builder =
-                new Request.Builder()
-                        .url(url)
-                        .put(RequestBody.create(JSON, body))
-                        .addHeader("label", label)
-                        .addHeader("format", "json")
-                        .addHeader("strip_outer_array", "true")
-                        // hidden_columns declares the per-row delete marker so Doris applies its
-                        // semantics (true = delete by key, false = upsert) without any merge_type.
-                        .addHeader("hidden_columns", DELETE_SIGN_COLUMN)
-                        .addHeader("Authorization", authorizationHeader);
+                new Request.Builder().url(url).put(RequestBody.create(JSON, body));
+        for (Map.Entry<String, String> entry : headers.entrySet()) {
+            builder.header(entry.getKey(), entry.getValue());
+        }
+        // Framework-managed headers, never overridable via sink.properties.
+        builder.header("Authorization", authorizationHeader);
         if (expectContinue) {
             // The FE's StreamLoad handler rejects a request without this header.
-            builder.addHeader("Expect", "100-continue");
+            builder.header("Expect", "100-continue");
         }
         return builder.build();
     }
@@ -222,12 +253,7 @@ public class DorisHttpClient implements Closeable {
             throws IOException {
         if (!response.isSuccessful()) {
             throw new IOException(
-                    "HTTP "
-                            + response.code()
-                            + " for StreamLoad of "
-                            + database
-                            + "."
-                            + table);
+                    "HTTP " + response.code() + " for StreamLoad of " + database + "." + table);
         }
         String responseBody = response.body() != null ? response.body().string() : "";
         String status = OBJECT_MAPPER.readTree(responseBody).path("Status").asText();
@@ -274,8 +300,7 @@ public class DorisHttpClient implements Closeable {
                                         + ": "
                                         + sql);
                     }
-                    String responseBody =
-                            response.body() != null ? response.body().string() : "";
+                    String responseBody = response.body() != null ? response.body().string() : "";
                     JsonNode root = OBJECT_MAPPER.readTree(responseBody);
                     JsonNode codeNode = root.get("code");
                     if (codeNode == null || codeNode.asInt(-1) == 0) {

@@ -27,6 +27,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -71,7 +73,10 @@ public class DorisHttpClientTest {
             DorisHttpClient client = client(server);
 
             client.streamLoad(
-                    "shop", "orders", "cdc_label_1", Collections.singletonList(Collections.emptyMap()));
+                    "shop",
+                    "orders",
+                    "cdc_label_1",
+                    Collections.singletonList(Collections.emptyMap()));
 
             assertThat(server.recorded).hasSize(1);
         }
@@ -90,7 +95,10 @@ public class DorisHttpClientTest {
             DorisHttpClient client = new DorisHttpClient(server.endpoint(), "root", "123456", 1);
 
             client.streamLoad(
-                    "shop", "orders", "cdc_label_1", Collections.singletonList(Collections.emptyMap()));
+                    "shop",
+                    "orders",
+                    "cdc_label_1",
+                    Collections.singletonList(Collections.emptyMap()));
 
             assertThat(server.recorded).hasSize(2);
             assertThat(server.recorded.get(0).headers.get("label")).isEqualTo("cdc_label_1");
@@ -101,7 +109,8 @@ public class DorisHttpClientTest {
     @Test
     public void testStreamLoadGivesUpAfterMaxRetries() throws IOException {
         try (MockDorisServer server =
-                new MockDorisServer(req -> Response.ok("{\"Status\":\"Fail\",\"Message\":\"x\"}"))) {
+                new MockDorisServer(
+                        req -> Response.ok("{\"Status\":\"Fail\",\"Message\":\"x\"}"))) {
             DorisHttpClient client = new DorisHttpClient(server.endpoint(), "root", "123456", 1);
 
             assertThatThrownBy(
@@ -246,11 +255,39 @@ public class DorisHttpClientTest {
                     new DorisHttpClient(
                             server1.endpoint() + "," + server2.endpoint(), "root", "123456", 1);
 
-            client.streamLoad("shop", "orders", "l1", Collections.singletonList(Collections.emptyMap()));
-            client.streamLoad("shop", "orders", "l2", Collections.singletonList(Collections.emptyMap()));
+            client.streamLoad(
+                    "shop", "orders", "l1", Collections.singletonList(Collections.emptyMap()));
+            client.streamLoad(
+                    "shop", "orders", "l2", Collections.singletonList(Collections.emptyMap()));
 
             assertThat(server1.recorded).hasSize(1);
             assertThat(server2.recorded).hasSize(1);
+        }
+    }
+
+    @Test
+    public void testStreamLoadPassesThroughConfiguredProperties() throws IOException {
+        try (MockDorisServer server =
+                new MockDorisServer(req -> Response.ok("{\"Status\":\"Success\"}"))) {
+            DorisHttpClient client =
+                    new DorisHttpClient(
+                            server.endpoint(),
+                            "root",
+                            "123456",
+                            1,
+                            mapOf("max_filter_ratio", "0.1", "columns", "a,b,c", "format", "csv"));
+            client.streamLoad(
+                    "shop",
+                    "orders",
+                    "cdc_label_1",
+                    Collections.singletonList(Collections.emptyMap()));
+
+            assertThat(server.recorded).hasSize(1);
+            RecordedRequest request = server.recorded.get(0);
+            assertThat(request.headers).containsEntry("max_filter_ratio", "0.1");
+            assertThat(request.headers).containsEntry("columns", "a,b,c");
+            // A sink.properties entry overrides the connector's json format default.
+            assertThat(request.headers).containsEntry("format", "csv");
         }
     }
 
@@ -258,11 +295,18 @@ public class DorisHttpClientTest {
         return new DorisHttpClient(server.endpoint(), "root", "123456", 1);
     }
 
+    private static Map<String, String> mapOf(String... keyValues) {
+        Map<String, String> map = new HashMap<>();
+        for (int i = 0; i < keyValues.length; i += 2) {
+            map.put(keyValues[i], keyValues[i + 1]);
+        }
+        return map;
+    }
+
     private static String basicAuth(String username, String password) {
         return "Basic "
                 + Base64.getEncoder()
                         .encodeToString(
-                                (username + ":" + password)
-                                        .getBytes(StandardCharsets.UTF_8));
+                                (username + ":" + password).getBytes(StandardCharsets.UTF_8));
     }
 }
