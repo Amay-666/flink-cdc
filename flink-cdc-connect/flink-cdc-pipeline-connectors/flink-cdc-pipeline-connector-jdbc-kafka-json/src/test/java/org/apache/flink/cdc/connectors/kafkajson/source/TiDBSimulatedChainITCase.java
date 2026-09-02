@@ -49,8 +49,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>This empirically validates the assumption that the snapshot path (JDBC metadata discovery +
  * MySQL-compatible chunk queries) works against TiDB. The incremental half is identical to the
- * {@link MySqlCanalSimulatedChainITCase} baseline, so a green run proves the only difference between
- * the two chains — the TiDB snapshot — behaves exactly like MySQL.
+ * {@link MySqlCanalSimulatedChainITCase} baseline, so a green run proves the only difference
+ * between the two chains — the TiDB snapshot — behaves exactly like MySQL.
  */
 public class TiDBSimulatedChainITCase extends KafkaJsonSourceTestBase {
 

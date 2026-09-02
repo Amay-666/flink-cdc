@@ -30,8 +30,8 @@ import java.util.Objects;
  *
  * <p>The released flink-cdc runtime has no {@code ALTER_COLUMN_COMMENT} event type, so a column
  * comment change would otherwise be indistinguishable from a plain {@code ALTER_TABLE}. This event
- * carries the per-column new comments so a downstream can react to the comment change explicitly;
- * a {@code null} value means the column's comment was removed.
+ * carries the per-column new comments so a downstream can react to the comment change explicitly; a
+ * {@code null} value means the column's comment was removed.
  */
 @PublicEvolving
 public class AlterColumnCommentEvent implements SchemaChangeEvent {
@@ -39,7 +39,9 @@ public class AlterColumnCommentEvent implements SchemaChangeEvent {
 
     private final TableId tableId;
 
-    /** key => column name, value => new column comment ({@code null} when the comment was removed). */
+    /**
+     * key => column name, value => new column comment ({@code null} when the comment was removed).
+     */
     private final Map<String, String> commentMapping;
 
     public AlterColumnCommentEvent(TableId tableId, Map<String, String> commentMapping) {

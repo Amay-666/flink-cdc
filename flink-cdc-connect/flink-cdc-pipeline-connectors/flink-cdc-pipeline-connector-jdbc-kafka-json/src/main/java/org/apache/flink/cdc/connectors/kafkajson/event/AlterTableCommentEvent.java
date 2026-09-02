@@ -41,11 +41,11 @@ public class AlterTableCommentEvent implements SchemaChangeEvent {
 
     private final TableId tableId;
     private final Schema schema;
-    @Nullable
-    private final String sql;
+    @Nullable private final String sql;
     private final String comment;
 
-    public AlterTableCommentEvent(TableId tableId, Schema schema, @Nullable String sql, String comment) {
+    public AlterTableCommentEvent(
+            TableId tableId, Schema schema, @Nullable String sql, String comment) {
         this.tableId = tableId;
         this.schema = schema;
         this.sql = sql;
@@ -75,7 +75,8 @@ public class AlterTableCommentEvent implements SchemaChangeEvent {
 
     @Override
     public SchemaChangeEventType getType() {
-        throw new UnsupportedOperationException("AlterTableCommentEvent is not supported by released flink-cdc runtime.");
+        throw new UnsupportedOperationException(
+                "AlterTableCommentEvent is not supported by released flink-cdc runtime.");
     }
 
     @Override

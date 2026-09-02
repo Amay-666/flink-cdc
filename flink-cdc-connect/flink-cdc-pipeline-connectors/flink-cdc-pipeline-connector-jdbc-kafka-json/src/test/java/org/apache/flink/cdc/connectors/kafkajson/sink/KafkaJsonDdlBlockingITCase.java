@@ -71,13 +71,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * flushed its buffered rows (the {@code FlushEvent} broadcast), only then is the DDL executed over
  * the mock, and only then is data released under the new schema.
  *
- * <p>The mock records the order of the DDL requests ({@code POST
- * /api/query/default_cluster/{db}}) and the StreamLoad requests ({@code PUT
- * /api/{db}/{table}/_stream_load}), so the test can assert that all
- * pre-DDL rows hit Doris <em>before</em> the DDL and the post-DDL row <em>after</em> it. The source
- * is a single-parallelism bounded stream routed with {@code .global()} so the schema-change event
- * is fully applied before any data event is seen by the partitioning operator (which requires the
- * table's schema to derive its hash function).
+ * <p>The mock records the order of the DDL requests ({@code POST /api/query/default_cluster/{db}})
+ * and the StreamLoad requests ({@code PUT /api/{db}/{table}/_stream_load}), so the test can assert
+ * that all pre-DDL rows hit Doris <em>before</em> the DDL and the post-DDL row <em>after</em> it.
+ * The source is a single-parallelism bounded stream routed with {@code .global()} so the
+ * schema-change event is fully applied before any data event is seen by the partitioning operator
+ * (which requires the table's schema to derive its hash function).
  */
 public class KafkaJsonDdlBlockingITCase {
 
@@ -187,7 +186,8 @@ public class KafkaJsonDdlBlockingITCase {
             assertThat(preTruncateLoads).isNotEmpty();
             assertThat(preTruncateLoads).anySatisfy(sl -> assertThat(sl.body).contains("\"id\":1"));
             assertThat(postTruncateLoads).isNotEmpty();
-            assertThat(postTruncateLoads).anySatisfy(sl -> assertThat(sl.body).contains("\"id\":3"));
+            assertThat(postTruncateLoads)
+                    .anySatisfy(sl -> assertThat(sl.body).contains("\"id\":3"));
         }
     }
 
@@ -236,10 +236,10 @@ public class KafkaJsonDdlBlockingITCase {
      * element's class and cannot carry a mix of schema-change and data events.
      *
      * <p>The events are pre-serialized to {@code byte[]} at construction time with the pipeline's
-     * own {@link KafkaJsonEventSerializer}, because the CDC events are not Java-serializable: a
-     * raw {@code List<Event>} field makes Flink's {@code ClosureCleaner} (and the JobGraph
-     * shipping) crash on the JDK module system. Holding only serialized bytes keeps the source
-     * fully Java-serializable.
+     * own {@link KafkaJsonEventSerializer}, because the CDC events are not Java-serializable: a raw
+     * {@code List<Event>} field makes Flink's {@code ClosureCleaner} (and the JobGraph shipping)
+     * crash on the JDK module system. Holding only serialized bytes keeps the source fully
+     * Java-serializable.
      */
     private static class EventSequenceSource extends RichSourceFunction<Event> {
         private static final long serialVersionUID = 1L;
@@ -323,7 +323,8 @@ public class KafkaJsonDdlBlockingITCase {
                         ORDERS, rowV1.generate(new Object[] {2, BinaryStringData.fromString("b")})),
                 new TruncateTableEvent(ORDERS, v1),
                 DataChangeEvent.insertEvent(
-                        ORDERS, rowV1.generate(new Object[] {3, BinaryStringData.fromString("c")})));
+                        ORDERS,
+                        rowV1.generate(new Object[] {3, BinaryStringData.fromString("c")})));
     }
 
     private static Schema schemaV1() {

@@ -30,10 +30,9 @@ import java.time.ZoneId;
  * The Doris dialect of the kafka-json sink.
  *
  * <p>Wires the connector's shared plumbing to the HTTP-only Doris stack: {@link DorisSink} as the
- * event sink, {@link DorisMetadataApplier} for DDL execution and {@link
- * DorisRowConverter} for row rendering. The pipeline zone id is used both for the sink (time-zone
- * aware timestamp rendering) and, when building the row converter, should be passed as the {@code
- * pipelineZoneId} argument.
+ * event sink, {@link DorisMetadataApplier} for DDL execution and {@link DorisRowConverter} for row
+ * rendering. The pipeline zone id is used both for the sink (time-zone aware timestamp rendering)
+ * and, when building the row converter, should be passed as the {@code pipelineZoneId} argument.
  */
 public class DorisDataSinkDialect extends KafkaJsonDataSinkDialect {
 

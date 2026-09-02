@@ -75,19 +75,19 @@ import static org.junit.Assert.fail;
  *
  * <p>A long checkpoint interval (30s) makes the "between checkpoints" window wide enough to observe
  * deterministically. The source runs in stream-only mode against the canal message format, so no
- * database snapshot is involved; the canal resolver builds the table schema from the message itself.
- * The stream-only run is expressed as {@code startup-options=earliest} (the connector's config
- * factory explicitly whitelists {@code EARLIEST_OFFSET}, which the base factory rejects) plus
- * {@code scan.kafka.startup.mode=earliest}; with no snapshot the stream split carries the initial
- * offset, so the latter drives the consumer's seek to the beginning of the log.
+ * database snapshot is involved; the canal resolver builds the table schema from the message
+ * itself. The stream-only run is expressed as {@code startup-options=earliest} (the connector's
+ * config factory explicitly whitelists {@code EARLIEST_OFFSET}, which the base factory rejects)
+ * plus {@code scan.kafka.startup.mode=earliest}; with no snapshot the stream split carries the
+ * initial offset, so the latter drives the consumer's seek to the beginning of the log.
  *
  * <p>Consumption is observed through a static counter incremented by the deserializer, which runs
  * inside the source operator and therefore reports each record as the reader consumes it, with no
  * client-side indirection. {@code executeAndCollect()} is deliberately avoided here: the collect
  * sink is checkpoint-gated (the client only sees results that were part of a completed checkpoint),
  * so with a 30s checkpoint interval a message consumed in the "between checkpoints" window would
- * only become visible to the client when the <em>next</em> checkpoint completes — exactly the moment
- * the test must still observe the group offset <em>unchanged</em>. A plain local {@code
+ * only become visible to the client when the <em>next</em> checkpoint completes — exactly the
+ * moment the test must still observe the group offset <em>unchanged</em>. A plain local {@code
  * AtomicInteger} captured by a user function would not work either: it is serialized into the task
  * and deserialized into a separate instance on the task thread. The static counter is shared with
  * the in-process MiniCluster's task threads, and the {@code AdminClient} query reads the committed

@@ -52,10 +52,10 @@ import java.util.Optional;
  *
  * <p>Mirrors the released {@code PrePartitionOperator} of flink-cdc-runtime: schema-change events
  * and flush events are deep-copied once per downstream partition, data-change events are keyed by
- * {@code (table original name, primary key)} through the hash function provider and sent to a single
- * partition. The one difference is that the broadcast deep-copy goes through the connector's {@link
- * KafkaJsonEventSerializer}, which can copy the five custom schema-change events the runtime {@code
- * EventSerializer} cannot handle.
+ * {@code (table original name, primary key)} through the hash function provider and sent to a
+ * single partition. The one difference is that the broadcast deep-copy goes through the connector's
+ * {@link KafkaJsonEventSerializer}, which can copy the five custom schema-change events the runtime
+ * {@code EventSerializer} cannot handle.
  */
 public class KafkaJsonPrePartitionOperator extends AbstractStreamOperator<PartitioningEvent>
         implements OneInputStreamOperator<Event, PartitioningEvent>, Serializable {
@@ -70,8 +70,11 @@ public class KafkaJsonPrePartitionOperator extends AbstractStreamOperator<Partit
     private transient SchemaEvolutionClient schemaEvolutionClient;
     private transient LoadingCache<TableId, HashFunction<DataChangeEvent>> cachedHashFunctions;
 
-    /** Pipeline throughput counters — every event emitted by the source/schema operator flows here. */
+    /**
+     * Pipeline throughput counters — every event emitted by the source/schema operator flows here.
+     */
     private transient Counter dataChangeCounter;
+
     private transient Counter schemaChangeCounter;
     private transient Counter flushCounter;
     private transient Counter recordsOutCounter;

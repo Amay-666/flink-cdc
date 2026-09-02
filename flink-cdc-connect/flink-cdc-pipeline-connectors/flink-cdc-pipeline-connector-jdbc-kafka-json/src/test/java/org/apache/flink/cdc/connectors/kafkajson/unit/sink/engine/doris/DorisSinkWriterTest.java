@@ -59,10 +59,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Unit test for {@link DorisSinkWriter}, driven against the JDK {@code HttpServer} mock of
- * the Doris FE/BE. The writer is exercised directly (no operator harness): {@link Sink.InitContext}
- * is hand-stubbed, and the periodic flush timer is either disabled or fired manually through the
- * fake {@link ProcessingTimeService}.
+ * Unit test for {@link DorisSinkWriter}, driven against the JDK {@code HttpServer} mock of the
+ * Doris FE/BE. The writer is exercised directly (no operator harness): {@link Sink.InitContext} is
+ * hand-stubbed, and the periodic flush timer is either disabled or fired manually through the fake
+ * {@link ProcessingTimeService}.
  */
 public class DorisSinkWriterTest {
 
@@ -144,9 +144,7 @@ public class DorisSinkWriterTest {
     public void testDeleteWithoutBatchDeleteDropsMarker() throws Exception {
         try (MockDorisServer server = server()) {
             DorisDataSinkOptions options =
-                    options(
-                            server,
-                            c -> c.set(DorisDataSinkOptions.ENABLE_BATCH_DELETE, false));
+                    options(server, c -> c.set(DorisDataSinkOptions.ENABLE_BATCH_DELETE, false));
             try (DorisSinkWriter writer = writer(server, options)) {
                 writer.write(new CreateTableEvent(ORDERS, ORDERS_SCHEMA), null);
                 writer.write(DataChangeEvent.deleteEvent(ORDERS, record(1)), null);
@@ -171,8 +169,7 @@ public class DorisSinkWriterTest {
                                             DorisDataSinkOptions.FLUSH_INTERVAL,
                                             Duration.ofMillis(100)));
             try (DorisSinkWriter writer =
-                    new DorisSinkWriter(
-                            options, ZONE, new FakeInitContext(time))) {
+                    new DorisSinkWriter(options, ZONE, new FakeInitContext(time))) {
                 writer.write(new CreateTableEvent(ORDERS, ORDERS_SCHEMA), null);
                 writer.write(insertEvent(1), null);
                 assertThat(server.recorded).isEmpty();
@@ -197,8 +194,7 @@ public class DorisSinkWriterTest {
             try (DorisSinkWriter writer = writer(server, options(server))) {
                 writer.write(new CreateTableEvent(ORDERS, twoColumns), null);
                 writer.write(
-                        insertEvent(ORDERS, twoColumns, 1, BinaryStringData.fromString("a")),
-                        null);
+                        insertEvent(ORDERS, twoColumns, 1, BinaryStringData.fromString("a")), null);
                 // Buffered rows move from the old table id to the new one.
                 writer.write(new RenameTableEvent(ORDERS, ORDERS_V2, twoColumns), null);
                 writer.write(
@@ -254,8 +250,7 @@ public class DorisSinkWriterTest {
         return new MockDorisServer(req -> Response.ok("{\"Status\":\"Success\"}"));
     }
 
-    private DorisSinkWriter writer(
-            MockDorisServer server, DorisDataSinkOptions options) {
+    private DorisSinkWriter writer(MockDorisServer server, DorisDataSinkOptions options) {
         return new DorisSinkWriter(options, ZONE, new FakeInitContext(null));
     }
 
@@ -263,8 +258,7 @@ public class DorisSinkWriterTest {
         return options(server, config -> {});
     }
 
-    private DorisDataSinkOptions options(
-            MockDorisServer server, Consumer<Configuration> tune) {
+    private DorisDataSinkOptions options(MockDorisServer server, Consumer<Configuration> tune) {
         Configuration config = new Configuration();
         config.set(DorisDataSinkOptions.FENODES, server.endpoint());
         config.set(DorisDataSinkOptions.USERNAME, "root");
@@ -314,8 +308,7 @@ public class DorisSinkWriterTest {
         }
 
         @Override
-        public ScheduledFuture<?> registerTimer(
-                long timestamp, ProcessingTimeCallback callback) {
+        public ScheduledFuture<?> registerTimer(long timestamp, ProcessingTimeCallback callback) {
             pending.add(callback);
             return null;
         }

@@ -58,8 +58,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the Debezium format.
  *
  * <p>Messages are produced only <em>after</em> the snapshot events have been collected, so every
- * message survives the exactly-once boundary (empty topic at snapshot start → high watermark
- * {@code -1}).
+ * message survives the exactly-once boundary (empty topic at snapshot start → high watermark {@code
+ * -1}).
  */
 public class KafkaJsonDebeziumSimulatedChainITCase extends KafkaJsonSourceTestBase {
 
@@ -96,14 +96,14 @@ public class KafkaJsonDebeziumSimulatedChainITCase extends KafkaJsonSourceTestBa
         configureEnv(env);
         KafkaJsonSourceConfigFactory configFactory =
                 buildConfigFactory(
-                        database.getHost(),
-                        database.getDatabasePort(),
-                        TEST_USER,
-                        TEST_PASSWORD,
-                        database.getDatabaseName(),
-                        "customers",
-                        bootstrapServers,
-                        topic)
+                                database.getHost(),
+                                database.getDatabasePort(),
+                                TEST_USER,
+                                TEST_PASSWORD,
+                                database.getDatabaseName(),
+                                "customers",
+                                bootstrapServers,
+                                topic)
                         // the only difference from the canal chain: the incremental format
                         .messageFormat(KafkaJsonSourceOptions.MessageFormat.DEBEZIUM);
         CloseableIterator<Event> events = runSource(configFactory, env);
@@ -119,9 +119,7 @@ public class KafkaJsonDebeziumSimulatedChainITCase extends KafkaJsonSourceTestBa
 
         // 2) simulated Debezium incremental messages, written after the snapshot
         KafkaUtil.produce(
-                bootstrapServers,
-                topic,
-                simulatedDebeziumMessages(database.getDatabaseName()));
+                bootstrapServers, topic, simulatedDebeziumMessages(database.getDatabaseName()));
 
         // 3) stream: the 3 messages, in order
         List<Event> stream = fetchDataEvents(events, 3, createTables);

@@ -134,7 +134,10 @@ public class KafkaJsonSchemaRegistry implements OperatorCoordinator, Coordinatio
         LOG.info("Starting KafkaJsonSchemaRegistry for {}.", operatorName);
         this.failedReasons.clear();
         this.currentParallelism = context.currentParallelism();
-        LOG.info("Started KafkaJsonSchemaRegistry for {}. Parallelism: {}", operatorName, currentParallelism);
+        LOG.info(
+                "Started KafkaJsonSchemaRegistry for {}. Parallelism: {}",
+                operatorName,
+                currentParallelism);
     }
 
     @Override
@@ -185,7 +188,8 @@ public class KafkaJsonSchemaRegistry implements OperatorCoordinator, Coordinatio
                     try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
                             DataOutputStream out = new DataOutputStream(baos)) {
                         // Serialize SchemaManager
-                        int schemaManagerSerializerVersion = KafkaJsonSchemaManager.SERIALIZER.getVersion();
+                        int schemaManagerSerializerVersion =
+                                KafkaJsonSchemaManager.SERIALIZER.getVersion();
                         out.writeInt(schemaManagerSerializerVersion);
                         byte[] serializedSchemaManager =
                                 KafkaJsonSchemaManager.SERIALIZER.serialize(schemaManager);

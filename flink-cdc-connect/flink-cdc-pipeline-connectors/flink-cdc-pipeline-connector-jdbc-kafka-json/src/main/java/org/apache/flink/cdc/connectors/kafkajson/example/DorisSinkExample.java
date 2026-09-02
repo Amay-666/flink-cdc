@@ -41,8 +41,8 @@ import java.time.ZoneId;
  *
  * <p>No YAML pipeline, no registered {@code DataSinkFactory} SPI and no pipeline jar: the job is
  * assembled programmatically. The schema operator (released {@code SchemaOperator} + connector
- * coordinator) blocks data on a schema change until every sink subtask has flushed, executes the DDL
- * over Doris HTTP and resumes; the partitioning chain keys rows by {@code (table original name,
+ * coordinator) blocks data on a schema change until every sink subtask has flushed, executes the
+ * DDL over Doris HTTP and resumes; the partitioning chain keys rows by {@code (table original name,
  * primary key)} so a large table is spread across the sink subtasks.
  *
  * <p>The static {@link #buildSource}/{@link #buildSink} methods are the reusable seams — tests and
@@ -97,15 +97,16 @@ public class DorisSinkExample {
     public static DataStream<Event> buildSource(
             StreamExecutionEnvironment env, KafkaJsonSourceConfigFactory configFactory) {
         FlinkSourceProvider provider =
-                (FlinkSourceProvider) new KafkaJsonDataSource(configFactory).getEventSourceProvider();
+                (FlinkSourceProvider)
+                        new KafkaJsonDataSource(configFactory).getEventSourceProvider();
         return env.fromSource(
                 provider.getSource(), WatermarkStrategy.noWatermarks(), "canal-source");
     }
 
     /**
      * Builds the sink topology for a Doris target: schema operator + partitioning chain + the
-     * writer operator driving {@code DorisSink}. Returns the writer operator's (empty)
-     * commit output stream; callers that only run the job can ignore it.
+     * writer operator driving {@code DorisSink}. Returns the writer operator's (empty) commit
+     * output stream; callers that only run the job can ignore it.
      */
     public static DataStream<CommittableMessage<Void>> buildSink(
             DataStream<Event> source,

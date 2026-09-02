@@ -40,8 +40,7 @@ public class DropTableEvent implements SchemaChangeEvent {
 
     private final TableId tableId;
     private final Schema schema;
-    @Nullable
-    private final String sql;
+    @Nullable private final String sql;
 
     public DropTableEvent(TableId tableId, Schema schema, @Nullable String sql) {
         this.tableId = tableId;
@@ -68,7 +67,8 @@ public class DropTableEvent implements SchemaChangeEvent {
 
     @Override
     public SchemaChangeEventType getType() {
-        throw new UnsupportedOperationException("DropTableEvent is not supported by released flink-cdc runtime.");
+        throw new UnsupportedOperationException(
+                "DropTableEvent is not supported by released flink-cdc runtime.");
     }
 
     @Override

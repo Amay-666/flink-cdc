@@ -90,13 +90,11 @@ public class DorisRowConverterTest {
                                     BinaryStringData.fromString("doris"),
                                     true,
                                     1.5d,
-                                    DecimalData.fromBigDecimal(
-                                            new BigDecimal("12.34"), 10, 2),
+                                    DecimalData.fromBigDecimal(new BigDecimal("12.34"), 10, 2),
                                     (int) LocalDate.of(2024, 5, 6).toEpochDay(),
                                     (int) (LocalTime.of(10, 30, 45).toNanoOfDay() / 1_000_000),
                                     TimestampData.fromLocalDateTime(
-                                            LocalDateTime.of(
-                                                    2024, 5, 6, 10, 30, 45, 123_456_000)),
+                                            LocalDateTime.of(2024, 5, 6, 10, 30, 45, 123_456_000)),
                                     LocalZonedTimestampData.fromInstant(
                                             Instant.parse("2024-05-06T02:30:45.123456Z")),
                                     ZonedTimestampData.fromOffsetDateTime(
@@ -104,7 +102,8 @@ public class DorisRowConverterTest {
                                                     "2024-05-06T10:30:45.123456+08:00"))
                                 });
 
-        Map<String, Object> row = new DorisRowConverter(schema, PIPELINE_ZONE).convert(record, schema);
+        Map<String, Object> row =
+                new DorisRowConverter(schema, PIPELINE_ZONE).convert(record, schema);
 
         assertThat(row.get("id")).isEqualTo(7);
         assertThat(row.get("name")).isEqualTo("doris");
@@ -124,10 +123,13 @@ public class DorisRowConverterTest {
     public void testConvertComplexTypes() {
         Schema schema =
                 Schema.newBuilder()
-                        .column(Column.physicalColumn("tags", DataTypes.ARRAY(DataTypes.VARCHAR(16))))
                         .column(
                                 Column.physicalColumn(
-                                        "attrs", DataTypes.MAP(DataTypes.VARCHAR(16), DataTypes.INT())))
+                                        "tags", DataTypes.ARRAY(DataTypes.VARCHAR(16))))
+                        .column(
+                                Column.physicalColumn(
+                                        "attrs",
+                                        DataTypes.MAP(DataTypes.VARCHAR(16), DataTypes.INT())))
                         .column(
                                 Column.physicalColumn(
                                         "point",
@@ -156,7 +158,8 @@ public class DorisRowConverterTest {
                         point,
                         null);
 
-        Map<String, Object> row = new DorisRowConverter(schema, PIPELINE_ZONE).convert(record, schema);
+        Map<String, Object> row =
+                new DorisRowConverter(schema, PIPELINE_ZONE).convert(record, schema);
 
         // ARRAY/MAP/ROW render as JSON strings, matching the STRING column type chosen by
         // DorisDdlBuilder.
@@ -177,7 +180,8 @@ public class DorisRowConverterTest {
                 new BinaryRecordDataGenerator(RowType.of(DataTypes.INT(), DataTypes.VARCHAR(16)))
                         .generate(new Object[] {null, null});
 
-        Map<String, Object> row = new DorisRowConverter(schema, PIPELINE_ZONE).convert(record, schema);
+        Map<String, Object> row =
+                new DorisRowConverter(schema, PIPELINE_ZONE).convert(record, schema);
 
         assertThat(row.get("id")).isNull();
         assertThat(row.get("name")).isNull();
@@ -206,7 +210,8 @@ public class DorisRowConverterTest {
         // The same converter instance follows the schema to its next version.
         BinaryRecordData recordV2 =
                 new BinaryRecordDataGenerator(
-                                RowType.of(DataTypes.INT(), DataTypes.VARCHAR(16), DataTypes.BIGINT()))
+                                RowType.of(
+                                        DataTypes.INT(), DataTypes.VARCHAR(16), DataTypes.BIGINT()))
                         .generate(new Object[] {2, BinaryStringData.fromString("b"), 9L});
         assertThat(converter.convert(recordV2, v2))
                 .containsExactlyInAnyOrderEntriesOf(
@@ -220,8 +225,8 @@ public class DorisRowConverterTest {
     }
 
     /**
-     * A {@link RecordData} backed by pre-materialized values. {@code BinaryRecordDataGenerator} cannot
-     * build MAP fields, so tests for the complex types hand-roll the record with this.
+     * A {@link RecordData} backed by pre-materialized values. {@code BinaryRecordDataGenerator}
+     * cannot build MAP fields, so tests for the complex types hand-roll the record with this.
      */
     private static class FakeRecordData implements RecordData {
         private final Object[] values;

@@ -38,8 +38,7 @@ import java.io.IOException;
  * the pre-drop schema and the raw DDL, and is wired in only via the canal connector's own {@link
  * KafkaJsonSchemaChangeEventSerializer}.
  */
-public class KafkaJsonDropTableEventSerializer
-        extends TypeSerializerSingleton<DropTableEvent> {
+public class KafkaJsonDropTableEventSerializer extends TypeSerializerSingleton<DropTableEvent> {
 
     private static final long serialVersionUID = 1L;
 
@@ -58,10 +57,7 @@ public class KafkaJsonDropTableEventSerializer
 
     @Override
     public DropTableEvent createInstance() {
-        return new DropTableEvent(
-                TableId.tableId("unknown"),
-                Schema.newBuilder().build(),
-                "");
+        return new DropTableEvent(TableId.tableId("unknown"), Schema.newBuilder().build(), "");
     }
 
     @Override

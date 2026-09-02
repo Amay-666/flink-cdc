@@ -68,7 +68,8 @@ public class KafkaJsonAlterColumnCommentEventSerializer
     }
 
     @Override
-    public AlterColumnCommentEvent copy(AlterColumnCommentEvent from, AlterColumnCommentEvent reuse) {
+    public AlterColumnCommentEvent copy(
+            AlterColumnCommentEvent from, AlterColumnCommentEvent reuse) {
         return copy(from);
     }
 
@@ -78,7 +79,8 @@ public class KafkaJsonAlterColumnCommentEventSerializer
     }
 
     @Override
-    public void serialize(AlterColumnCommentEvent record, DataOutputView target) throws IOException {
+    public void serialize(AlterColumnCommentEvent record, DataOutputView target)
+            throws IOException {
         tableIdSerializer.serialize(record.tableId(), target);
         commentMapSerializer.serialize(record.getCommentMapping(), target);
     }

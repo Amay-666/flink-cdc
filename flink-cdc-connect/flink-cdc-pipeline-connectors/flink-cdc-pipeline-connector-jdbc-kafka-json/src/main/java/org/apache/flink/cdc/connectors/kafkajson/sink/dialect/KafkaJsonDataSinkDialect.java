@@ -36,8 +36,8 @@ import java.time.ZoneId;
  * <p>The connector deliberately does <em>not</em> register a released {@code DataSinkFactory}: the
  * user-side job assembles the DataStream itself via {@code KafkaJsonDataSinkBuilder}, so this
  * dialect is the seam between the shared plumbing (the released schema-evolution / writer operators
- * and the coordination protocol) and the concrete target system. A dialect supplies the four
- * pieces that are target-specific:
+ * and the coordination protocol) and the concrete target system. A dialect supplies the four pieces
+ * that are target-specific:
  *
  * <ul>
  *   <li>the {@link Sink} driven by the released {@code DataSinkWriterOperator};
@@ -71,9 +71,9 @@ public abstract class KafkaJsonDataSinkDialect implements Serializable {
 
     /**
      * Creates the hash function provider used to partition data change events. The default keeps
-     * rows of the same (table original name, primary key) on the same subtask — the
-     * {@code key by 表原始名称 + 主键 id} requirement — so a large table is spread by primary key
-     * instead of monopolizing a single subtask. Dialects may override to change the keying.
+     * rows of the same (table original name, primary key) on the same subtask — the {@code key by
+     * 表原始名称 + 主键 id} requirement — so a large table is spread by primary key instead of
+     * monopolizing a single subtask. Dialects may override to change the keying.
      */
     public HashFunctionProvider<DataChangeEvent> createHashFunctionProvider() {
         return new DefaultDataChangeEventHashFunctionProvider();

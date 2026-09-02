@@ -90,7 +90,8 @@ public class RenameTableEvent implements SchemaChangeEvent {
 
     @Override
     public SchemaChangeEventType getType() {
-        throw new UnsupportedOperationException("RenameTableEvent is not supported by released flink-cdc runtime.");
+        throw new UnsupportedOperationException(
+                "RenameTableEvent is not supported by released flink-cdc runtime.");
     }
 
     @Override

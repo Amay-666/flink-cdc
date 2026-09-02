@@ -34,8 +34,8 @@ import java.util.function.Function;
  * source schema. The mapping is a {@link Function} — install one via {@link
  * #withDatabaseMapping}/{@link #withTableMapping} — and defaults to the {@code
  * sink.database-prefix}/{@code -suffix} and {@code sink.table-prefix}/{@code -suffix} config
- * options. Target-specific options belong to each engine's own options class — e.g. the Doris {@code
- * fenodes}/{@code username} live in {@code
+ * options. Target-specific options belong to each engine's own options class — e.g. the Doris
+ * {@code fenodes}/{@code username} live in {@code
  * org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions}, which extends
  * this class.
  */
@@ -70,6 +70,7 @@ public class KafkaJsonDataSinkOptions implements Serializable {
 
     /** Custom mappings; {@code null} means "use the configured prefix/suffix". */
     private volatile TableIdMapping databaseMapping;
+
     private volatile TableIdMapping tableMapping;
 
     public KafkaJsonDataSinkOptions(Configuration config) {
@@ -106,8 +107,10 @@ public class KafkaJsonDataSinkOptions implements Serializable {
         return this;
     }
 
-    /** Replaces the prefix/suffix table mapping with an arbitrary function; see {@link
-     * #withDatabaseMapping}. */
+    /**
+     * Replaces the prefix/suffix table mapping with an arbitrary function; see {@link
+     * #withDatabaseMapping}.
+     */
     public KafkaJsonDataSinkOptions withTableMapping(TableIdMapping mapping) {
         this.tableMapping = mapping;
         return this;

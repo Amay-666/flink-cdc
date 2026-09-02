@@ -51,15 +51,16 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Real end-to-end MySQL + Debezium chain: a real {@code debezium/connect:1.9} worker reads the MySQL
- * binlog and writes the {@code {schema, payload}} SourceRecord JSON envelope to Kafka, and the
- * connector snapshots the table and then consumes the incremental changes.
+ * Real end-to-end MySQL + Debezium chain: a real {@code debezium/connect:1.9} worker reads the
+ * MySQL binlog and writes the {@code {schema, payload}} SourceRecord JSON envelope to Kafka, and
+ * the connector snapshots the table and then consumes the incremental changes.
  *
- * <p>This validates the connector's Debezium wire-format contract against what Debezium 1.9 actually
- * emits (the fork embeds Debezium {@code 1.9.8.Final}). The timing avoids a double-snapshot race:
- * the source is started only after the Debezium snapshot has fully drained to Kafka (all N {@code
- * op:r} records visible), so the Debezium snapshot records fall before the stream boundary and the
- * DML executed after the source snapshot produces exactly the M incremental events.
+ * <p>This validates the connector's Debezium wire-format contract against what Debezium 1.9
+ * actually emits (the fork embeds Debezium {@code 1.9.8.Final}). The timing avoids a
+ * double-snapshot race: the source is started only after the Debezium snapshot has fully drained to
+ * Kafka (all N {@code op:r} records visible), so the Debezium snapshot records fall before the
+ * stream boundary and the DML executed after the source snapshot produces exactly the M incremental
+ * events.
  */
 public class DebeziumCdcChainITCase extends KafkaJsonSourceTestBase {
 
@@ -115,14 +116,14 @@ public class DebeziumCdcChainITCase extends KafkaJsonSourceTestBase {
         configureEnv(env);
         KafkaJsonSourceConfigFactory configFactory =
                 buildConfigFactory(
-                        database.getHost(),
-                        database.getDatabasePort(),
-                        TEST_USER,
-                        TEST_PASSWORD,
-                        database.getDatabaseName(),
-                        "customers",
-                        bootstrapServers,
-                        topic)
+                                database.getHost(),
+                                database.getDatabasePort(),
+                                TEST_USER,
+                                TEST_PASSWORD,
+                                database.getDatabaseName(),
+                                "customers",
+                                bootstrapServers,
+                                topic)
                         // the only difference from the canal chain: the incremental format
                         .messageFormat(KafkaJsonSourceOptions.MessageFormat.DEBEZIUM);
         CloseableIterator<Event> events = runSource(configFactory, env);
@@ -144,10 +145,10 @@ public class DebeziumCdcChainITCase extends KafkaJsonSourceTestBase {
             statement.execute(
                     String.format(
                             "UPDATE `%s`.`customers` SET address='Hangzhou' WHERE id=101", dbName));
-            statement.execute(
-                    String.format("DELETE FROM `%s`.`customers` WHERE id=102", dbName));
+            statement.execute(String.format("DELETE FROM `%s`.`customers` WHERE id=102", dbName));
         }
-        // give Debezium time to pick up the binlog and produce to Kafka before the connector consumes
+        // give Debezium time to pick up the binlog and produce to Kafka before the connector
+        // consumes
         Thread.sleep(5_000);
         List<Event> stream = fetchDataEvents(events, 3, createTables);
 
@@ -183,7 +184,10 @@ public class DebeziumCdcChainITCase extends KafkaJsonSourceTestBase {
             Thread.sleep(1_000);
         }
         throw new IllegalStateException(
-                "Debezium did not finish the snapshot (expected " + expectedCount + " records on "
-                        + topic + ") within 180s");
+                "Debezium did not finish the snapshot (expected "
+                        + expectedCount
+                        + " records on "
+                        + topic
+                        + ") within 180s");
     }
 }

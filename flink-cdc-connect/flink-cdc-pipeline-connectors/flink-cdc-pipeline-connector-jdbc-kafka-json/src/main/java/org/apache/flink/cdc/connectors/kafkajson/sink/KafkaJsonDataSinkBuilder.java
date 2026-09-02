@@ -86,8 +86,8 @@ public class KafkaJsonDataSinkBuilder {
 
     /**
      * Builds the full sink topology: schema operator, partitioning chain and the Doris writer. The
-     * returned stream carries the writer operator's (empty) {@link CommittableMessage} output and is
-     * normally ignored; it is returned so tests can attach collectors to it.
+     * returned stream carries the writer operator's (empty) {@link CommittableMessage} output and
+     * is normally ignored; it is returned so tests can attach collectors to it.
      */
     public DataStream<CommittableMessage<Void>> build(
             DataStream<Event> source,
@@ -98,8 +98,12 @@ public class KafkaJsonDataSinkBuilder {
         MetadataApplier metadataApplier = dialect.createMetadataApplier();
         DataStream<Event> schemaStream =
                 buildSchemaOperator(
-                        source, sinkParallelism, metadataApplier, rpcTimeout,
-                        schemaChangeBehavior, timezone);
+                        source,
+                        sinkParallelism,
+                        metadataApplier,
+                        rpcTimeout,
+                        schemaChangeBehavior,
+                        timezone);
         OperatorID schemaOperatorID = generateOperatorID(SCHEMA_OPERATOR_UID);
         DataStream<Event> partitionedStream =
                 buildPartitionedStream(schemaStream, sinkParallelism, schemaOperatorID);

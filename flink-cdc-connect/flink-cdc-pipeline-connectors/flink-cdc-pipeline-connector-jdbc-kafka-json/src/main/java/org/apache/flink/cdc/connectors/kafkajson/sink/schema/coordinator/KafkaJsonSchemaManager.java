@@ -67,9 +67,9 @@ import static org.apache.flink.cdc.common.utils.Preconditions.checkArgument;
  *
  * <p>This mirrors the released {@code SchemaManager} of flink-cdc-runtime — same structure (two
  * {@code TableId → versioned schemas} maps plus the behavior), same checkpoint wire format — but
- * dispatches on {@code instanceof} for <em>all</em> ten schema-change events instead of the released
- * {@code getType()} switch, so the connector's five custom events (rename/drop/truncate/comment)
- * are handled safely:
+ * dispatches on {@code instanceof} for <em>all</em> ten schema-change events instead of the
+ * released {@code getType()} switch, so the connector's five custom events
+ * (rename/drop/truncate/comment) are handled safely:
  *
  * <ul>
  *   <li>{@link RenameTableEvent} registers the schema under the new table id and <b>keeps</b> the
@@ -78,8 +78,8 @@ import static org.apache.flink.cdc.common.utils.Preconditions.checkArgument;
  *       rename), so removing the old entry would make that refresh fail.
  *   <li>{@link DropTableEvent} keeps the entry (idempotent {@code DROP TABLE IF EXISTS}); {@link
  *       TruncateTableEvent} leaves the schema untouched.
- *   <li>{@link AlterTableCommentEvent} / {@link AlterColumnCommentEvent} rebuild the schema with the
- *       new comment(s).
+ *   <li>{@link AlterTableCommentEvent} / {@link AlterColumnCommentEvent} rebuild the schema with
+ *       the new comment(s).
  * </ul>
  */
 public class KafkaJsonSchemaManager {
@@ -123,9 +123,9 @@ public class KafkaJsonSchemaManager {
     }
 
     /**
-     * Checks if the given schema change event has been applied already. If so, it will be ignored to
-     * avoid sending duplicate evolved schema change events to the sink metadata applier. Unlike the
-     * released {@code SchemaManager}, this dispatches on {@code instanceof} and therefore also
+     * Checks if the given schema change event has been applied already. If so, it will be ignored
+     * to avoid sending duplicate evolved schema change events to the sink metadata applier. Unlike
+     * the released {@code SchemaManager}, this dispatches on {@code instanceof} and therefore also
      * understands the connector's five custom events.
      */
     public final boolean isOriginalSchemaChangeEventRedundant(SchemaChangeEvent event) {
@@ -197,17 +197,23 @@ public class KafkaJsonSchemaManager {
         } else if (event instanceof AlterTableCommentEvent) {
             Optional<Schema> latestSchema = getLatestOriginalSchema(event.tableId());
             return latestSchema
-                    .map(schema -> Objects.equals(schema.comment(), ((AlterTableCommentEvent) event).getComment()))
+                    .map(
+                            schema ->
+                                    Objects.equals(
+                                            schema.comment(),
+                                            ((AlterTableCommentEvent) event).getComment()))
                     .orElse(false);
         } else if (event instanceof AlterColumnCommentEvent) {
             Optional<Schema> latestSchema = getLatestOriginalSchema(event.tableId());
             if (!latestSchema.isPresent()) {
                 return false;
             }
-            Map<String, String> commentMapping = ((AlterColumnCommentEvent) event).getCommentMapping();
+            Map<String, String> commentMapping =
+                    ((AlterColumnCommentEvent) event).getCommentMapping();
             for (Map.Entry<String, String> entry : commentMapping.entrySet()) {
                 Optional<Column> column = latestSchema.get().getColumn(entry.getKey());
-                if (!column.isPresent() || !Objects.equals(column.get().getComment(), entry.getValue())) {
+                if (!column.isPresent()
+                        || !Objects.equals(column.get().getComment(), entry.getValue())) {
                     return false;
                 }
             }
@@ -314,7 +320,8 @@ public class KafkaJsonSchemaManager {
             // processing a rename).
             RenameTableEvent renameTableEvent = (RenameTableEvent) event;
             LOG.info("Handling schema change event: {}", event);
-            registerNewSchema(schemaMap, renameTableEvent.getNewTableId(), renameTableEvent.getSchema());
+            registerNewSchema(
+                    schemaMap, renameTableEvent.getNewTableId(), renameTableEvent.getSchema());
             return;
         }
         if (event instanceof DropTableEvent || event instanceof TruncateTableEvent) {
@@ -490,7 +497,8 @@ public class KafkaJsonSchemaManager {
         }
 
         @Override
-        public KafkaJsonSchemaManager deserialize(int version, byte[] serialized) throws IOException {
+        public KafkaJsonSchemaManager deserialize(int version, byte[] serialized)
+                throws IOException {
             try (ByteArrayInputStream bais = new ByteArrayInputStream(serialized);
                     DataInputStream in = new DataInputStream(bais)) {
                 switch (version) {
@@ -500,7 +508,8 @@ public class KafkaJsonSchemaManager {
                             Map<TableId, SortedMap<Integer, Schema>> schemas =
                                     deserializeSchemaMap(version, in);
                             // In legacy mode, original schema and evolved schema never differs
-                            return new KafkaJsonSchemaManager(schemas, schemas, SchemaChangeBehavior.EVOLVE);
+                            return new KafkaJsonSchemaManager(
+                                    schemas, schemas, SchemaChangeBehavior.EVOLVE);
                         }
                     case 2:
                         {
@@ -510,7 +519,8 @@ public class KafkaJsonSchemaManager {
                                     deserializeSchemaMap(version, in);
                             SchemaChangeBehavior behavior =
                                     SchemaChangeBehavior.valueOf(in.readUTF());
-                            return new KafkaJsonSchemaManager(originalSchemas, evolvedSchemas, behavior);
+                            return new KafkaJsonSchemaManager(
+                                    originalSchemas, evolvedSchemas, behavior);
                         }
                     default:
                         throw new RuntimeException("Unknown serialize version: " + version);

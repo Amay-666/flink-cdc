@@ -54,10 +54,10 @@ import static org.apache.flink.cdc.common.types.DataTypeChecks.getScale;
  * Renders {@link RecordData} rows for the Doris StreamLoad JSON body.
  *
  * <p>Mirrors the released pipeline-doris {@code DorisRowConverter} mapping — numbers are passed
- * through, strings are unboxed, dates and timestamps are formatted ({@code yyyy-MM-dd} /
- * {@code yyyy-MM-dd HH:mm:ss.SSSSSS}), and time-zone-aware timestamps are shifted to the pipeline
- * zone. The complex types are serialized to a JSON string (matching the {@code STRING} column type
- * chosen by {@code DorisDdlBuilder}); DELETE semantics are added by the sink writer, not here.
+ * through, strings are unboxed, dates and timestamps are formatted ({@code yyyy-MM-dd} / {@code
+ * yyyy-MM-dd HH:mm:ss.SSSSSS}), and time-zone-aware timestamps are shifted to the pipeline zone.
+ * The complex types are serialized to a JSON string (matching the {@code STRING} column type chosen
+ * by {@code DorisDdlBuilder}); DELETE semantics are added by the sink writer, not here.
  */
 public class DorisRowConverter extends KafkaJsonRowConverter {
 
@@ -119,8 +119,7 @@ public class DorisRowConverter extends KafkaJsonRowConverter {
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 return (index, val) ->
                         ZonedDateTime.ofInstant(
-                                        val.getLocalZonedTimestampData(
-                                                        index, getPrecision(type))
+                                        val.getLocalZonedTimestampData(index, getPrecision(type))
                                                 .toInstant(),
                                         pipelineZoneId)
                                 .toLocalDateTime()
@@ -140,8 +139,7 @@ public class DorisRowConverter extends KafkaJsonRowConverter {
             case ROW:
                 return (index, val) ->
                         writeValueAsString(
-                                convertRow(
-                                        val.getRow(index, getFieldCount(type)), (RowType) type));
+                                convertRow(val.getRow(index, getFieldCount(type)), (RowType) type));
             default:
                 throw new UnsupportedOperationException("Unsupported type for Doris: " + type);
         }
@@ -179,8 +177,7 @@ public class DorisRowConverter extends KafkaJsonRowConverter {
         List<DataField> fields = rowType.getFields();
         for (int i = 0; i < fields.size(); i++) {
             DataField field = fields.get(i);
-            Object value =
-                    RecordData.createFieldGetter(field.getType(), i).getFieldOrNull(row);
+            Object value = RecordData.createFieldGetter(field.getType(), i).getFieldOrNull(row);
             result.put(field.getName(), convertValue(value, field.getType()));
         }
         return result;
@@ -210,8 +207,7 @@ public class DorisRowConverter extends KafkaJsonRowConverter {
             case DOUBLE:
                 return value;
             case DATE:
-                return LocalDate.ofEpochDay(((Number) value).intValue())
-                        .format(DATE_FORMATTER);
+                return LocalDate.ofEpochDay(((Number) value).intValue()).format(DATE_FORMATTER);
             case TIME_WITHOUT_TIME_ZONE:
                 return LocalTime.ofNanoOfDay(((Number) value).longValue() * 1_000_000L)
                         .format(TIME_FORMATTER);

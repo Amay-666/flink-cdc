@@ -60,8 +60,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>Whereas the request-handler test talks to the state machine directly, this test goes through
  * the registry's {@link OperatorCoordinator} surface — request/event dispatch, the {@code
- * GetEvolvedSchema}/{@code GetOriginalSchema} responses the partitioning operator relies on, and the
- * checkpoint/restore round-trip of the schema manager.
+ * GetEvolvedSchema}/{@code GetOriginalSchema} responses the partitioning operator relies on, and
+ * the checkpoint/restore round-trip of the schema manager.
  */
 public class KafkaJsonSchemaRegistryTest {
 
@@ -100,7 +100,8 @@ public class KafkaJsonSchemaRegistryTest {
                     .containsExactly(new CreateTableEvent(ORDERS, SCHEMA));
             assertThat(applier.applied).containsExactly(new CreateTableEvent(ORDERS, SCHEMA));
 
-            // The partitioning operator can now pull the schemas it needs to rebuild hash functions.
+            // The partitioning operator can now pull the schemas it needs to rebuild hash
+            // functions.
             GetEvolvedSchemaResponse evolved =
                     send(
                             registry,

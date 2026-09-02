@@ -27,8 +27,8 @@ import java.time.Duration;
 
 /**
  * A {@code canal/canal-server:v1.1.8} container that tails the binlog of a MySQL-compatible source
- * (MySQL or PolarDB-X, whose GalaxyCDC serves a MySQL-compatible binlog) and writes canal flatMessage
- * JSON to a Kafka topic.
+ * (MySQL or PolarDB-X, whose GalaxyCDC serves a MySQL-compatible binlog) and writes canal
+ * flatMessage JSON to a Kafka topic.
  *
  * <p>The image's entrypoint script rewrites {@code canal.*} environment variables into {@code
  * canal.properties} and {@code instance.properties}, so the whole configuration is expressed

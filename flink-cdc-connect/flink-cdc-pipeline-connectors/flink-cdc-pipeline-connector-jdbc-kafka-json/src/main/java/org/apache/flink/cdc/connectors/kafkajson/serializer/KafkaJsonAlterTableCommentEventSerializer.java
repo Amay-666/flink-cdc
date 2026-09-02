@@ -59,10 +59,7 @@ public class KafkaJsonAlterTableCommentEventSerializer
     @Override
     public AlterTableCommentEvent createInstance() {
         return new AlterTableCommentEvent(
-                TableId.tableId("unknown"),
-                Schema.newBuilder().build(),
-                "",
-                "");
+                TableId.tableId("unknown"), Schema.newBuilder().build(), "", "");
     }
 
     @Override
@@ -98,8 +95,7 @@ public class KafkaJsonAlterTableCommentEventSerializer
                 tableIdSerializer.deserialize(source),
                 schemaSerializer.deserialize(source),
                 stringSerializer.deserialize(source),
-                stringSerializer.deserialize(source)
-        );
+                stringSerializer.deserialize(source));
     }
 
     @Override

@@ -46,15 +46,15 @@ import java.io.IOException;
 
 /**
  * A {@link TypeSerializer} for {@link SchemaChangeEvent} that additionally handles the connector's
- * custom event types ({@link RenameTableEvent}, {@link TruncateTableEvent}, {@link
- * DropTableEvent}, {@link AlterTableCommentEvent} and {@link AlterColumnCommentEvent}).
+ * custom event types ({@link RenameTableEvent}, {@link TruncateTableEvent}, {@link DropTableEvent},
+ * {@link AlterTableCommentEvent} and {@link AlterColumnCommentEvent}).
  *
  * <p>This is the canal-connector-local copy of the released {@code SchemaChangeEventSerializer},
  * with the discriminator replaced by the connector's own {@link KafkaJsonSchemaChangeTag} so that
- * the custom events — which the released {@code SchemaChangeEventType} enum has no values for —
- * can be serialized alongside the five released event types. The five known events reuse the
- * released per-event serializers and their byte formats; the custom events use the connector's own
- * per-event serializers.
+ * the custom events — which the released {@code SchemaChangeEventType} enum has no values for — can
+ * be serialized alongside the five released event types. The five known events reuse the released
+ * per-event serializers and their byte formats; the custom events use the connector's own per-event
+ * serializers.
  */
 public final class KafkaJsonSchemaChangeEventSerializer
         extends TypeSerializerSingleton<SchemaChangeEvent> {
@@ -107,9 +107,11 @@ public final class KafkaJsonSchemaChangeEventSerializer
         } else if (from instanceof DropTableEvent) {
             return KafkaJsonDropTableEventSerializer.INSTANCE.copy((DropTableEvent) from);
         } else if (from instanceof AlterTableCommentEvent) {
-            return KafkaJsonAlterTableCommentEventSerializer.INSTANCE.copy((AlterTableCommentEvent) from);
+            return KafkaJsonAlterTableCommentEventSerializer.INSTANCE.copy(
+                    (AlterTableCommentEvent) from);
         } else if (from instanceof AlterColumnCommentEvent) {
-            return KafkaJsonAlterColumnCommentEventSerializer.INSTANCE.copy((AlterColumnCommentEvent) from);
+            return KafkaJsonAlterColumnCommentEventSerializer.INSTANCE.copy(
+                    (AlterColumnCommentEvent) from);
         } else {
             throw new IllegalArgumentException("Unknown schema change event: " + from);
         }

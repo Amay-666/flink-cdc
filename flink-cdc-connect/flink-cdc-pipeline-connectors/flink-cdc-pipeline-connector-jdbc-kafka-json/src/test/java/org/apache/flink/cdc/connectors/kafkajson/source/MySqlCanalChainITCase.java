@@ -58,8 +58,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * consumes the incremental changes, including a DDL (schema change).
  *
  * <p>This validates that the connector's wire-format contract (the fields {@link
- * org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessage} parses) matches
- * what canal actually emits. DML is executed only after the snapshot phase has finished, so the
+ * org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessage} parses) matches what
+ * canal actually emits. DML is executed only after the snapshot phase has finished, so the
  * incremental messages survive the exactly-once boundary.
  */
 public class MySqlCanalChainITCase extends KafkaJsonSourceTestBase {

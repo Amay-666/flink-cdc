@@ -34,13 +34,13 @@ import java.time.Duration;
  * <p>The fork embeds Debezium {@code 1.9.8.Final} (root pom {@code <debezium.version>}), so the 1.9
  * series image is used to keep the wire format aligned. The JsonConverter has schemas enabled, so
  * every record carries the {@code {schema, payload}} envelope that {@link
- * org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessageParser} unwraps — the
- * exact wire format the real chain must prove the connector consumes.
+ * org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessageParser} unwraps
+ * — the exact wire format the real chain must prove the connector consumes.
  *
  * <p>The image entrypoint maps {@code CONNECT_*}-prefixed environment variables into {@code
- * connect-distributed.properties}; {@code BOOTSTRAP_SERVERS}, {@code GROUP_ID} and the three storage
- * topics are translated by the entrypoint itself. Connectors are registered through the Connect REST
- * API (reachable at {@code localhost:8083} inside the container) with {@code curl}.
+ * connect-distributed.properties}; {@code BOOTSTRAP_SERVERS}, {@code GROUP_ID} and the three
+ * storage topics are translated by the entrypoint itself. Connectors are registered through the
+ * Connect REST API (reachable at {@code localhost:8083} inside the container) with {@code curl}.
  */
 public class DebeziumConnectContainer extends GenericContainer<DebeziumConnectContainer> {
 
@@ -63,7 +63,8 @@ public class DebeziumConnectContainer extends GenericContainer<DebeziumConnectCo
         withEnv("CONFIG_STORAGE_TOPIC", "debezium-connect-configs");
         withEnv("OFFSET_STORAGE_TOPIC", "debezium-connect-offsets");
         withEnv("STATUS_STORAGE_TOPIC", "debezium-connect-status");
-        // JsonConverter with schemas enabled -> every record is a {schema, payload} envelope, exactly
+        // JsonConverter with schemas enabled -> every record is a {schema, payload} envelope,
+        // exactly
         // the wire format the connector parses.
         withEnv("CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE", "true");
         withEnv("CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE", "true");
@@ -73,8 +74,8 @@ public class DebeziumConnectContainer extends GenericContainer<DebeziumConnectCo
 
     /**
      * Registers a MySQL source connector and waits until it reports {@code RUNNING}. The connector
-     * then snapshots the {@code databaseName} tables matching {@code tablePattern} (one {@code op:r}
-     * record per row) and tails the binlog for subsequent changes.
+     * then snapshots the {@code databaseName} tables matching {@code tablePattern} (one {@code
+     * op:r} record per row) and tails the binlog for subsequent changes.
      *
      * <p>{@code topicPrefix} is the {@code database.server.name} of Debezium 1.9 (the {@code
      * topic.prefix} key only exists in 2.x), so records land on {@code
@@ -117,7 +118,10 @@ public class DebeziumConnectContainer extends GenericContainer<DebeziumConnectCo
                         topicPrefix,
                         databaseName,
                         databaseName + "." + tablePattern);
-        LOG.info("Registering Debezium connector {} -> topic prefix {}.", connectorName, topicPrefix);
+        LOG.info(
+                "Registering Debezium connector {} -> topic prefix {}.",
+                connectorName,
+                topicPrefix);
         Container.ExecResult result =
                 execInContainer(
                         "curl",
@@ -154,14 +158,10 @@ public class DebeziumConnectContainer extends GenericContainer<DebeziumConnectCo
         while (System.currentTimeMillis() < deadline) {
             Container.ExecResult result =
                     execInContainer(
-                            "curl",
-                            "-s",
-                            "http://localhost:" + REST_PORT + "/connector-plugins");
+                            "curl", "-s", "http://localhost:" + REST_PORT + "/connector-plugins");
             if (result.getExitCode() == 0
                     && result.getStdout() != null
-                    && result
-                            .getStdout()
-                            .contains("io.debezium.connector.mysql.MySqlConnector")) {
+                    && result.getStdout().contains("io.debezium.connector.mysql.MySqlConnector")) {
                 LOG.info("Debezium Connect REST API is ready.");
                 return;
             }
@@ -176,8 +176,7 @@ public class DebeziumConnectContainer extends GenericContainer<DebeziumConnectCo
 
     private void waitUntilConnectorRunning(String connectorName)
             throws IOException, InterruptedException {
-        long deadline =
-                System.currentTimeMillis() + CONNECTOR_STARTUP_TIMEOUT_SECONDS * 1000L;
+        long deadline = System.currentTimeMillis() + CONNECTOR_STARTUP_TIMEOUT_SECONDS * 1000L;
         while (System.currentTimeMillis() < deadline) {
             Container.ExecResult result =
                     execInContainer(

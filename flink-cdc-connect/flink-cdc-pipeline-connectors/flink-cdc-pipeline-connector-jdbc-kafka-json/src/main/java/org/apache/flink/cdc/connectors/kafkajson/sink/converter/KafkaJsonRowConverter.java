@@ -58,6 +58,7 @@ public abstract class KafkaJsonRowConverter implements Serializable {
 
     /** The schema the current {@link #fieldConverters} were built from. */
     private volatile Schema schema;
+
     private volatile List<String> fieldNames;
     private volatile List<SerializationConverter> fieldConverters;
 
