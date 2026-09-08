@@ -23,6 +23,8 @@ import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessa
 import org.apache.flink.cdc.connectors.kafkajson.source.schema.KafkaJsonSourceInfo;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTableUtils;
 
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.debezium.connector.SnapshotRecord;
 import io.debezium.connector.mysql.MySqlConnectorConfig;
 import io.debezium.data.Envelope;
@@ -32,11 +34,13 @@ import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -176,6 +180,37 @@ class KafkaJsonRecordFactoryTest {
         // SnapshotRecord.toSource is a no-op for FALSE -> stream records leave snapshot unset
         assertNull(source.getString("snapshot"));
         assertEquals("users", source.getString("table"));
+    }
+
+    @Test
+    void testDebeziumPreciseDecimalRoundTripsToStructBigDecimal() {
+        // The Debezium precise encoding of amount = 3.14 (decimal(10,2) -> unscaled 314) is the
+        // base64 text of the unscaled two's-complement bytes; the scale (2) comes from the column
+        // schema. Only the id and amount columns are set, the rest stay null.
+        Table table = usersTable("id");
+        factory.registerTable(table);
+        ObjectNode after = JsonNodeFactory.instance.objectNode();
+        after.put("id", 1);
+        after.put(
+                "amount",
+                Base64.getEncoder().encodeToString(BigInteger.valueOf(314).toByteArray()));
+
+        Object[] data = factory.debeziumRowData(table, after);
+        SourceRecord record =
+                factory.createRecord(
+                        table,
+                        null,
+                        data,
+                        Envelope.Operation.CREATE,
+                        sourceInfo(SnapshotRecord.FALSE),
+                        "test.users",
+                        0,
+                        100L);
+
+        Struct value = (Struct) record.value();
+        Struct afterStruct = value.getStruct("after");
+        assertEquals(new BigDecimal("3.14"), afterStruct.get("amount"));
+        assertEquals(1L, afterStruct.getInt64("id"));
     }
 
     @Test

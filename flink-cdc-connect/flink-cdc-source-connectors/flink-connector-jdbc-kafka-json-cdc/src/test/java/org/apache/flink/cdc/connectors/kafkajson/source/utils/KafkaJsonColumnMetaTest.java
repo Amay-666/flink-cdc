@@ -146,6 +146,33 @@ class KafkaJsonColumnMetaTest {
         assertEquals(
                 "DECIMAL(38, 18)",
                 KafkaJsonColumnMeta.fromColumn(noPrecision).toCdcDataType(true).toString());
+
+        // a precision within the CDC max keeps its real precision/scale
+        Column wideWithinMax =
+                Column.editor()
+                        .name("c")
+                        .type("DECIMAL")
+                        .length(30)
+                        .scale(10)
+                        .optional(true)
+                        .create();
+        assertEquals(
+                "DECIMAL(30, 10)",
+                KafkaJsonColumnMeta.fromColumn(wideWithinMax).toCdcDataType(true).toString());
+
+        // a precision above the CDC max (38) is carried as STRING, matching the released row-type
+        // inference (DebeziumSchemaDataTypeInference) that emits STRING for such Connect Decimals
+        Column overMax =
+                Column.editor()
+                        .name("c")
+                        .type("DECIMAL")
+                        .length(65)
+                        .scale(30)
+                        .optional(true)
+                        .create();
+        assertEquals(
+                "STRING", KafkaJsonColumnMeta.fromColumn(overMax).toCdcDataType(true).toString());
+        assertEquals("STRING", toCdc("DECIMAL UNSIGNED", 65));
     }
 
     @Test

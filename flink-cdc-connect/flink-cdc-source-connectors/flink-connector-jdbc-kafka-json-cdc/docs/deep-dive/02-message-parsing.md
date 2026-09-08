@@ -174,9 +174,12 @@ Druid 认 `SQLAlterTableRenameColumn`；pipeline 侧还有**同位置同类型�
 - `KafkaJsonRecordConverter` 加 `convert(KafkaJsonMessage, …)` 分派——canal 走现有路径；debezium 走
   `convertDebezium`（typed before/after → `KafkaJsonRecordFactory.debeziumRowData` → `createRecord`，
   **只用已注册表 schema**）；
-- `KafkaJsonValueConverter.convertFromJson(Column, JsonNode)`：De bezium 类型化值转换——epoch 编码的时间类型
+- `KafkaJsonValueConverter.convertFromJson(Column, JsonNode)`：Debezium 类型化值转换——epoch 编码的时间类型
   （DATE=天、TIME=毫秒、DATETIME=微秒、TIMESTAMP=毫秒）、布尔→Boolean、JSON 列嵌套→compact JSON、
-  二进制 base64 文本→byte[]。**DECIMAL 不支持 `decimal.handling.mode=precise`（base64 字节）**，用 double/string 或 TiCDC。
+  二进制 base64 文本→byte[]。**DECIMAL 支持 `decimal.handling.mode=precise`**：Kafka Connect
+  `JsonConverter` 把该值序列化为 unscaled 字节的 base64 文本（并非 `{"scale","value"}` 对象，scale 在无
+  schema 的线格式里不在消息内），按其与列 schema 的 scale 解码为逻辑 `BigDecimal`；`string`（十进制字面量）与
+  `double`（数字）同样可消费（三种 mode 的 JSON 呈现均可消费）。
 - `KafkaJsonSourceConfigFactory` 放行 `scan.message.format=debezium`。
 
 **实施取舍（已记录）**：
@@ -211,6 +214,11 @@ ITCase 时序（避免双快照竞态）：
 
 `KafkaJsonSourceInfoStructMakerTest` 断言 source struct `version == "1.9.8.Final"`，与真实 producer 的
 `debezium/connect:1.9` 线格式一致。
+
+**DECIMAL 线格式 e2e（同 ITCase 的 `testRealDebeziumPreciseDecimalWireFormat`）**：单独建一张
+`orders`（`DECIMAL(10,2)`，避开共享 customers fixtures），断言 Debezium 写出的 `3.14` 在 Kafka 上是
+**base64 文本 `"ATo="`**（非 `{scale,value}` 对象），且 JDBC 快照行与增量 `op:c`（`25.50`）都被连接器解成
+正确的 `DECIMAL(10,2)` DecimalData——即 §S3 的 precise 解码在真实链上成立。
 
 ### 6.2 已放弃：PolarDB-X 链路（记录卡点）
 

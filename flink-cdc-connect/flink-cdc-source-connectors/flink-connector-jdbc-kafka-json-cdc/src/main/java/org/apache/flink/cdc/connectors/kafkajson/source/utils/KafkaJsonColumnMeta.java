@@ -120,11 +120,14 @@ public final class KafkaJsonColumnMeta {
             case "NUMERIC":
             case "FIXED":
             case "DECIMAL":
-                if (precision <= 0 || precision > MAX_DECIMAL_PRECISION) {
-                    // handle decimal without an explicit precision/scale
+                if (precision <= 0) {
+                    // handle a decimal without an explicit precision/scale
                     precision = MAX_DECIMAL_PRECISION;
                     scale = DECIMAL_FALLBACK_SCALE;
                 } else {
+                    // Keep the real precision even above the CDC max (38): such columns map to
+                    // STRING below, mirroring the released row-type inference that downgrades a
+                    // >38-precision Connect Decimal to STRING, so the schema and rows stay aligned.
                     // scale must not exceed the precision
                     scale = Math.min(Math.max(scale, 0), precision);
                 }
@@ -177,7 +180,12 @@ public final class KafkaJsonColumnMeta {
             case "NUMERIC":
             case "FIXED":
             case "DECIMAL":
-                // precision/scale are clamped in fromColumn to (0, 38] / [0, precision]
+                // A precision above the CDC max (38) cannot be represented as a DECIMAL; it is
+                // carried as text, matching the released row-type inference which likewise emits
+                // STRING for a >38-precision Connect Decimal (see fromColumn).
+                if (precision > MAX_DECIMAL_PRECISION) {
+                    return DataTypes.STRING();
+                }
                 return DataTypes.DECIMAL(precision, scale);
             case "TIME":
                 return DataTypes.TIME(precision);

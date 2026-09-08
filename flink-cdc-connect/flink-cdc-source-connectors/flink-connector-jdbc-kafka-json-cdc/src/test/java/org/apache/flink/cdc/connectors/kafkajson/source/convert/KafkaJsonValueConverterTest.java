@@ -21,9 +21,12 @@ import org.apache.flink.util.FlinkRuntimeException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.debezium.relational.Column;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.sql.Types;
 import java.time.Duration;
 import java.time.LocalDate;
@@ -31,6 +34,7 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.Base64;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -386,6 +390,117 @@ class KafkaJsonValueConverterTest {
                 converter.convertFromJson(
                         column(Types.VARCHAR, "VARCHAR", 255),
                         JsonNodeFactory.instance.textNode("hello")));
+    }
+
+    @Test
+    void testConvertFromJsonPreciseDecimalBase64Text() {
+        // Debezium decimal.handling.mode=precise as emitted by Kafka Connect JsonConverter: the
+        // payload value is the base64 of the unscaled two's-complement bytes and the scale lives on
+        // the column. The samples below are real MySQL + Debezium output captured by flink-cdc
+        // mysql-cdc (e.g. "EtaH" is the precise encoding of unscaled 1234567).
+        assertEquals(
+                new BigDecimal("123.4567"),
+                converter.convertFromJson(
+                        decimalColumn(Types.DECIMAL, "DECIMAL", 8, 4), preciseValue(1234567)));
+        assertEquals(
+                new BigDecimal("346"),
+                converter.convertFromJson(
+                        decimalColumn(Types.DECIMAL, "DECIMAL", 6, 0), preciseValue(346)));
+        assertEquals(
+                new BigDecimal("34567892.1"),
+                converter.convertFromJson(
+                        decimalColumn(Types.DECIMAL, "DECIMAL", 20, 1), preciseValue(345678921)));
+        // negative values are two's-complement bytes
+        assertEquals(
+                new BigDecimal("-3.14"),
+                converter.convertFromJson(
+                        decimalColumn(Types.DECIMAL, "DECIMAL", 10, 2), preciseValue(-314)));
+        assertEquals(
+                new BigDecimal("0.00"),
+                converter.convertFromJson(
+                        decimalColumn(Types.DECIMAL, "DECIMAL", 10, 2), preciseValue(0)));
+        // a value wider than 64 bits exercises the full two's-complement byte decoding
+        BigInteger wide = new BigInteger("123456789012345678901234567890");
+        assertEquals(
+                new BigDecimal(wide, 10),
+                converter.convertFromJson(
+                        decimalColumn(Types.DECIMAL, "DECIMAL", 65, 10), preciseValue(wide)));
+        // a NUMERIC column is recognized too
+        assertEquals(
+                new BigDecimal("9.99"),
+                converter.convertFromJson(
+                        decimalColumn(Types.NUMERIC, "NUMERIC", 10, 2), preciseValue(999)));
+    }
+
+    @Test
+    void testConvertFromJsonDecimalLiteralAndNumberPassThrough() {
+        // decimal.handling.mode=string is a plain literal: kept as text for the String converter
+        assertEquals(
+                "123.45",
+                converter.convertFromJson(
+                        column(Types.DECIMAL, "DECIMAL", 30),
+                        JsonNodeFactory.instance.textNode("123.45")));
+        // decimal.handling.mode=double arrives as a JSON number and goes back to its text form
+        assertEquals(
+                "123.45",
+                converter.convertFromJson(
+                        column(Types.DECIMAL, "DECIMAL", 30),
+                        JsonNodeFactory.instance.numberNode(123.45d)));
+        // a digit-only integer is a decimal literal, not a coincidentally digit-only base64 value
+        assertEquals(
+                "346",
+                converter.convertFromJson(
+                        column(Types.DECIMAL, "DECIMAL", 30),
+                        JsonNodeFactory.instance.textNode("346")));
+    }
+
+    @Test
+    void testConvertFromJsonPreciseDecodeOnlyAppliesToDecimalFamily() {
+        // the base64 precise encoding is only interpreted on DECIMAL-family columns; a VARCHAR
+        // column keeps the text untouched
+        String base64 = Base64.getEncoder().encodeToString(BigInteger.valueOf(12345).toByteArray());
+        assertEquals(
+                base64,
+                converter.convertFromJson(
+                        column(Types.VARCHAR, "VARCHAR", 255),
+                        JsonNodeFactory.instance.textNode(base64)));
+    }
+
+    @Test
+    void testConvertFromJsonNonPreciseDecimalValuesPassThrough() {
+        // a value that is neither a decimal literal nor decodable base64 is not precise and keeps
+        // the previous pass-through behaviour instead of throwing
+        assertEquals(
+                "!!!",
+                converter.convertFromJson(
+                        column(Types.DECIMAL, "DECIMAL", 10),
+                        JsonNodeFactory.instance.textNode("!!!")));
+        // an object is not the precise encoding either (JsonConverter never emits {scale, value})
+        // and stays container JSON text
+        ObjectNode obj = JsonNodeFactory.instance.objectNode().put("scale", 2).put("value", "AA==");
+        assertEquals(
+                obj.toString(),
+                converter.convertFromJson(column(Types.DECIMAL, "DECIMAL", 10), obj));
+    }
+
+    private Column decimalColumn(int jdbcType, String typeName, int length, int scale) {
+        return Column.editor()
+                .name("c")
+                .jdbcType(jdbcType)
+                .type(typeName)
+                .length(length)
+                .scale(scale)
+                .optional(true)
+                .create();
+    }
+
+    private static JsonNode preciseValue(long unscaled) {
+        return preciseValue(BigInteger.valueOf(unscaled));
+    }
+
+    private static JsonNode preciseValue(BigInteger unscaled) {
+        return JsonNodeFactory.instance.textNode(
+                Base64.getEncoder().encodeToString(unscaled.toByteArray()));
     }
 
     @Test

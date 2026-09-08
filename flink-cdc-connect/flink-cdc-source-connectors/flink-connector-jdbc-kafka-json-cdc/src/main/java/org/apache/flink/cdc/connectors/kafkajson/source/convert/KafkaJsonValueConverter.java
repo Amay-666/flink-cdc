@@ -24,6 +24,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.debezium.connector.mysql.MySqlValueConverters;
 import io.debezium.relational.Column;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.Timestamp;
@@ -67,6 +69,15 @@ public class KafkaJsonValueConverter {
     /** Matches MySQL zero dates ({@code 0000-00-00[ 00:00:00[.000000]]}). */
     private static final Pattern ZERO_DATE = Pattern.compile("^0000-00-00(\\s.*)?$");
 
+    /**
+     * Matches a decimal literal (optional sign, digits, optional fraction / exponent), i.e. what
+     * Debezium {@code decimal.handling.mode=string} emits. A precise base64 value can never match
+     * it: base64 has no {@code .} or {@code -}, and its {@code +} only ever sits mid-string, never
+     * as the leading/exponent sign a literal requires.
+     */
+    private static final Pattern DECIMAL_TEXT =
+            Pattern.compile("[+-]?(\\d+(\\.\\d*)?|\\.\\d+)([eE][+-]?\\d+)?");
+
     private final ZoneId serverZoneId;
     private final DateTimeFormatter fractionFormatter;
 
@@ -109,7 +120,7 @@ public class KafkaJsonValueConverter {
             case java.sql.Types.VARBINARY:
             case java.sql.Types.LONGVARBINARY:
             case java.sql.Types.BLOB:
-                return decodeBase64(value);
+                return decodeBase64(value, "canal binary value");
             default:
                 break;
         }
@@ -131,24 +142,23 @@ public class KafkaJsonValueConverter {
      * message) for the given column.
      *
      * <p>Debezium delivers values as typed JSON (numbers, booleans, base64 text for binary), so
-     * this is the counterpart of {@link #convert(Column, String)} for the Debezium path. Two
-     * encodings are handled:
+     * this is the counterpart of {@link #convert(Column, String)} for the Debezium path. The
+     * encodings handled are:
      *
      * <ul>
      *   <li>the Debezium temporal precision modes, which encode {@code DATE}/{@code TIME}/{@code
      *       DATETIME}/{@code TIMESTAMP} as epoch numbers (days / millis / micros / millis) that the
      *       canal {@code String} converter cannot parse — converted here under the default {@code
      *       adaptive} assumptions;
+     *   <li>Debezium {@code decimal.handling.mode=precise}, whose value Kafka Connect's {@code
+     *       JsonConverter} emits as the base64 form of the unscaled two's-complement bytes (never a
+     *       {@code {"scale", "value"}} object) — decoded here with the column's scale to its
+     *       logical {@link BigDecimal} (see {@link #toDecimal(Column, String)});
      *   <li>the textual output of TiCDC (and of Debezium with {@code
      *       temporal.precision.mode=connect} and {@code decimal.handling.mode=string}), which is
      *       already in the MySQL text form the canal converter parses and is passed through
      *       unchanged.
      * </ul>
-     *
-     * <p>DECIMAL columns must NOT be decoded with Debezium {@code decimal.handling.mode=precise}:
-     * that emits a base64-encoded byte array, which this converter would try to parse as a decimal
-     * text and fail. Use {@code double}/{@code string} (as TiCDC does) or the default {@code
-     * string}-shaped output.
      */
     public Object convertFromJson(Column column, JsonNode node) {
         if (node == null || node.isNull()) {
@@ -188,6 +198,11 @@ public class KafkaJsonValueConverter {
         if (node.isContainerNode()) {
             // a JSON column may arrive as nested JSON instead of a JSON text string
             return convert(column, node.toString());
+        }
+        if (isDecimalFamily(column)) {
+            // textual DECIMAL: decimal.handling.mode=string is a plain literal, precise (as emitted
+            // by Kafka Connect JsonConverter) is the unscaled two's-complement bytes in base64
+            return toDecimal(column, node.asText());
         }
         // text (including base64-encoded binary and MySQL-formatted dates/times/decimals)
         return convert(column, node.asText());
@@ -262,12 +277,59 @@ public class KafkaJsonValueConverter {
         }
     }
 
-    private byte[] decodeBase64(String value) {
+    /**
+     * Decodes a textual {@code DECIMAL} value into the Java object the (PRECISE) value converter
+     * expects.
+     *
+     * <p>The value is either a plain decimal literal or the {@code decimal.handling.mode=precise}
+     * encoding. As captured by the flink-cdc {@code mysql-cdc} golden files (real MySQL + Debezium
+     * {@code JsonConverter}), the precise form is never a {@code {"scale", "value"}} object but the
+     * base64 of the unscaled two's-complement bytes — in schema-less JSON the scale is not even in
+     * the message and is taken from the column here. The two text forms are told apart textually: a
+     * literal contains only digits with an optional sign / decimal point / exponent, none of which
+     * can appear in base64, so a value that is not a literal is decoded as base64 (e.g. {@code
+     * "EtaH"} is the precise encoding of unscaled 1234567).
+     */
+    private Object toDecimal(Column column, String value) {
+        if (DECIMAL_TEXT.matcher(value).matches()) {
+            // decimal.handling.mode=string (or double rendered as text): already the MySQL text
+            // form
+            // the canal String converter parses
+            return convert(column, value);
+        }
+        // decimal.handling.mode=precise as emitted by Kafka Connect JsonConverter: base64 bytes of
+        // the unscaled value; the logical value is BigDecimal(unscaled, scale), the same
+        // reconstruction as Kafka Connect's Decimal.toLogical(schema, byte[]).
+        try {
+            return new BigDecimal(
+                    new BigInteger(
+                            decodeBase64(
+                                    value,
+                                    "precise DECIMAL value of column '" + column.name() + "'")),
+                    column.scale().orElse(0));
+        } catch (FlinkRuntimeException e) {
+            // not base64 after all (e.g. garbage) — keep the previous pass-through behaviour
+            return convert(column, value);
+        }
+    }
+
+    private boolean isDecimalFamily(Column column) {
+        String typeName = column.typeName();
+        String baseName =
+                typeName == null ? "" : typeName.toUpperCase(Locale.ROOT).trim().split(" ")[0];
+        int jdbcType = column.jdbcType();
+        return jdbcType == java.sql.Types.DECIMAL
+                || jdbcType == java.sql.Types.NUMERIC
+                || "DECIMAL".equals(baseName)
+                || "NUMERIC".equals(baseName)
+                || "FIXED".equals(baseName);
+    }
+
+    private byte[] decodeBase64(String value, String what) {
         try {
             return Base64.getDecoder().decode(value.getBytes(StandardCharsets.UTF_8));
         } catch (IllegalArgumentException e) {
-            throw new FlinkRuntimeException(
-                    "Failed to base64-decode canal binary value: " + value, e);
+            throw new FlinkRuntimeException("Failed to base64-decode " + what + ": " + value, e);
         }
     }
 
