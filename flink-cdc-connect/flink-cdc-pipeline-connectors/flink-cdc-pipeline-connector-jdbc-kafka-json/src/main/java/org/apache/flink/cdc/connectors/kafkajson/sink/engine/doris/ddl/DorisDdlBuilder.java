@@ -216,11 +216,13 @@ public class DorisDdlBuilder implements Serializable {
      * Builds the {@code MODIFY COLUMN} statements for an {@code AlterColumnTypeEvent}, optionally
      * against the {@code oldSchema} the column had before the change.
      *
-     * <p>When the old type is known and the change shrinks a {@code CHAR}/{@code VARCHAR} column,
-     * the statement is skipped with a warning: Doris cannot reduce the length of such a column
-     * while MySQL/TiDB can, and a committed source DDL already guarantees the existing rows fit the
-     * smaller length — keeping the wider Doris column accepts all subsequent data. All other type
-     * changes (growth, cross-type, an unknown old type) are emitted as-is.
+     * <p>When the old type is known and the change shrinks a column's capacity — be it a {@code
+     * CHAR}/{@code VARCHAR} length, an integer width ({@code BIGINT → INT}), a float width ({@code
+     * DOUBLE → FLOAT}), a {@code DECIMAL} precision/scale, or a timestamp precision — the statement
+     * is skipped with a warning: Doris cannot reduce these while MySQL/TiDB can, and a committed
+     * source DDL already guarantees the existing rows fit the smaller type — keeping the wider
+     * Doris column accepts all subsequent data. All other type changes (growth, cross-family, an
+     * unknown old type) are emitted as-is.
      */
     public List<String> buildAlterColumnTypeSql(
             AlterColumnTypeEvent event, Optional<Schema> oldSchema) {
@@ -231,11 +233,12 @@ public class DorisDdlBuilder implements Serializable {
             DataType newType = entry.getValue();
             Optional<DataType> oldType =
                     oldSchema.flatMap(schema -> schema.getColumn(column)).map(Column::getType);
-            if (isLengthReduction(oldType.orElse(null), newType)) {
+            if (isSafeReduction(oldType.orElse(null), newType)) {
                 LOG.warn(
-                        "Skipping ALTER TABLE {} MODIFY COLUMN `{}` from {} to {}: Doris does not "
-                                + "support shrinking CHAR/VARCHAR length (MySQL/TiDB allows it); the "
-                                + "wider Doris column keeps accepting the data.",
+                        "Skipping ALTER TABLE {} MODIFY COLUMN `{}` from {} to {}: this is a "
+                                + "capacity reduction (Doris either rejects the narrowing or the "
+                                + "wider column already accepts the narrower data); keeping the "
+                                + "Doris column as-is.",
                         qualified(tableId),
                         column,
                         oldType.get(),
@@ -367,18 +370,147 @@ public class DorisDdlBuilder implements Serializable {
 
     /**
      * Returns whether changing a column from {@code oldType} to {@code newType} would shrink the
-     * capacity Doris reserves for it — the operation Doris rejects. Only a same-family change
-     * ({@code VARCHAR}→{@code VARCHAR} or {@code CHAR}→{@code CHAR}) with the mapped new capacity
-     * strictly smaller counts; a cross-type change (a {@code CHAR}/{@code VARCHAR} conversion
-     * included) or an unknown old type is never judged as a reduction.
+     * capacity Doris reserves for it — an operation Doris either rejects or one where the wider old
+     * column safely accepts all narrower new data, making the DDL unnecessary.
+     *
+     * <p>Recognised reductions:
+     *
+     * <ul>
+     *   <li><b>String length shrinking</b> (same root): {@code VARCHAR(n₁) → VARCHAR(n₂)} where the
+     *       mapped byte capacity n₂ < n₁; {@code CHAR(n₁) → CHAR(n₂)} where n₂ < n₁.
+     *   <li><b>Integer narrowing</b> (cross-root within the integer family): {@code BIGINT → INT →
+     *       SMALLINT → TINYINT}. The wider Doris integer column accepts all narrower data.
+     *   <li><b>Float narrowing</b> (cross-root within the float family): {@code DOUBLE → FLOAT}.
+     *   <li><b>Decimal precision/scale shrinking</b> (same root): {@code DECIMAL(p₁,s₁) →
+     *       DECIMAL(p₂,s₂)} where the new integer-digit budget p₂ − s₂ and the new scale s₂ are
+     *       both ≤ the old (at least one strict). The old column's value space is then a superset
+     *       of the new one.
+     *   <li><b>Timestamp precision shrinking</b> (same or cross-root within the timestamp family):
+     *       the Doris-mapped precision is strictly smaller after clamping to {@code DATETIMEV2}'s
+     *       {@code 6}-digit maximum. All three CDC timestamp roots map to the same Doris {@code
+     *       DATETIMEV2(p)} type.
+     * </ul>
+     *
+     * <p>Cross-family changes that are not pure narrowing (e.g. {@code VARCHAR → INT}, {@code
+     * DECIMAL → BIGINT}, {@code FLOAT → INT}) are never judged as reductions: the semantic shift
+     * means the old Doris column may not accept the new data.
      */
-    private static boolean isLengthReduction(@Nullable DataType oldType, DataType newType) {
-        if (oldType == null || oldType.getTypeRoot() != newType.getTypeRoot()) {
+    private static boolean isSafeReduction(@Nullable DataType oldType, DataType newType) {
+        if (oldType == null) {
             return false;
         }
-        int oldCapacity = dorisCapacity(oldType);
-        int newCapacity = dorisCapacity(newType);
-        return oldCapacity >= 0 && newCapacity >= 0 && newCapacity < oldCapacity;
+
+        // 1. Same type root: compare capacity within the same type
+        if (oldType.getTypeRoot() == newType.getTypeRoot()) {
+            return isSameTypeReduction(oldType, newType);
+        }
+
+        // 2. Cross-root integer narrowing: BIGINT → INT → SMALLINT → TINYINT
+        int oldIntWidth = integerByteWidth(oldType);
+        int newIntWidth = integerByteWidth(newType);
+        if (oldIntWidth > 0 && newIntWidth > 0) {
+            return newIntWidth < oldIntWidth;
+        }
+
+        // 3. Cross-root float narrowing: DOUBLE → FLOAT
+        int oldFloatWidth = floatByteWidth(oldType);
+        int newFloatWidth = floatByteWidth(newType);
+        if (oldFloatWidth > 0 && newFloatWidth > 0) {
+            return newFloatWidth < oldFloatWidth;
+        }
+
+        // 4. Cross-root timestamp precision shrinking (all 3 roots map to DATETIMEV2(p))
+        int oldTsCapacity = dorisTimestampCapacity(oldType);
+        int newTsCapacity = dorisTimestampCapacity(newType);
+        if (oldTsCapacity >= 0 && newTsCapacity >= 0) {
+            return newTsCapacity < oldTsCapacity;
+        }
+
+        return false;
+    }
+
+    /**
+     * Checks whether a same-root type change is a capacity reduction.
+     *
+     * <ul>
+     *   <li>{@code VARCHAR}/{@code CHAR}: mapped capacity strictly smaller
+     *   <li>{@code DECIMAL}: the new integer-digit budget {@code (p − s)} and the new scale are
+     *       both ≤ the old (at least one strict) — equivalently the old column's value space is a
+     *       superset of the new one
+     *   <li>Timestamp roots: the Doris-mapped precision (clamped to {@code DATETIMEV2}'s {@code
+     *       6}-digit maximum) strictly smaller
+     * </ul>
+     */
+    private static boolean isSameTypeReduction(DataType oldType, DataType newType) {
+        switch (oldType.getTypeRoot()) {
+            case VARCHAR:
+            case CHAR:
+                int oldCap = dorisCapacity(oldType);
+                int newCap = dorisCapacity(newType);
+                return oldCap >= 0 && newCap >= 0 && newCap < oldCap;
+            case DECIMAL:
+                // Doris DECIMAL(p,s) stores (p − s) integer digits and s fraction digits; the old
+                // column accepts all narrower data iff neither budget grows.
+                int oldIntDigits = getPrecision(oldType) - getScale(oldType);
+                int newIntDigits = getPrecision(newType) - getScale(newType);
+                int oldScale = getScale(oldType);
+                int newScale = getScale(newType);
+                return newIntDigits <= oldIntDigits
+                        && newScale <= oldScale
+                        && (newIntDigits < oldIntDigits || newScale < oldScale);
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+            case TIMESTAMP_WITH_TIME_ZONE:
+                return dorisTimestampCapacity(newType) < dorisTimestampCapacity(oldType);
+            default:
+                return false;
+        }
+    }
+
+    /** Returns the byte width of an integer type, or 0 if the type is not an integer. */
+    private static int integerByteWidth(DataType type) {
+        switch (type.getTypeRoot()) {
+            case TINYINT:
+                return 1;
+            case SMALLINT:
+                return 2;
+            case INTEGER:
+                return 4;
+            case BIGINT:
+                return 8;
+            default:
+                return 0;
+        }
+    }
+
+    /** Returns the byte width of a floating-point type, or 0 if the type is not a float. */
+    private static int floatByteWidth(DataType type) {
+        switch (type.getTypeRoot()) {
+            case FLOAT:
+                return 4;
+            case DOUBLE:
+                return 8;
+            default:
+                return 0;
+        }
+    }
+
+    /**
+     * Returns the capacity — in fractional-seconds digits — the type reserves in Doris, or -1 if
+     * the type is not a timestamp. All three CDC timestamp roots map to the same Doris {@code
+     * DATETIMEV2(p)} type and {@code p} is clamped to Doris's {@code 6}-digit maximum (see {@link
+     * #clampTimestampPrecision}), so capacity comparisons use the clamped precision to stay
+     * consistent with the column type {@code convertDataType} actually emits.
+     */
+    private static int dorisTimestampCapacity(DataType type) {
+        switch (type.getTypeRoot()) {
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+            case TIMESTAMP_WITH_TIME_ZONE:
+                return clampTimestampPrecision(getPrecision(type));
+            default:
+                return -1;
+        }
     }
 
     private String qualified(TableId tableId) {
