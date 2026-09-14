@@ -17,7 +17,7 @@ limitations under the License.
 
 # Roadmap / 优先级规划
 
-> 分支：`feature/canal-rename-plan-a`
+> 分支：`feature/3.2.1-jdbc-kafka-json`
 > 状态：2026-08-13 排定；Phase 11 集成测试已全绿（f48f1e8d）。
 > 总原则（用户拍板）：**先保证数据 exactly-once，再保证数据转换正确性；Debezium 相关不急。**
 

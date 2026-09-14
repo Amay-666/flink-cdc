@@ -1,6 +1,6 @@
 # jdbc-kafka-json-cdc 文档索引
 
-> 分支：`feature/canal-rename-plan-a`（基于 `feature/3.2.1-custom`，flink-cdc 3.2.1）
+> 分支：`feature/3.2.1-jdbc-kafka-json`（基于 `feature/3.2.1-custom`，flink-cdc 3.2.1）
 
 本目录是连接器的全部文档。阅读方式遵循**渐进披露**：先读 [ARCHITECTURE.md](./ARCHITECTURE.md) 抓住全局，需要深度时再按需进入对应的子文档。
 

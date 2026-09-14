@@ -17,7 +17,7 @@ limitations under the License.
 
 # 开发注意事项（坑、约束、扩展指南）
 
-> 分支：`feature/canal-rename-plan-a`
+> 分支：`feature/3.2.1-jdbc-kafka-json`
 > 本文档是给维护者看的**速查手册**：构建测试命令、checkstyle 规则、类型与命名坑、设计约束、扩展模板。
 > 具体数据流 / 事件模型 / coordinator 原理见各 [deep-dive/](./README.md) 子文档。
 

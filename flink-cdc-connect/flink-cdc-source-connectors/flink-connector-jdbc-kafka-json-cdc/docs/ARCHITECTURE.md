@@ -17,7 +17,7 @@ limitations under the License.
 
 # jdbc-kafka-json-cdc：架构总览
 
-> 分支：`feature/canal-rename-plan-a`（基于 `feature/3.2.1-custom`，flink-cdc 3.2.1）
+> 分支：`feature/3.2.1-jdbc-kafka-json`（基于 `feature/3.2.1-custom`，flink-cdc 3.2.1）
 > 状态：持续更新中（Phase 13 Doris sink / 自写 coordinator 进行中）
 > 本文档是**总览**，只讲"是什么、数据怎么流、关键决策"；实现原理与代码解读在 [deep-dive/](./README.md) 子文档里，按需阅读。
 
