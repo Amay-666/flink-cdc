@@ -45,7 +45,7 @@ import java.util.Set;
 
 import static org.apache.flink.cdc.connectors.base.source.meta.wartermark.WatermarkEvent.isLowWatermarkEvent;
 
-/** The {@link RecordEmitter} implementation for pipeline canal connector. */
+/** The {@link RecordEmitter} implementation for the jdbc-kafka-json pipeline connector. */
 public class KafkaJsonPipelineRecordEmitter extends IncrementalSourceRecordEmitter<Event> {
 
     private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonPipelineRecordEmitter.class);

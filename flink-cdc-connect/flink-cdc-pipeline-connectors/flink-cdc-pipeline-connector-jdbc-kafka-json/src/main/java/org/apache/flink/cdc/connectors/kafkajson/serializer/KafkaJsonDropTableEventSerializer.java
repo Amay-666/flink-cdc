@@ -35,14 +35,14 @@ import java.io.IOException;
  * A {@link TypeSerializer} for {@link DropTableEvent}.
  *
  * <p>Not part of the released flink-cdc-runtime serialization stack: it serializes the table id,
- * the pre-drop schema and the raw DDL, and is wired in only via the canal connector's own {@link
+ * the pre-drop schema and the raw DDL, and is wired in only via the connector's own {@link
  * KafkaJsonSchemaChangeEventSerializer}.
  */
 public class KafkaJsonDropTableEventSerializer extends TypeSerializerSingleton<DropTableEvent> {
 
     private static final long serialVersionUID = 1L;
 
-    /** Sharable instance of the KafkaJsonRenameTableEventSerializer. */
+    /** Sharable instance of the KafkaJsonDropTableEventSerializer. */
     public static final KafkaJsonDropTableEventSerializer INSTANCE =
             new KafkaJsonDropTableEventSerializer();
 

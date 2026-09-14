@@ -67,8 +67,8 @@ public class KafkaJsonTiDBDialect extends KafkaJsonDialect {
 
     @Override
     public Offset displayCurrentOffset(JdbcSourceConfig sourceConfig) {
-        KafkaJsonSourceConfig canalSourceConfig = (KafkaJsonSourceConfig) sourceConfig;
-        EventTime eventTime = canalSourceConfig.getEventTime();
+        KafkaJsonSourceConfig jsonSourceConfig = (KafkaJsonSourceConfig) sourceConfig;
+        EventTime eventTime = jsonSourceConfig.getEventTime();
         // TSO is an authoritative commit-clock position (an upper bound on the `es` of every change
         // already visible to the JDBC read), whereas the Kafka-sampled boundary trails the database
         // by the publish lag and is empty before the first change is published. It is a valid
@@ -79,7 +79,7 @@ public class KafkaJsonTiDBDialect extends KafkaJsonDialect {
             KafkaJsonOffset tidbOffset =
                     tidbOffsetSupplier != null
                             ? tidbOffsetSupplier.get()
-                            : KafkaJsonTidbOffsetUtils.queryCurrentOffset(canalSourceConfig);
+                            : KafkaJsonTidbOffsetUtils.queryCurrentOffset(jsonSourceConfig);
             if (tidbOffset != null) {
                 return tidbOffset;
             }

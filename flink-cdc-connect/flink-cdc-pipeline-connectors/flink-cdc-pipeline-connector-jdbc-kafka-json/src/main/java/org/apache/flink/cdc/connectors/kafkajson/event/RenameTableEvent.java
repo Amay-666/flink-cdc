@@ -35,10 +35,12 @@ import java.util.Objects;
  * table ids so that a downstream that builds its own event handling can migrate per-table state
  * from the old table id to the new one.
  *
- * <p>Note: because the released {@link SchemaChangeEventType} enum has no {@code RENAME_TABLE}
- * value, {@link #getType()} returns {@link SchemaChangeEventType#CREATE_TABLE} as a placeholder; it
- * is only used by generic code paths. The canal serialization stack dispatches on the concrete
- * class via {@code instanceof}, so the placeholder never affects (de)serialization.
+ * <p>Note: the released {@link SchemaChangeEventType} enum has no {@code RENAME_TABLE} value, so
+ * {@link #getType()} cannot answer — it throws {@link UnsupportedOperationException} instead of
+ * returning a placeholder, which would make an event the released runtime cannot express look like
+ * a {@code CREATE_TABLE}. Every path this connector builds dispatches on the concrete class via
+ * {@code instanceof} (the serialization stack does too), so {@link #getType()} is never consulted;
+ * reaching it means code written for the released event set met this event.
  */
 @PublicEvolving
 public class RenameTableEvent implements SchemaChangeEvent {

@@ -35,7 +35,7 @@ import java.util.Collections;
  * A {@link TypeSerializer} for {@link AlterColumnCommentEvent}.
  *
  * <p>Not part of the released flink-cdc-runtime serialization stack: it serializes the table id and
- * the per-column comment mapping, and is wired in only via the canal connector's own {@link
+ * the per-column comment mapping, and is wired in only via the connector's own {@link
  * KafkaJsonSchemaChangeEventSerializer}.
  */
 public class KafkaJsonAlterColumnCommentEventSerializer

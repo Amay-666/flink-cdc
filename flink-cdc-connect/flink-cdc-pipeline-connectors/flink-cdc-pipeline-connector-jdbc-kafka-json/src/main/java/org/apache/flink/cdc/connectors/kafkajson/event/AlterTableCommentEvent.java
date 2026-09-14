@@ -52,13 +52,13 @@ public class AlterTableCommentEvent implements SchemaChangeEvent {
         this.comment = comment;
     }
 
-    /** Returns the id of the truncated table. */
+    /** Returns the id of the table whose comment changed. */
     @Override
     public TableId tableId() {
         return tableId;
     }
 
-    /** Returns the schema of the truncated table. */
+    /** Returns the schema of the table after the comment change. */
     public Schema getSchema() {
         return schema;
     }

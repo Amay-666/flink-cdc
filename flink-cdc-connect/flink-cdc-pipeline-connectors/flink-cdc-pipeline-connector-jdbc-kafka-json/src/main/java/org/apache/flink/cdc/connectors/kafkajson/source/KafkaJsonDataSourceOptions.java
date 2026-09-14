@@ -112,7 +112,7 @@ public class KafkaJsonDataSourceOptions {
                     .stringType()
                     .defaultValue("initial")
                     .withDescription(
-                            "Optional startup mode for Canal CDC consumer, valid enumerations are "
+                            "Optional startup mode for the jdbc-kafka-json CDC consumer, valid enumerations are "
                                     + "\"initial\", \"earliest-offset\", \"latest-offset\", \"timestamp\"");
 
     public static final ConfigOption<Long> SCAN_STARTUP_TIMESTAMP_MILLIS =

@@ -67,8 +67,8 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
     private Properties kafkaProperties = new Properties();
 
     /**
-     * Resolves the kebab-case default value of a {@code stringType()} canal option into its enum.
-     * Keeps the config option default and the field default in sync.
+     * Resolves the kebab-case default value of a {@code stringType()} connector option into its
+     * enum. Keeps the config option default and the field default in sync.
      */
     private static <T extends Enum<T>> T enumDefault(
             ConfigOption<String> option, Class<T> enumType) {

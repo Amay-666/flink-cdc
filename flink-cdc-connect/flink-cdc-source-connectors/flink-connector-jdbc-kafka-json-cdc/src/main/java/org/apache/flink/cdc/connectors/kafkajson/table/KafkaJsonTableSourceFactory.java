@@ -134,7 +134,7 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
         Properties kafkaProperties = getKafkaProperties(options);
 
         LOG.info(
-                "Properties for the Canal table source: "
+                "Properties for the jdbc-kafka-json table source: "
                         + "{hostname={}, port={}, database-name={}, table-name={}, kafka-bootstrap-servers={}, "
                         + "kafka-topics={}, scan.startup.mode={}, message-format={}, ddl-parser={}}",
                 hostname,
@@ -271,9 +271,9 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
     }
 
     /**
-     * Resolves a {@code stringType()} canal option (read from the raw table options) into its enum.
-     * Unlike {@link org.apache.flink.configuration.ConfigurationUtils#convertToEnum}, both the
-     * kebab-case SQL values (e.g. {@code at-least-once}) and the underscore enum names are
+     * Resolves a {@code stringType()} connector option (read from the raw table options) into its
+     * enum. Unlike {@link org.apache.flink.configuration.ConfigurationUtils#convertToEnum}, both
+     * the kebab-case SQL values (e.g. {@code at-least-once}) and the underscore enum names are
      * accepted.
      */
     private static <T extends Enum<T>> T getEnumOption(

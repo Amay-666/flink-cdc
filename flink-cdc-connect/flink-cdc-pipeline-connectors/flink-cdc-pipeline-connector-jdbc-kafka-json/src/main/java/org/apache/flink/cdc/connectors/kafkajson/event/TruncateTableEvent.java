@@ -35,10 +35,12 @@ import java.util.Objects;
  * schema so that a downstream that builds its own event handling can clear per-table state
  * associated with the truncated table.
  *
- * <p>Note: because the released {@link SchemaChangeEventType} enum has no {@code TRUNCATE_TABLE}
- * value, {@link #getType()} returns {@link SchemaChangeEventType#CREATE_TABLE} as a placeholder; it
- * is only used by generic code paths. The canal serialization stack dispatches on the concrete
- * class via {@code instanceof}, so the placeholder never affects (de)serialization.
+ * <p>Note: the released {@link SchemaChangeEventType} enum has no {@code TRUNCATE_TABLE} value, so
+ * {@link #getType()} cannot answer — it throws {@link UnsupportedOperationException} instead of
+ * returning a placeholder, which would make an event the released runtime cannot express look like
+ * a {@code CREATE_TABLE}. Every path this connector builds dispatches on the concrete class via
+ * {@code instanceof} (the serialization stack does too), so {@link #getType()} is never consulted;
+ * reaching it means code written for the released event set met this event.
  */
 @PublicEvolving
 public class TruncateTableEvent implements SchemaChangeEvent {

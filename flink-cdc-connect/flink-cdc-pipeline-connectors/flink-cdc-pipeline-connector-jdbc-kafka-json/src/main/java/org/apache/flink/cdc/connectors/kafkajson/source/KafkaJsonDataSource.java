@@ -27,7 +27,7 @@ import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceCo
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.debezium.table.DebeziumChangelogMode;
 
-/** A {@link DataSource} for canal cdc connector. */
+/** A {@link DataSource} for the jdbc-kafka-json cdc connector. */
 @Internal
 public class KafkaJsonDataSource implements DataSource {
 

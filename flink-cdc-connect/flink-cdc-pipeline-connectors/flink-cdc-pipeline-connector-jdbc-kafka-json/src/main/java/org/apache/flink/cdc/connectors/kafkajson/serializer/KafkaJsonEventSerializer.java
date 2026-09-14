@@ -37,7 +37,7 @@ import java.io.IOException;
  * A {@link TypeSerializer} for {@link Event} that can serialize {@link
  * org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent}.
  *
- * <p>This is the canal-connector-local copy of the released {@code EventSerializer}: {@link
+ * <p>This is the connector-local copy of the released {@code EventSerializer}: {@link
  * SchemaChangeEvent}s are delegated to {@link KafkaJsonSchemaChangeEventSerializer} instead of the
  * released one, so the new event type flows through the same discriminator-based format. All other
  * event kinds reuse the released serializers and their byte formats.

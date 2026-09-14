@@ -42,10 +42,12 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Used to create {@link DeserializationRuntimeConverterFactory} specified to Canal.
+ * Used to create {@link DeserializationRuntimeConverterFactory} specified to the jdbc-kafka-json
+ * connector.
  *
- * <p>The records produced by the Canal source reuse the MySQL {@link MySqlValueConverters}, so the
- * user-defined converters (geometry, SET/ENUM) mirror the MySQL connector.
+ * <p>The records produced by the jdbc-kafka-json source reuse the MySQL {@link
+ * MySqlValueConverters}, so the user-defined converters (geometry, SET/ENUM) mirror the MySQL
+ * connector.
  */
 public class KafkaJsonDeserializationConverterFactory {
 

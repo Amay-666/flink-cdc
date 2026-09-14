@@ -382,6 +382,6 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
 
     @Override
     public String asSummaryString() {
-        return "Canal-CDC";
+        return "KafkaJson-CDC";
     }
 }

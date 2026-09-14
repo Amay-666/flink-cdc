@@ -35,7 +35,7 @@ import java.io.IOException;
  * A {@link TypeSerializer} for {@link AlterTableCommentEvent}.
  *
  * <p>Not part of the released flink-cdc-runtime serialization stack: it serializes the table id,
- * the post-change schema, the raw DDL and the new table comment, and is wired in only via the canal
+ * the post-change schema, the raw DDL and the new table comment, and is wired in only via the
  * connector's own {@link KafkaJsonSchemaChangeEventSerializer}.
  */
 public class KafkaJsonAlterTableCommentEventSerializer
@@ -43,7 +43,7 @@ public class KafkaJsonAlterTableCommentEventSerializer
 
     private static final long serialVersionUID = 1L;
 
-    /** Sharable instance of the KafkaJsonRenameTableEventSerializer. */
+    /** Sharable instance of the KafkaJsonAlterTableCommentEventSerializer. */
     public static final KafkaJsonAlterTableCommentEventSerializer INSTANCE =
             new KafkaJsonAlterTableCommentEventSerializer();
 

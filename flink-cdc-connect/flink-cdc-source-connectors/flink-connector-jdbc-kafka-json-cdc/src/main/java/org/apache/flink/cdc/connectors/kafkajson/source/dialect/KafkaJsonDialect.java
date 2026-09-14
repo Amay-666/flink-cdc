@@ -93,8 +93,8 @@ public class KafkaJsonDialect implements JdbcDataSourceDialect {
 
     @Override
     public JdbcConnection openJdbcConnection(JdbcSourceConfig sourceConfig) {
-        KafkaJsonSourceConfig canalSourceConfig = (KafkaJsonSourceConfig) sourceConfig;
-        MySqlConnectorConfig dbzConfig = canalSourceConfig.getDbzConnectorConfig();
+        KafkaJsonSourceConfig jsonSourceConfig = (KafkaJsonSourceConfig) sourceConfig;
+        MySqlConnectorConfig dbzConfig = jsonSourceConfig.getDbzConnectorConfig();
         // MySQL identifiers are quoted with backticks. The KafkaJsonJdbcConnection drops the column
         // default value that the MySQL driver reports as a literal (e.g. `0x` for a BINARY
         // default);

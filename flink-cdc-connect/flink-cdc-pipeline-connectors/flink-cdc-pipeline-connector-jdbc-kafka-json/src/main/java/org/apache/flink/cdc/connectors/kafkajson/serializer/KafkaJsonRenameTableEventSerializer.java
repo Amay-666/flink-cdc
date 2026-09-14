@@ -37,8 +37,7 @@ import java.io.IOException;
  *
  * <p>Not part of the released flink-cdc-runtime serialization stack: it serializes the two table
  * ids (old and new), the schema of the renamed table and the raw DDL, and is wired in only via the
- * canal connector's own {@link KafkaJsonEventSerializer} / {@link
- * KafkaJsonSchemaChangeEventSerializer}.
+ * connector's own {@link KafkaJsonEventSerializer} / {@link KafkaJsonSchemaChangeEventSerializer}.
  */
 public class KafkaJsonRenameTableEventSerializer extends TypeSerializerSingleton<RenameTableEvent> {
 

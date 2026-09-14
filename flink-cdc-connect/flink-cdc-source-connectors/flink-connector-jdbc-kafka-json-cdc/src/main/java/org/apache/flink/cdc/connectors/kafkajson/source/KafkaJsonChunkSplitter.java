@@ -38,8 +38,8 @@ import java.sql.SQLException;
 @Internal
 public class KafkaJsonChunkSplitter extends JdbcSourceChunkSplitter {
 
-    public KafkaJsonChunkSplitter(JdbcSourceConfig sourceConfig, KafkaJsonDialect canalDialect) {
-        super(sourceConfig, canalDialect);
+    public KafkaJsonChunkSplitter(JdbcSourceConfig sourceConfig, KafkaJsonDialect dialect) {
+        super(sourceConfig, dialect);
     }
 
     @Override

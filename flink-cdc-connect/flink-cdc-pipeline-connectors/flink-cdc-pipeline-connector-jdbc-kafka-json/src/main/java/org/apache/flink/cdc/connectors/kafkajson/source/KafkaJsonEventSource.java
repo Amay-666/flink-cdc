@@ -32,10 +32,11 @@ import org.apache.flink.cdc.debezium.DebeziumDeserializationSchema;
 import org.apache.flink.connector.base.source.reader.RecordEmitter;
 
 /**
- * The pipeline entry point of the Canal source. It reuses the {@link KafkaJsonSource} skeleton and
- * only overrides the {@code createRecordEmitter} hook so that the pipeline record emitter (which
- * lazily emits {@link org.apache.flink.cdc.common.event.CreateTableEvent}s and flushes the
- * schema-change cache) is used instead of the plain {@code IncrementalSourceRecordEmitter}.
+ * The pipeline entry point of the jdbc-kafka-json source. It reuses the {@link KafkaJsonSource}
+ * skeleton and only overrides the {@code createRecordEmitter} hook so that the pipeline record
+ * emitter (which lazily emits {@link org.apache.flink.cdc.common.event.CreateTableEvent}s and
+ * flushes the schema-change cache) is used instead of the plain {@code
+ * IncrementalSourceRecordEmitter}.
  */
 @Internal
 public class KafkaJsonEventSource extends KafkaJsonSource<Event> {

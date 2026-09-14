@@ -183,8 +183,10 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                 List<SchemaChangeEvent> derivedSchemaChangeEvents =
                         calculateDerivedSchemaChangeEvents(request.getSchemaChangeEvent());
 
-                // If this schema change event is filtered out by LENIENT mode or merging table
-                // route strategies, ignore it.
+                // A guard rather than a live path: this connector's derivation always returns the
+                // event itself (no LENIENT mode, no route rules — see KafkaJsonSchemaDerivation).
+                // It is kept because the released SchemaOperator is the other side of this protocol
+                // and does handle SchemaChangeResponse.ignored().
                 if (derivedSchemaChangeEvents.isEmpty()) {
                     LOG.info("Event {} is omitted from sending to downstream, ignoring it.", event);
                     clearCurrentSchemaChangeRequest();

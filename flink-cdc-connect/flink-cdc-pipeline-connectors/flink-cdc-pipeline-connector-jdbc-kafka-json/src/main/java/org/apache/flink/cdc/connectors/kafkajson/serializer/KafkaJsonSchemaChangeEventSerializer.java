@@ -49,10 +49,10 @@ import java.io.IOException;
  * custom event types ({@link RenameTableEvent}, {@link TruncateTableEvent}, {@link DropTableEvent},
  * {@link AlterTableCommentEvent} and {@link AlterColumnCommentEvent}).
  *
- * <p>This is the canal-connector-local copy of the released {@code SchemaChangeEventSerializer},
- * with the discriminator replaced by the connector's own {@link KafkaJsonSchemaChangeTag} so that
- * the custom events — which the released {@code SchemaChangeEventType} enum has no values for — can
- * be serialized alongside the five released event types. The five known events reuse the released
+ * <p>This is the connector-local copy of the released {@code SchemaChangeEventSerializer}, with the
+ * discriminator replaced by the connector's own {@link KafkaJsonSchemaChangeTag} so that the custom
+ * events — which the released {@code SchemaChangeEventType} enum has no values for — can be
+ * serialized alongside the five released event types. The five known events reuse the released
  * per-event serializers and their byte formats; the custom events use the connector's own per-event
  * serializers.
  */

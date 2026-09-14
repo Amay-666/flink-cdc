@@ -26,14 +26,19 @@ import java.util.List;
 /**
  * Schema-change derivation of the kafka-json connector.
  *
- * <p>The connector does not support route rules (table merging / renaming onto a sink schema): the
- * released {@code SchemaDerivation} rewrites routed events through {@code
- * ChangeEventUtils.recreateSchemaChangeEvent}, which only recognizes the five standard events by
+ * <p>The connector does not support route rules (table merging / renaming onto a sink schema), and
+ * there is no option that could supply any: the connector assembles its own topology, so the
+ * coordinator is never given a route set to apply. The released {@code SchemaDerivation} is
+ * therefore replaced by this pure pass-through — every event is forwarded unchanged to the metadata
+ * applier. It has to be, because the released implementation rewrites routed events through {@code
+ * ChangeEventUtils.recreateSchemaChangeEvent}, which recognizes only the five standard events by
  * {@code instanceof} and throws {@code UnsupportedOperationException} for the connector's five
- * custom events. Rather than failing deep inside the pipeline, route rules are rejected up front by
- * the coordinator, so this derivation is a pure pass-through — every event is forwarded unchanged
- * to the metadata applier. Note that the DDL itself is executed by the {@link MetadataApplier}, not
- * here; this class only decides which (rewritten) events are handed downstream.
+ * custom ones.
+ *
+ * <p>Were routes ever wired in, this class would have to reject them rather than pass them through
+ * unwritten: a silently unrouted event would apply the source table's schema under the wrong sink
+ * name. Note that the DDL itself is executed by the {@link MetadataApplier}, not here; this class
+ * only decides which events are handed downstream.
  */
 public class KafkaJsonSchemaDerivation {
 

@@ -48,13 +48,13 @@ public class DropTableEvent implements SchemaChangeEvent {
         this.sql = sql;
     }
 
-    /** Returns the id of the truncated table. */
+    /** Returns the id of the dropped table. */
     @Override
     public TableId tableId() {
         return tableId;
     }
 
-    /** Returns the schema of the truncated table. */
+    /** Returns the schema of the dropped table, as it was just before the drop. */
     public Schema getSchema() {
         return schema;
     }
