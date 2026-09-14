@@ -44,6 +44,7 @@ import javax.annotation.Nullable;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -122,6 +123,14 @@ public class DorisDdlBuilder implements Serializable {
                             + convertDataType(column.getType())
                             + commentSql(column.getComment()));
         }
+        // Group Commit: inject a physical BIGINT sequence column for UNIQUE-model tables.
+        // Doris uses this column (declared via function_column.sequence_col in PROPERTIES) to
+        // resolve ordering when Group Commit reorders batch commits. The writer populates it
+        // with a monotonically increasing value per subtask.
+        boolean injectSequence = options.isGroupCommitEnabled() && !primaryKeys.isEmpty();
+        if (injectSequence) {
+            columns.add(quote(options.getSequenceColumnName()) + " BIGINT");
+        }
         StringBuilder sql =
                 new StringBuilder("CREATE TABLE IF NOT EXISTS ")
                         .append(qualified(tableId))
@@ -149,10 +158,23 @@ public class DorisDdlBuilder implements Serializable {
         } else {
             sql.append(") BUCKETS AUTO");
         }
+        // Merge framework-injected Group Commit properties with user-supplied table properties.
+        // Framework properties go in first; user's sink.table.properties can override any of them
+        // (including function_column.sequence_col if the user wants a different column name — but
+        // they must then ensure that column exists in the table).
+        LinkedHashMap<String, String> allProps = new LinkedHashMap<>();
+        if (injectSequence) {
+            allProps.put("function_column.sequence_col", options.getSequenceColumnName());
+            allProps.put(
+                    "group_commit_interval_ms", String.valueOf(options.getGroupCommitIntervalMs()));
+            allProps.put(
+                    "group_commit_data_bytes", String.valueOf(options.getGroupCommitDataBytes()));
+        }
         if (options.getTableProperties() != null) {
-            sql.append(" PROPERTIES (")
-                    .append(buildTableProperties(options.getTableProperties()))
-                    .append(")");
+            allProps.putAll(options.getTableProperties());
+        }
+        if (!allProps.isEmpty()) {
+            sql.append(" PROPERTIES (").append(buildTableProperties(allProps)).append(")");
         }
         return singleton(sql.toString());
     }

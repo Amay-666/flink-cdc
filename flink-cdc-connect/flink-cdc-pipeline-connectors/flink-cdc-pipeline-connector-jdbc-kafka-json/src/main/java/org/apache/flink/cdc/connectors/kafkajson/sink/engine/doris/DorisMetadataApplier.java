@@ -33,6 +33,7 @@ import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.ddl.DorisDdlBuilder;
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.ddl.DorisSchemaChangeMonitor;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.http.DorisHttpClient;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordinator.OldSchemaAwareMetadataApplier;
 
@@ -47,17 +48,21 @@ import java.util.Optional;
  *
  * <p>Runs on the JobManager inside the schema-evolution coordinator. Every event — the five
  * standard ones plus the connector's five custom ones — is dispatched by {@code instanceof} to
- * {@link DorisDdlBuilder}, and the resulting statements are executed through {@link
- * DorisHttpClient#executeSql}. All event types are accepted (no {@code acceptsSchemaEvolutionType}
- * narrowing), matching the coordinator's pass-through derivation.
- *
- * <p>The HTTP client is created lazily because this object is serialized from the client to the
- * JobManager; {@link okhttp3.OkHttpClient} is not serializable.
+ * {@link DorisDdlBuilder}, and the resulting statements are executed through a short-lived {@link
+ * DorisHttpClient} (created per schema-change operation and closed via try-with-resources). All
+ * event types are accepted (no {@code acceptsSchemaEvolutionType} narrowing), matching the
+ * coordinator's pass-through derivation.
  *
  * <p>Implements {@link OldSchemaAwareMetadataApplier}: when the coordinator applies an {@link
  * AlterColumnTypeEvent} it also resolves the pre-change schema (an event only carries the new
  * types), which lets {@link DorisDdlBuilder} recognise a {@code CHAR}/{@code VARCHAR} shrink — a
  * change Doris rejects but MySQL/TiDB allows — and skip it with a warning.
+ *
+ * <p>After executing a {@code MODIFY COLUMN} DDL (which triggers a heavy, asynchronous schema
+ * change in Doris), the applier delegates to {@link DorisSchemaChangeMonitor} to poll {@code SHOW
+ * ALTER TABLE COLUMN} until the job reaches a final state. This ensures Group Commit writes are not
+ * rejected when data flow resumes. The DDL execution and the SHOW polling share one {@code
+ * DorisHttpClient} instance, created and closed for the duration of the operation.
  */
 public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMetadataApplier {
 
@@ -65,17 +70,24 @@ public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMeta
 
     private final DorisDataSinkOptions options;
     private final DorisDdlBuilder ddlBuilder;
-    private transient DorisHttpClient httpClient;
+    private final DorisSchemaChangeMonitor schemaChangeMonitor;
 
     public DorisMetadataApplier(DorisDataSinkOptions options) {
         this.options = options;
         this.ddlBuilder = new DorisDdlBuilder(options);
+        this.schemaChangeMonitor = new DorisSchemaChangeMonitor(options);
     }
 
     @Override
     public void applySchemaChange(SchemaChangeEvent schemaChangeEvent)
             throws SchemaEvolveException {
-        applySqls(schemaChangeEvent, buildSqls(schemaChangeEvent));
+        try (DorisHttpClient client = createHttpClient()) {
+            applySqls(schemaChangeEvent, buildSqls(schemaChangeEvent), client);
+        } catch (SchemaEvolveException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new SchemaEvolveException(schemaChangeEvent, e.getMessage(), null);
+        }
     }
 
     @Override
@@ -83,15 +95,33 @@ public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMeta
             throws SchemaEvolveException {
         // The old schema lets the builder recognise a CHAR/VARCHAR length reduction and skip it
         // (Doris rejects shrinking such a column; see DorisDdlBuilder.buildAlterColumnTypeSql).
-        applySqls(event, ddlBuilder.buildAlterColumnTypeSql(event, oldSchema));
+        List<String> sqls = ddlBuilder.buildAlterColumnTypeSql(event, oldSchema);
+        if (sqls.isEmpty()) {
+            return;
+        }
+
+        try (DorisHttpClient client = createHttpClient()) {
+            applySqls(event, sqls, client);
+            // MODIFY COLUMN triggers a heavy (asynchronous) schema change in Doris. The DDL
+            // statement returns immediately but the actual change runs in the background. If
+            // data writes resume before the change completes, Doris rejects Group Commit writes.
+            // Poll SHOW ALTER TABLE COLUMN until the job reaches a final state.
+            schemaChangeMonitor.waitForSchemaChangeCompletion(client, event);
+        } catch (SchemaEvolveException e) {
+            // already carries its message in getExceptionMessage() (getMessage() is null);
+            // re-wrapping it would hide the reason
+            throw e;
+        } catch (Exception e) {
+            throw new SchemaEvolveException(event, e.getMessage(), e);
+        }
     }
 
-    private void applySqls(SchemaChangeEvent event, List<String> sqls)
+    private void applySqls(SchemaChangeEvent event, List<String> sqls, DorisHttpClient client)
             throws SchemaEvolveException {
         try {
             for (String sql : sqls) {
                 LOG.info("Applying Doris DDL [{}]: {}", event.tableId(), sql);
-                client().executeSql(options.mapDatabase(event.tableId()), sql);
+                client.executeSql(options.mapDatabase(event.tableId()), sql);
             }
         } catch (Exception e) {
             throw new SchemaEvolveException(event, e.getMessage(), null);
@@ -123,16 +153,13 @@ public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMeta
         throw new UnsupportedSchemaChangeEventException(event);
     }
 
-    private synchronized DorisHttpClient client() {
-        if (httpClient == null) {
-            httpClient =
-                    new DorisHttpClient(
-                            options.getFenodes(),
-                            options.getUsername(),
-                            options.getPassword(),
-                            options.getMaxRetries(),
-                            options.getStreamLoadProperties());
-        }
-        return httpClient;
+    /** Creates a short-lived {@link DorisHttpClient} for a single schema-change operation. */
+    private DorisHttpClient createHttpClient() {
+        return new DorisHttpClient(
+                options.getFenodes(),
+                options.getUsername(),
+                options.getPassword(),
+                options.getMaxRetries(),
+                options.getStreamLoadProperties());
     }
 }

@@ -27,6 +27,7 @@ import org.apache.flink.cdc.common.event.OperationType;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.schema.Schema;
+import org.apache.flink.cdc.common.utils.Preconditions;
 import org.apache.flink.cdc.common.utils.SchemaUtils;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterTableCommentEvent;
@@ -48,6 +49,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * The per-subtask Doris writer driven by the released {@code DataSinkWriterOperator}.
@@ -67,6 +69,16 @@ import java.util.concurrent.ScheduledFuture;
  * true}; the writer buffers upserts and deletes in arrival order in one per-table queue and flushes
  * them in a single StreamLoad batch (the marker column tells Doris which rows to delete), so a
  * delete and a later upsert of the same key land in the order they were emitted.
+ *
+ * <p>When Group Commit is enabled ({@code sink.group-commit} ≠ {@code off}), the writer injects a
+ * monotonically increasing BIGINT into each row's sequence column. The counter is initialized to
+ * {@code System.currentTimeMillis() * 1_000_000} so that a restart (which resets the counter to a
+ * fresh, larger base) never produces values smaller than pre-restart values. Because the pipeline
+ * guarantees same-PK-same-subtask routing, this per-subtask counter captures the arrival order of
+ * every change to a key; Group Commit may reorder batch commits in Doris, but the sequence column
+ * ensures the latest (largest) value always wins. The writer also stops sending Stream Load labels
+ * (a label degrades Group Commit to normal mode) — retries with no label are safe because the same
+ * rows carry the same sequence values, making the retry a no-op for already-committed keys.
  */
 public class DorisSinkWriter implements SinkWriter<Event> {
 
@@ -95,6 +107,19 @@ public class DorisSinkWriter implements SinkWriter<Event> {
     /** Total rows across all table queues, for the bounded global cache. */
     private int bufferedRows;
 
+    private final boolean isGroupCommit;
+
+    /** Name of the sequence column, or {@code null} when Group Commit is disabled. */
+    private final String sequenceColumnName;
+
+    /**
+     * Monotonically increasing sequence counter, one per subtask. Initialised to {@code
+     * System.currentTimeMillis() * 1_000_000} so that post-restart values are always larger than
+     * pre-restart values (the wall clock has advanced). See class Javadoc for details.
+     */
+    private final AtomicLong sequenceCounter =
+            new AtomicLong(System.currentTimeMillis() * 1_000_000L);
+
     private volatile boolean closed;
     private ScheduledFuture<?> flushTimer;
 
@@ -103,13 +128,22 @@ public class DorisSinkWriter implements SinkWriter<Event> {
         this.options = options;
         this.pipelineZoneId = pipelineZoneId;
         this.metrics = new DorisWriteMetrics(initContext.metricGroup());
+        this.isGroupCommit = options.isGroupCommitEnabled();
+        this.sequenceColumnName =
+                options.isGroupCommitEnabled() ? options.getSequenceColumnName() : null;
+        if (this.isGroupCommit) {
+            Preconditions.checkArgument(
+                    !Preconditions.checkNotNull(sequenceColumnName).isEmpty(),
+                    "Sequence column name must not be blank when group commit is enabled.");
+        }
         this.httpClient =
                 new DorisHttpClient(
                         options.getFenodes(),
                         options.getUsername(),
                         options.getPassword(),
                         options.getMaxRetries(),
-                        options.getStreamLoadProperties());
+                        options.getStreamLoadProperties(),
+                        options.getGroupCommitMode().headerValue());
         schedulePeriodicFlush(initContext);
     }
 
@@ -161,6 +195,12 @@ public class DorisSinkWriter implements SinkWriter<Event> {
             // INSERT / UPDATE / REPLACE are all upserts in the Doris UNIQUE model.
             row = converter.convert(event.after(), schema);
             row.put(DorisHttpClient.DELETE_SIGN_COLUMN, false);
+        }
+        // Group Commit: inject a monotonically increasing sequence value. The same value goes on
+        // both upserts and deletes so that a late-arriving delete (larger seq) can correctly
+        // override an earlier upsert (smaller seq) even when Doris reorders batch commits.
+        if (sequenceColumnName != null) {
+            row.put(sequenceColumnName, sequenceCounter.getAndIncrement());
         }
         buffer.computeIfAbsent(tableId, t -> new ArrayDeque<>()).add(row);
         bufferedRows++;
@@ -247,11 +287,10 @@ public class DorisSinkWriter implements SinkWriter<Event> {
             return;
         }
         bufferedRows -= rows.size();
-        doStreamLoad(
-                options.mapDatabase(tableId),
-                options.mapTable(tableId),
-                newLabel(tableId),
-                drain(rows));
+        // Group Commit mode: pass null label so DorisHttpClient sends the group_commit header
+        // instead of a label (specifying a label degrades to non-Group-Commit).
+        String label = isGroupCommit ? null : newLabel(tableId);
+        doStreamLoad(options.mapDatabase(tableId), options.mapTable(tableId), label, drain(rows));
         metrics.setBufferedRows(bufferedRows);
     }
 

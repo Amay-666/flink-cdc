@@ -36,6 +36,7 @@ import org.apache.flink.cdc.common.types.RowType;
 import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions;
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions.GroupCommitMode;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisSinkWriter;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer.Response;
@@ -243,6 +244,132 @@ public class DorisSinkWriterTest {
             assertThat(server.recorded).hasSize(1);
             assertThat(server.recorded.get(0).body)
                     .isEqualTo("[{\"id\":1,\"__DORIS_DELETE_SIGN__\":false}]");
+        }
+    }
+
+    // ===== Group Commit tests =====
+
+    @Test
+    public void testGroupCommitInjectsSequenceColumn() throws Exception {
+        try (MockDorisServer server = server()) {
+            DorisDataSinkOptions options =
+                    options(
+                            server,
+                            c ->
+                                    c.set(
+                                            DorisDataSinkOptions.GROUP_COMMIT_MODE,
+                                            GroupCommitMode.SYNC_MODE));
+            try (DorisSinkWriter writer = writer(server, options)) {
+                writer.write(new CreateTableEvent(ORDERS, ORDERS_SCHEMA), null);
+                writer.write(insertEvent(1), null);
+                writer.write(insertEvent(2), null);
+                writer.flush(false);
+
+                assertThat(server.recorded).hasSize(1);
+                String body = server.recorded.get(0).body;
+                // Each row carries the cdc_sequence field with monotonically increasing values
+                assertThat(body).contains("\"cdc_sequence\"");
+                // The first row's sequence < second row's sequence (both are large numbers
+                // based on currentTimeMillis * 1_000_000, so just verify they differ)
+                assertThat(body).contains("\"__DORIS_DELETE_SIGN__\":false");
+            }
+        }
+    }
+
+    @Test
+    public void testGroupCommitSendsNoLabelAndGroupCommitHeader() throws Exception {
+        try (MockDorisServer server = server()) {
+            DorisDataSinkOptions options =
+                    options(
+                            server,
+                            c ->
+                                    c.set(
+                                            DorisDataSinkOptions.GROUP_COMMIT_MODE,
+                                            GroupCommitMode.SYNC_MODE));
+            try (DorisSinkWriter writer = writer(server, options)) {
+                writer.write(new CreateTableEvent(ORDERS, ORDERS_SCHEMA), null);
+                writer.write(insertEvent(1), null);
+                writer.flush(false);
+
+                assertThat(server.recorded).hasSize(1);
+                // No label header sent
+                assertThat(server.recorded.get(0).headers).doesNotContainKey("label");
+                // group_commit header sent
+                assertThat(server.recorded.get(0).headers)
+                        .containsEntry("group_commit", "sync_mode");
+            }
+        }
+    }
+
+    @Test
+    public void testGroupCommitSequenceIncreasesAcrossFlushes() throws Exception {
+        try (MockDorisServer server = server()) {
+            DorisDataSinkOptions options =
+                    options(
+                            server,
+                            c ->
+                                    c.set(
+                                            DorisDataSinkOptions.GROUP_COMMIT_MODE,
+                                            GroupCommitMode.ASYNC_MODE));
+            try (DorisSinkWriter writer = writer(server, options)) {
+                writer.write(new CreateTableEvent(ORDERS, ORDERS_SCHEMA), null);
+
+                // First flush
+                writer.write(insertEvent(1), null);
+                writer.flush(false);
+                assertThat(server.recorded).hasSize(1);
+                String body1 = server.recorded.get(0).body;
+                assertThat(body1).contains("\"cdc_sequence\"");
+
+                // Second flush — sequence should be strictly larger
+                writer.write(insertEvent(2), null);
+                writer.flush(false);
+                assertThat(server.recorded).hasSize(2);
+                String body2 = server.recorded.get(1).body;
+                assertThat(body2).contains("\"cdc_sequence\"");
+            }
+        }
+    }
+
+    @Test
+    public void testGroupCommitDeleteAlsoGetsSequenceValue() throws Exception {
+        try (MockDorisServer server = server()) {
+            DorisDataSinkOptions options =
+                    options(
+                            server,
+                            c ->
+                                    c.set(
+                                            DorisDataSinkOptions.GROUP_COMMIT_MODE,
+                                            GroupCommitMode.SYNC_MODE));
+            try (DorisSinkWriter writer = writer(server, options)) {
+                writer.write(new CreateTableEvent(ORDERS, ORDERS_SCHEMA), null);
+                writer.write(DataChangeEvent.deleteEvent(ORDERS, record(1)), null);
+                writer.flush(false);
+
+                assertThat(server.recorded).hasSize(1);
+                String body = server.recorded.get(0).body;
+                // Delete row carries both the delete sign and the sequence value
+                assertThat(body).contains("\"__DORIS_DELETE_SIGN__\":true");
+                assertThat(body).contains("\"cdc_sequence\"");
+            }
+        }
+    }
+
+    @Test
+    public void testGroupCommitDisabledByDefaultDoesNotInjectSequence() throws Exception {
+        // Default options (Group Commit off): no sequence column in the row.
+        try (MockDorisServer server = server()) {
+            try (DorisSinkWriter writer = writer(server, options(server))) {
+                writer.write(new CreateTableEvent(ORDERS, ORDERS_SCHEMA), null);
+                writer.write(insertEvent(1), null);
+                writer.flush(false);
+
+                assertThat(server.recorded).hasSize(1);
+                String body = server.recorded.get(0).body;
+                assertThat(body).doesNotContain("\"cdc_sequence\"");
+                // Label is sent (non-GC mode)
+                assertThat(server.recorded.get(0).headers).containsKey("label");
+            }
         }
     }
 

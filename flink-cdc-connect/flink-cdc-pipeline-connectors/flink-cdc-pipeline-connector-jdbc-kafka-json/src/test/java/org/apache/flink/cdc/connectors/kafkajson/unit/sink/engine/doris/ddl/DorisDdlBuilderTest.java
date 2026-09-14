@@ -34,6 +34,7 @@ import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.sink.KafkaJsonDataSinkOptions;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions;
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions.GroupCommitMode;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.ddl.DorisDdlBuilder;
 import org.apache.flink.configuration.Configuration;
 
@@ -371,5 +372,118 @@ public class DorisDdlBuilderTest {
         assertThat(sqls.get(0))
                 .contains("`id` INT COMMENT 'it''s the id'")
                 .contains("COMMENT 'an \"order''s\" comment'");
+    }
+
+    @Test
+    public void testGroupCommitInjectsSequenceColumnAndProperties() {
+        Configuration config = new Configuration();
+        config.set(DorisDataSinkOptions.GROUP_COMMIT_MODE, GroupCommitMode.SYNC_MODE);
+        DorisDdlBuilder builder = builder(new DorisDataSinkOptions(config));
+
+        Schema schema =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("name", DataTypes.VARCHAR(16))
+                        .primaryKey("id")
+                        .build();
+
+        List<String> sqls = builder.buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
+
+        assertThat(sqls).hasSize(1);
+        String ddl = sqls.get(0);
+        // Sequence physical column is appended after all CDC columns
+        assertThat(ddl).contains("`cdc_sequence` BIGINT");
+        // PROPERTIES include function_column.sequence_col mapping
+        assertThat(ddl).contains("\"function_column.sequence_col\" = \"cdc_sequence\"");
+        // PROPERTIES include group_commit_interval_ms (default 10000)
+        assertThat(ddl).contains("\"group_commit_interval_ms\" = \"10000\"");
+        // PROPERTIES include group_commit_data_bytes (default 64MB)
+        assertThat(ddl).contains("\"group_commit_data_bytes\" = \"67108864\"");
+    }
+
+    @Test
+    public void testGroupCommitNotInjectedForDuplicateModel() {
+        // Group Commit sequence column is only for UNIQUE model (has PK). A table without PK
+        // (DUPLICATE model) should not get the sequence column.
+        Configuration config = new Configuration();
+        config.set(DorisDataSinkOptions.GROUP_COMMIT_MODE, GroupCommitMode.ASYNC_MODE);
+        DorisDdlBuilder builder = builder(new DorisDataSinkOptions(config));
+
+        Schema schema =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("name", DataTypes.VARCHAR(16))
+                        .build();
+
+        List<String> sqls = builder.buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
+
+        assertThat(sqls.get(0)).doesNotContain("cdc_sequence");
+        assertThat(sqls.get(0)).doesNotContain("function_column.sequence_col");
+    }
+
+    @Test
+    public void testGroupCommitDisabledByDefaultDoesNotInjectSequence() {
+        // Default config: Group Commit off — no sequence column, no PROPERTIES.
+        Schema schema =
+                Schema.newBuilder().physicalColumn("id", DataTypes.INT()).primaryKey("id").build();
+
+        List<String> sqls =
+                defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
+
+        assertThat(sqls.get(0)).doesNotContain("cdc_sequence");
+        assertThat(sqls.get(0)).doesNotContain("function_column.sequence_col");
+    }
+
+    @Test
+    public void testGroupCommitCustomSequenceColumnName() {
+        Configuration config = new Configuration();
+        config.set(DorisDataSinkOptions.GROUP_COMMIT_MODE, GroupCommitMode.SYNC_MODE);
+        config.set(DorisDataSinkOptions.SEQUENCE_COLUMN_NAME, "my_seq");
+        DorisDdlBuilder builder = builder(new DorisDataSinkOptions(config));
+
+        Schema schema =
+                Schema.newBuilder().physicalColumn("id", DataTypes.INT()).primaryKey("id").build();
+
+        List<String> sqls = builder.buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
+
+        assertThat(sqls.get(0)).contains("`my_seq` BIGINT");
+        assertThat(sqls.get(0)).contains("\"function_column.sequence_col\" = \"my_seq\"");
+    }
+
+    @Test
+    public void testGroupCommitCustomIntervalAndDataBytes() {
+        Configuration config = new Configuration();
+        config.set(DorisDataSinkOptions.GROUP_COMMIT_MODE, GroupCommitMode.SYNC_MODE);
+        config.set(DorisDataSinkOptions.GROUP_COMMIT_INTERVAL_MS, 2000L);
+        config.set(DorisDataSinkOptions.GROUP_COMMIT_DATA_BYTES, 134217728L);
+        DorisDdlBuilder builder = builder(new DorisDataSinkOptions(config));
+
+        Schema schema =
+                Schema.newBuilder().physicalColumn("id", DataTypes.INT()).primaryKey("id").build();
+
+        List<String> sqls = builder.buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
+
+        assertThat(sqls.get(0)).contains("\"group_commit_interval_ms\" = \"2000\"");
+        assertThat(sqls.get(0)).contains("\"group_commit_data_bytes\" = \"134217728\"");
+    }
+
+    @Test
+    public void testGroupCommitUserTablePropertiesCanOverrideFrameworkDefaults() {
+        Configuration config = new Configuration();
+        config.set(DorisDataSinkOptions.GROUP_COMMIT_MODE, GroupCommitMode.SYNC_MODE);
+        config.set(
+                DorisDataSinkOptions.TABLE_PROPERTIES,
+                java.util.Collections.singletonMap("group_commit_interval_ms", "5000"));
+        DorisDdlBuilder builder = builder(new DorisDataSinkOptions(config));
+
+        Schema schema =
+                Schema.newBuilder().physicalColumn("id", DataTypes.INT()).primaryKey("id").build();
+
+        List<String> sqls = builder.buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
+
+        // User's sink.table.properties overrides the framework default
+        assertThat(sqls.get(0)).contains("\"group_commit_interval_ms\" = \"5000\"");
+        // Framework-injected properties are still present
+        assertThat(sqls.get(0)).contains("\"function_column.sequence_col\" = \"cdc_sequence\"");
     }
 }

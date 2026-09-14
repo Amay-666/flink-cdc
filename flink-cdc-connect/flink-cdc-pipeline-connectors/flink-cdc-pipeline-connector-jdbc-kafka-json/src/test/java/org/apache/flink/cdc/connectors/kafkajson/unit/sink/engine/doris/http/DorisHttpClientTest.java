@@ -291,6 +291,163 @@ public class DorisHttpClientTest {
         }
     }
 
+    // ===== Group Commit tests =====
+
+    @Test
+    public void testGroupCommitSendsGroupCommitHeaderAndNoLabel() throws IOException {
+        try (MockDorisServer server =
+                new MockDorisServer(
+                        req ->
+                                Response.ok(
+                                        "{\"Status\":\"Success\",\"GroupCommit\":true,"
+                                                + "\"Label\":\"group_commit_xxx\"}"))) {
+            DorisHttpClient client =
+                    new DorisHttpClient(
+                            server.endpoint(),
+                            "root",
+                            "123456",
+                            1,
+                            Collections.emptyMap(),
+                            "sync_mode");
+
+            client.streamLoad(
+                    "shop",
+                    "orders",
+                    null, // null label = Group Commit mode
+                    Collections.singletonList(Collections.singletonMap("id", 1)));
+
+            assertThat(server.recorded).hasSize(1);
+            RecordedRequest request = server.recorded.get(0);
+            // group_commit header is sent
+            assertThat(request.headers).containsEntry("group_commit", "sync_mode");
+            // No label header
+            assertThat(request.headers).doesNotContainKey("label");
+            // hidden_columns still present
+            assertThat(request.headers).containsEntry("hidden_columns", "__DORIS_DELETE_SIGN__");
+        }
+    }
+
+    @Test
+    public void testGroupCommitAsyncMode() throws IOException {
+        try (MockDorisServer server =
+                new MockDorisServer(
+                        req -> Response.ok("{\"Status\":\"Success\",\"GroupCommit\":true}"))) {
+            DorisHttpClient client =
+                    new DorisHttpClient(
+                            server.endpoint(),
+                            "root",
+                            "123456",
+                            1,
+                            Collections.emptyMap(),
+                            "async_mode");
+
+            client.streamLoad(
+                    "shop", "orders", null, Collections.singletonList(Collections.emptyMap()));
+
+            assertThat(server.recorded.get(0).headers).containsEntry("group_commit", "async_mode");
+        }
+    }
+
+    @Test
+    public void testGroupCommitResponseWithoutGroupCommitFieldStillSucceeds() throws IOException {
+        // If Doris falls back to non-GC, the response may lack GroupCommit=true.
+        // The load still succeeds (the warn is logged, not thrown).
+        try (MockDorisServer server =
+                new MockDorisServer(req -> Response.ok("{\"Status\":\"Success\"}"))) {
+            DorisHttpClient client =
+                    new DorisHttpClient(
+                            server.endpoint(),
+                            "root",
+                            "123456",
+                            1,
+                            Collections.emptyMap(),
+                            "sync_mode");
+
+            int bytes =
+                    client.streamLoad(
+                            "shop",
+                            "orders",
+                            null,
+                            Collections.singletonList(Collections.singletonMap("id", 1)));
+
+            assertThat(bytes).isGreaterThan(0);
+        }
+    }
+
+    @Test
+    public void testGroupCommitRetryIsIdempotent() throws IOException {
+        // Retries with null label (GC mode) are safe: same data, same sequence values.
+        AtomicInteger attempts = new AtomicInteger();
+        try (MockDorisServer server =
+                new MockDorisServer(
+                        req ->
+                                attempts.getAndIncrement() == 0
+                                        ? Response.ok("{\"Status\":\"Fail\",\"Message\":\"tired\"}")
+                                        : Response.ok(
+                                                "{\"Status\":\"Success\",\"GroupCommit\":true}"))) {
+            DorisHttpClient client =
+                    new DorisHttpClient(
+                            server.endpoint(),
+                            "root",
+                            "123456",
+                            1,
+                            Collections.emptyMap(),
+                            "sync_mode");
+
+            client.streamLoad(
+                    "shop", "orders", null, Collections.singletonList(Collections.emptyMap()));
+
+            assertThat(server.recorded).hasSize(2);
+            // Both attempts carry the group_commit header (no label)
+            assertThat(server.recorded.get(0).headers).containsEntry("group_commit", "sync_mode");
+            assertThat(server.recorded.get(0).headers).doesNotContainKey("label");
+            assertThat(server.recorded.get(1).headers).containsEntry("group_commit", "sync_mode");
+        }
+    }
+
+    @Test
+    public void testGroupCommitFollowsFeRedirectToBackend() throws IOException {
+        AtomicReference<String> backend = new AtomicReference<>();
+        AtomicInteger requests = new AtomicInteger();
+        try (MockDorisServer server =
+                new MockDorisServer(
+                        req ->
+                                requests.getAndIncrement() == 0
+                                        ? new Response(
+                                                307,
+                                                "",
+                                                Collections.singletonMap(
+                                                        "Location",
+                                                        backend.get()
+                                                                + "/api/shop/orders/_stream_load"))
+                                        : Response.ok(
+                                                "{\"Status\":\"Success\",\"GroupCommit\":true}"))) {
+            backend.set("http://" + server.endpoint());
+            DorisHttpClient client =
+                    new DorisHttpClient(
+                            server.endpoint(),
+                            "root",
+                            "123456",
+                            1,
+                            Collections.emptyMap(),
+                            "sync_mode");
+
+            client.streamLoad(
+                    "shop",
+                    "orders",
+                    null,
+                    Collections.singletonList(Collections.singletonMap("id", 1)));
+
+            assertThat(server.recorded).hasSize(2);
+            // FE request: group_commit header, no label
+            assertThat(server.recorded.get(0).headers).containsEntry("group_commit", "sync_mode");
+            assertThat(server.recorded.get(0).headers).doesNotContainKey("label");
+            // BE request: same headers
+            assertThat(server.recorded.get(1).headers).containsEntry("group_commit", "sync_mode");
+            assertThat(server.recorded.get(1).headers).doesNotContainKey("label");
+        }
+    }
+
     private DorisHttpClient client(MockDorisServer server) {
         return new DorisHttpClient(server.endpoint(), "root", "123456", 1);
     }

@@ -89,8 +89,16 @@ public class DorisHttpClient implements Closeable {
     /** Extra StreamLoad request headers/properties passed through from {@code sink.properties}. */
     private final Map<String, String> streamLoadProperties;
 
+    /**
+     * Group Commit mode: {@code "off"}, {@code "sync_mode"} or {@code "async_mode"}. When not
+     * {@code "off"}, the caller passes a {@code null} label to {@link #streamLoad} so the {@code
+     * group_commit} header is sent instead of a label (specifying a label degrades to
+     * non-Group-Commit in Doris).
+     */
+    private final String groupCommitMode;
+
     public DorisHttpClient(String fenodes, String username, String password, int maxRetries) {
-        this(fenodes, username, password, maxRetries, Collections.emptyMap());
+        this(fenodes, username, password, maxRetries, Collections.emptyMap(), "off");
     }
 
     /**
@@ -106,6 +114,26 @@ public class DorisHttpClient implements Closeable {
             String password,
             int maxRetries,
             Map<String, String> streamLoadProperties) {
+        this(fenodes, username, password, maxRetries, streamLoadProperties, "off");
+    }
+
+    /**
+     * @param streamLoadProperties arbitrary Doris StreamLoad properties (e.g. {@code columns},
+     *     {@code max_filter_ratio}, {@code timezone}) sent as request headers. A property may
+     *     override the protocol defaults ({@code format}/{@code strip_outer_array}/{@code
+     *     hidden_columns}/{@code label}); {@code Authorization} and {@code Expect} stay managed by
+     *     this client.
+     * @param groupCommitMode Group Commit mode: {@code "off"}, {@code "sync_mode"} or {@code
+     *     "async_mode"}. When not {@code "off"}, callers should pass a {@code null} label to {@link
+     *     #streamLoad} so the {@code group_commit} header is sent instead of a label.
+     */
+    public DorisHttpClient(
+            String fenodes,
+            String username,
+            String password,
+            int maxRetries,
+            Map<String, String> streamLoadProperties,
+            String groupCommitMode) {
         this.fenodes = fenodes.split(",");
         this.maxRetries = Math.max(1, maxRetries);
         this.authorizationHeader =
@@ -116,6 +144,7 @@ public class DorisHttpClient implements Closeable {
                                                 .getBytes(StandardCharsets.UTF_8));
         this.streamLoadProperties =
                 streamLoadProperties == null ? Collections.emptyMap() : streamLoadProperties;
+        this.groupCommitMode = groupCommitMode == null ? "off" : groupCommitMode.toLowerCase();
         this.client =
                 new OkHttpClient.Builder()
                         .connectTimeout(30, TimeUnit.SECONDS)
@@ -132,9 +161,17 @@ public class DorisHttpClient implements Closeable {
      * arrival order. The {@code hidden_columns} header declares the marker column so Doris applies
      * its semantics without an extra {@code merge_type}.
      *
+     * <p>When {@code label} is {@code null} and Group Commit is enabled (the instance's {@code
+     * groupCommitMode} is not {@code "off"}), the request carries a {@code group_commit} header
+     * instead of a {@code label} header. Doris internally assigns a {@code group_commit_...} label
+     * and batches multiple loads into one transaction. Retries with a {@code null} label are safe
+     * because the same rows carry the same sequence values, so Doris's "larger sequence replaces
+     * smaller" semantics make the retry a no-op for keys that already committed.
+     *
      * @param database target database (already mapped via the dialect options)
      * @param table target table (already mapped via the dialect options)
-     * @param label the load label, deduplicated by Doris across retries
+     * @param label the load label, deduplicated by Doris across retries; {@code null} when Group
+     *     Commit is enabled (no label is sent, {@code group_commit} header is sent instead)
      * @param rows the rows to write, each a column-name to JSON-ready value map including the
      *     {@link #DELETE_SIGN_COLUMN} marker
      * @return the number of bytes sent in the request body (for write-throughput metrics)
@@ -184,12 +221,12 @@ public class DorisHttpClient implements Closeable {
                     throw e;
                 }
                 LOG.warn(
-                        "StreamLoad attempt {} for {}.{} failed: {}. Retrying with label {}.",
+                        "StreamLoad attempt {} for {}.{} failed: {}. Retrying ({}).",
                         attempt + 1,
                         database,
                         table,
                         e.getMessage(),
-                        label);
+                        label != null ? "label " + label : "group commit");
                 sleepQuietly(attempt);
             }
         }
@@ -212,25 +249,33 @@ public class DorisHttpClient implements Closeable {
                     throw e;
                 }
                 LOG.warn(
-                        "StreamLoad attempt {} for {}.{} failed: {}. Retrying with label {}.",
+                        "StreamLoad attempt {} for {}.{} failed: {}. Retrying ({}).",
                         attempt + 1,
                         database,
                         table,
                         e.getMessage(),
-                        label);
+                        label != null ? "label " + label : "group commit");
                 sleepQuietly(attempt);
             }
         }
     }
 
     private Request loadRequest(String url, byte[] body, String label, boolean expectContinue) {
+        boolean groupCommit = label == null && !"off".equalsIgnoreCase(groupCommitMode);
         Map<String, String> headers = new LinkedHashMap<>();
-        headers.put("label", label);
+        // label: only in non-Group-Commit mode (specifying a label degrades to non-GC in Doris)
+        if (label != null) {
+            headers.put("label", label);
+        }
         headers.put("format", "json");
         headers.put("strip_outer_array", "true");
         // hidden_columns declares the per-row delete marker so Doris applies its
         // semantics (true = delete by key, false = upsert) without any merge_type.
         headers.put("hidden_columns", DELETE_SIGN_COLUMN);
+        // group_commit: sent instead of a label when Group Commit is enabled
+        if (groupCommit) {
+            headers.put("group_commit", groupCommitMode);
+        }
         // sink.properties pass-through: user-supplied StreamLoad properties override the defaults
         // above (e.g. format=csv, columns=..., max_filter_ratio=..., timezone=...).
         headers.putAll(streamLoadProperties);
@@ -256,9 +301,30 @@ public class DorisHttpClient implements Closeable {
                     "HTTP " + response.code() + " for StreamLoad of " + database + "." + table);
         }
         String responseBody = response.body() != null ? response.body().string() : "";
-        String status = OBJECT_MAPPER.readTree(responseBody).path("Status").asText();
-        if ("Success".equals(status) || "Label Already Exists".equals(status)) {
-            return bytes;
+        JsonNode root = OBJECT_MAPPER.readTree(responseBody);
+        String status = root.path("Status").asText();
+        boolean groupCommit = label == null;
+        if (groupCommit) {
+            // Group Commit mode: "Label Already Exists" never occurs (Doris assigns labels).
+            if ("Success".equals(status)) {
+                // Warn if Doris silently fell back to non-GC (table lacks sequence column, heavy
+                // schema change, WAL space insufficient for async_mode, etc.)
+                boolean groupCommitUsed = root.path("GroupCommit").asBoolean(false);
+                if (!groupCommitUsed) {
+                    LOG.warn(
+                            "Group commit was requested but Doris fell back to normal mode for "
+                                    + "{}.{}: possible causes include missing sequence column, "
+                                    + "heavy schema change in progress, or WAL space "
+                                    + "insufficient (async_mode auto-switches to sync_mode).",
+                            database,
+                            table);
+                }
+                return bytes;
+            }
+        } else {
+            if ("Success".equals(status) || "Label Already Exists".equals(status)) {
+                return bytes;
+            }
         }
         throw new IOException(
                 "StreamLoad failed for "
@@ -266,7 +332,7 @@ public class DorisHttpClient implements Closeable {
                         + "."
                         + table
                         + " (label "
-                        + label
+                        + (label != null ? label : "group_commit")
                         + "): "
                         + responseBody);
     }
@@ -326,6 +392,74 @@ public class DorisHttpClient implements Closeable {
                 }
                 LOG.warn(
                         "DDL attempt {} on database {} failed: {}. sql: {}",
+                        attempt + 1,
+                        database,
+                        e.getMessage(),
+                        sql);
+                sleepQuietly(attempt);
+            }
+        }
+    }
+
+    /**
+     * Executes a SQL query (SHOW / SELECT) and returns the raw JSON response body. Unlike {@link
+     * #executeSql} which discards the result, this method returns the full response so the caller
+     * can parse the returned rows.
+     *
+     * <p>The response body has the structure {@code {"code":0,"msg":"OK","data":{...}}}. The caller
+     * parses {@code data} to extract the rows.
+     *
+     * @param database target database (already mapped via the dialect options)
+     * @param sql the SQL statement to execute
+     * @return the raw response body string
+     */
+    public String executeQuery(String database, String sql) throws IOException {
+        Request request =
+                new Request.Builder()
+                        .url(feEndpoint() + "/api/query/default_cluster/" + database)
+                        .post(
+                                RequestBody.create(
+                                        JSON,
+                                        OBJECT_MAPPER.writeValueAsBytes(
+                                                Collections.singletonMap("stmt", sql))))
+                        .addHeader("Authorization", authorizationHeader)
+                        .build();
+        for (int attempt = 0; ; attempt++) {
+            try {
+                try (Response response = client.newCall(request).execute()) {
+                    if (!response.isSuccessful()) {
+                        throw new IOException(
+                                "HTTP "
+                                        + response.code()
+                                        + " for query on database "
+                                        + database
+                                        + ": "
+                                        + sql);
+                    }
+                    String responseBody = response.body() != null ? response.body().string() : "";
+                    JsonNode root = OBJECT_MAPPER.readTree(responseBody);
+                    JsonNode codeNode = root.get("code");
+                    if (codeNode == null || codeNode.asInt(-1) == 0) {
+                        return responseBody;
+                    }
+                    // Application-level failure: surface immediately (not a transient network
+                    // error).
+                    throw new IOException(
+                            "Query failed on database "
+                                    + database
+                                    + " (code "
+                                    + codeNode.asInt(-1)
+                                    + "): "
+                                    + responseBody
+                                    + "; sql: "
+                                    + sql);
+                }
+            } catch (IOException e) {
+                if (attempt >= maxRetries) {
+                    throw e;
+                }
+                LOG.warn(
+                        "Query attempt {} on database {} failed: {}. sql: {}",
                         attempt + 1,
                         database,
                         e.getMessage(),

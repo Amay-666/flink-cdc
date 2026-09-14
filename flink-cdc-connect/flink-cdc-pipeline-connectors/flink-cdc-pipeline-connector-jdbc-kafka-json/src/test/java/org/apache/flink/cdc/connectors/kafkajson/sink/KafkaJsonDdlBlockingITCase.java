@@ -57,6 +57,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -191,6 +192,62 @@ public class KafkaJsonDdlBlockingITCase {
         }
     }
 
+    /**
+     * Group Commit end-to-end: the sink must declare the sequence column in the DDL, must stop
+     * sending StreamLoad labels, must send the {@code group_commit} header instead, and every
+     * loaded row — upserts and deletes alike — must carry a {@code cdc_sequence} value. Reuses the
+     * AddColumn sequence so a DDL-triggered flush spreads rows over both sink subtasks.
+     */
+    @Test
+    public void testGroupCommitInjectsSequenceColumnAndUsesGroupCommitHeader() throws Exception {
+        try (MockDorisServer server = groupCommitServer()) {
+            StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+            env.setParallelism(2);
+            env.setRestartStrategy(RestartStrategies.noRestart());
+
+            DataStream<Event> source =
+                    env.addSource(
+                                    new EventSequenceSource(blockingEvents()),
+                                    "test-source",
+                                    new KafkaJsonEventTypeInfo())
+                            .global();
+            buildSink(
+                    env,
+                    server,
+                    source,
+                    config ->
+                            config.set(
+                                    DorisDataSinkOptions.GROUP_COMMIT_MODE,
+                                    DorisDataSinkOptions.GroupCommitMode.SYNC_MODE));
+
+            env.execute();
+
+            List<RecordedRequest> all = server.recorded;
+            List<RecordedRequest> ddls = ddlRequests(all);
+            List<RecordedRequest> loads = streamLoads(all);
+
+            // The CREATE TABLE declares the sequence column and the properties Doris needs in order
+            // to use it for version ordering. The body is the {"stmt": ...} JSON envelope, so the
+            // DDL's own quotes are escaped in it — assert on the unescaped tokens only.
+            assertThat(ddls.get(0).body)
+                    .contains("`cdc_sequence` BIGINT")
+                    .contains("function_column.sequence_col")
+                    .contains("group_commit_interval_ms")
+                    .contains("group_commit_data_bytes");
+
+            // Group Commit: no label (a label degrades Doris back to normal mode) and the
+            // group_commit header present on every load, with cdc_sequence on every row.
+            assertThat(loads).isNotEmpty();
+            assertThat(loads)
+                    .allSatisfy(
+                            sl -> {
+                                assertThat(sl.headers).doesNotContainKey("label");
+                                assertThat(sl.headers.get("group_commit")).isEqualTo("sync_mode");
+                                assertThat(sl.body).contains("\"cdc_sequence\":");
+                            });
+        }
+    }
+
     private static MockDorisServer mockDorisServer() throws IOException {
         return new MockDorisServer(
                 req ->
@@ -199,8 +256,36 @@ public class KafkaJsonDdlBlockingITCase {
                                 : Response.ok("{\"code\":0,\"msg\":\"OK\"}"));
     }
 
+    /**
+     * Like {@link #mockDorisServer()}, but answers StreamLoad requests that carry the {@code
+     * group_commit} header with {@code "GroupCommit": true} — with the header missing, the client
+     * would log a fall-back warning instead, hiding whether the header actually arrived.
+     */
+    private static MockDorisServer groupCommitServer() throws IOException {
+        return new MockDorisServer(
+                req -> {
+                    if (!"PUT".equals(req.method)) {
+                        return Response.ok("{\"code\":0,\"msg\":\"OK\"}");
+                    }
+                    return Response.ok(
+                            req.headers.containsKey("group_commit")
+                                    ? "{\"Status\":\"Success\",\"NumberLoadedRows\":2,"
+                                            + "\"GroupCommit\":true}"
+                                    : "{\"Status\":\"Success\",\"NumberLoadedRows\":2}");
+                });
+    }
+
     private static void buildSink(
             StreamExecutionEnvironment env, MockDorisServer server, DataStream<Event> source) {
+        buildSink(env, server, source, sinkConfig -> {});
+    }
+
+    /** Variant of {@link #buildSink} that lets the caller tweak the sink {@link Configuration}. */
+    private static void buildSink(
+            StreamExecutionEnvironment env,
+            MockDorisServer server,
+            DataStream<Event> source,
+            Consumer<Configuration> customizer) {
         Configuration sinkConfig = new Configuration();
         sinkConfig.set(DorisDataSinkOptions.FENODES, server.endpoint());
         sinkConfig.set(DorisDataSinkOptions.USERNAME, "root");
@@ -209,6 +294,7 @@ public class KafkaJsonDdlBlockingITCase {
         // FlushEvent of the DDL-blocking protocol.
         sinkConfig.set(DorisDataSinkOptions.BUFFER_SIZE, 1000);
         sinkConfig.set(DorisDataSinkOptions.FLUSH_INTERVAL, Duration.ZERO);
+        customizer.accept(sinkConfig);
         DorisSinkExample.buildSink(
                 source,
                 new DorisDataSinkOptions(sinkConfig),
