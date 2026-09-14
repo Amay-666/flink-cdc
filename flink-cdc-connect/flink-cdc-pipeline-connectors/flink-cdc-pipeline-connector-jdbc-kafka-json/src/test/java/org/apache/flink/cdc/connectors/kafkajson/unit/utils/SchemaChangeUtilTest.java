@@ -23,6 +23,7 @@ import org.apache.flink.cdc.common.event.RenameColumnEvent;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
+import org.apache.flink.cdc.connectors.kafkajson.utils.KafkaJsonSchemaUtils;
 import org.apache.flink.cdc.connectors.kafkajson.utils.SchemaChangeUtil;
 
 import io.debezium.relational.Column;
@@ -154,8 +155,46 @@ public class SchemaChangeUtilTest {
         assertThat(add.getAddedColumns().get(0).getAddColumn().getComment()).isEqualTo("n");
     }
 
+    /**
+     * An added column must be mapped exactly like the one the table-level {@code toSchema} path
+     * would produce: both go through the one shared {@link KafkaJsonSchemaUtils#toColumn} mapping,
+     * so a comment, a type or a default value cannot come out of the two paths differently.
+     *
+     * <p>A default value expression the source reports is deliberately dropped — Debezium cannot
+     * parse every default a MySQL-family server accepts, and Doris cannot change a column default,
+     * so keeping it would only put a value the pipeline can never apply into the schema.
+     */
+    @Test
+    public void testAddedColumnMatchesTheSharedColumnMapping() {
+        Column added = col("name", "VARCHAR", Types.VARCHAR, true, 255, "n", "'unknown'");
+        List<SchemaChangeEvent> events =
+                SchemaChangeUtil.inferMinimalSchemaChanges(
+                        TABLE_ID,
+                        Arrays.asList(col("id", "BIGINT", Types.BIGINT, false, 0, null)),
+                        Arrays.asList(col("id", "BIGINT", Types.BIGINT, false, 0, null), added));
+
+        assertThat(events).hasSize(1);
+        org.apache.flink.cdc.common.schema.Column derived =
+                ((AddColumnEvent) events.get(0)).getAddedColumns().get(0).getAddColumn();
+
+        assertThat(derived).isEqualTo(KafkaJsonSchemaUtils.toColumn(added));
+        assertThat(derived.getComment()).isEqualTo("n");
+        assertThat(derived.getDefaultValueExpression()).isNull();
+    }
+
     private static Column col(
             String name, String type, int jdbcType, boolean optional, int length, String comment) {
+        return col(name, type, jdbcType, optional, length, comment, null);
+    }
+
+    private static Column col(
+            String name,
+            String type,
+            int jdbcType,
+            boolean optional,
+            int length,
+            String comment,
+            String defaultValueExpression) {
         ColumnEditor editor =
                 Column.editor().name(name).type(type).jdbcType(jdbcType).optional(optional);
         if (length > 0) {
@@ -163,6 +202,9 @@ public class SchemaChangeUtilTest {
         }
         if (comment != null) {
             editor.comment(comment);
+        }
+        if (defaultValueExpression != null) {
+            editor.defaultValueExpression(defaultValueExpression);
         }
         return editor.create();
     }

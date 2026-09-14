@@ -296,10 +296,14 @@ public class DorisDdlBuilder implements Serializable {
     }
 
     public List<String> buildAlterTableCommentSql(AlterTableCommentEvent event) {
+        // Doris parses "ALTER TABLE t COMMENT ..." as a syntax error (verified against Doris
+        // 2.1.8); the table comment is changed with MODIFY COMMENT. Column comments use the
+        // "MODIFY COLUMN c COMMENT ..." form in buildAlterColumnCommentSql, which Doris accepts
+        // without repeating the column type.
         return singleton(
                 "ALTER TABLE "
                         + qualified(event.tableId())
-                        + " COMMENT '"
+                        + " MODIFY COMMENT '"
                         + escapeSql(event.getComment())
                         + "'");
     }
@@ -322,8 +326,9 @@ public class DorisDdlBuilder implements Serializable {
 
     /**
      * Maps a CDC {@link DataType} onto a Doris column type. Timestamps become {@code DATETIMEV2}
-     * with precision clamped to the range Doris supports; ARRAY/MAP/ROW become {@code STRING} that
-     * stores the JSON text rendered by {@code DorisRowConverter}.
+     * with precision clamped to the range Doris supports; TIME also becomes {@code STRING} (Doris
+     * has no TIME type, and the row converter renders {@code HH:mm:ss} text); ARRAY/MAP/ROW become
+     * {@code STRING} that stores the JSON text rendered by {@code DorisRowConverter}.
      */
     private String convertDataType(DataType type) {
         switch (type.getTypeRoot()) {
@@ -354,6 +359,13 @@ public class DorisDdlBuilder implements Serializable {
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
             case TIMESTAMP_WITH_TIME_ZONE:
                 return "DATETIMEV2(" + clampTimestampPrecision(getPrecision(type)) + ")";
+            case TIME_WITHOUT_TIME_ZONE:
+                // Doris has no TIME type. DorisRowConverter already renders the value as the
+                // "HH:mm:ss" text of the row's JSON, so the column is created as the STRING that
+                // holds that rendering — the same mapping the released Doris Flink connector
+                // applies to Flink's TimeType. Without this case every table with a TIME column
+                // fails at CREATE/ADD/MODIFY COLUMN time with "Unsupported type for Doris DDL".
+                return "STRING";
             case ARRAY:
             case MAP:
             case ROW:
@@ -553,7 +565,7 @@ public class DorisDdlBuilder implements Serializable {
     }
 
     private static String quoteProperty(String property) {
-        return "\"" + property + "\"";
+        return "\"" + property.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 
     private static String quoteColumns(List<String> columns) {
@@ -564,8 +576,19 @@ public class DorisDdlBuilder implements Serializable {
         return comment == null || comment.isEmpty() ? "" : " COMMENT '" + escapeSql(comment) + "'";
     }
 
+    /**
+     * Escapes a value for a Doris string literal.
+     *
+     * <p>The backslash is escaped first, because Doris reads it as an escape character inside a
+     * literal: a comment holding a Windows path, e.g. {@code C:\path\to}, was sent verbatim and
+     * stored as {@code C:path<TAB>o} — the {@code \p} escape was dropped as unknown and {@code \t}
+     * became a tab, silently corrupting the comment. Doubling the backslash makes the value
+     * round-trip byte for byte (verified against Doris 2.1.8 with a {@code HEX()} comparison).
+     * Doubling the quote then needs no further escaping, and is the form Doris parses back to a
+     * single quote.
+     */
     private static String escapeSql(String value) {
-        return value.replace("'", "''");
+        return value.replace("\\", "\\\\").replace("'", "''");
     }
 
     private static int clampTimestampPrecision(int precision) {

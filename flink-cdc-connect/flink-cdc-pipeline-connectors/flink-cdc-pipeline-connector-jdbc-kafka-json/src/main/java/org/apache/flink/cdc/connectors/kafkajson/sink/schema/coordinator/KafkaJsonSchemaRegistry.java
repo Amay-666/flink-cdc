@@ -282,6 +282,7 @@ public class KafkaJsonSchemaRegistry implements OperatorCoordinator, Coordinatio
 
             switch (schemaManagerSerializerVersion) {
                 case 2:
+                case 3:
                     {
                         int length = in.readInt();
                         byte[] serializedSchemaManager = new byte[length];

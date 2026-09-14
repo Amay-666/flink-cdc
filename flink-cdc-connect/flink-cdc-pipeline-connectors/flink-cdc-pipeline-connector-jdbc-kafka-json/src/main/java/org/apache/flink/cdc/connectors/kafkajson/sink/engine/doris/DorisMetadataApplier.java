@@ -86,7 +86,9 @@ public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMeta
         } catch (SchemaEvolveException e) {
             throw e;
         } catch (Exception e) {
-            throw new SchemaEvolveException(schemaChangeEvent, e.getMessage(), null);
+            // Pass the cause on: without it the report of a failed DDL has no stack trace and the
+            // reason (a serializer error, a malformed SQL string, an NPE) is unrecoverable.
+            throw new SchemaEvolveException(schemaChangeEvent, e.getMessage(), e);
         }
     }
 
@@ -124,7 +126,8 @@ public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMeta
                 client.executeSql(options.mapDatabase(event.tableId()), sql);
             }
         } catch (Exception e) {
-            throw new SchemaEvolveException(event, e.getMessage(), null);
+            // Pass the cause on: without it the report of a failed DDL has no stack trace.
+            throw new SchemaEvolveException(event, e.getMessage(), e);
         }
     }
 

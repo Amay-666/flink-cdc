@@ -331,6 +331,14 @@ public class DorisSinkWriter implements SinkWriter<Event> {
                             try {
                                 flushBuffered();
                             } catch (IOException e) {
+                                // Log before propagating: this runs on the timer thread, so the
+                                // exception is reported from the processing-time service rather
+                                // than
+                                // from this writer, and it says nothing about which batch is lost.
+                                LOG.error(
+                                        "Periodic flush of the Doris buffer failed; failing the "
+                                                + "task instead of dropping the buffered rows.",
+                                        e);
                                 throw new RuntimeException("Failed to flush Doris buffer.", e);
                             }
                             schedulePeriodicFlush(initContext);

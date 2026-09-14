@@ -208,7 +208,8 @@ public class SchemaChangeUtil {
                     new AddColumnEvent(
                             cdcTableId,
                             Collections.singletonList(
-                                    AddColumnEvent.last(toColumn(afterCols.get(j))))));
+                                    AddColumnEvent.last(
+                                            KafkaJsonSchemaUtils.toColumn(afterCols.get(j))))));
             j++;
         }
 
@@ -224,21 +225,5 @@ public class SchemaChangeUtil {
             return n - i;
         }
         return memo[i][j];
-    }
-
-    public static org.apache.flink.cdc.common.schema.Column toColumn(
-            io.debezium.relational.Column column) {
-        if (column.defaultValueExpression().isPresent()) {
-            return org.apache.flink.cdc.common.schema.Column.physicalColumn(
-                    column.name(),
-                    KafkaJsonColumnMeta.fromColumn(column).toCdcDataType(column.isOptional()),
-                    column.comment(),
-                    column.defaultValueExpression().get());
-        } else {
-            return org.apache.flink.cdc.common.schema.Column.physicalColumn(
-                    column.name(),
-                    KafkaJsonColumnMeta.fromColumn(column).toCdcDataType(column.isOptional()),
-                    column.comment());
-        }
     }
 }

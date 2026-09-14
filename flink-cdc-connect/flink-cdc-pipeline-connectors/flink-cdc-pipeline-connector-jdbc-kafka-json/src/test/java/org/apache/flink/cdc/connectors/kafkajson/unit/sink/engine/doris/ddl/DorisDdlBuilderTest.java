@@ -108,6 +108,9 @@ public class DorisDdlBuilderTest {
                         .physicalColumn("c_bool", DataTypes.BOOLEAN())
                         .physicalColumn("c_dec", DataTypes.DECIMAL(20, 4))
                         .physicalColumn("c_date", DataTypes.DATE())
+                        // Doris has no TIME type: DorisRowConverter renders the value as the
+                        // "HH:mm:ss" text of the row's JSON, so the column is a STRING.
+                        .physicalColumn("c_time", DataTypes.TIME())
                         // Precision is clamped to [0, 6] for Doris DATETIMEV2.
                         .physicalColumn("c_ts", DataTypes.TIMESTAMP(9))
                         .physicalColumn("c_ltz", DataTypes.TIMESTAMP_LTZ(3))
@@ -125,9 +128,33 @@ public class DorisDdlBuilderTest {
                 .isEqualTo(
                         "CREATE TABLE IF NOT EXISTS `shop`.`orders` "
                                 + "(`c_char` CHAR(8), `c_bool` BOOLEAN, `c_dec` DECIMAL(20, 4), "
-                                + "`c_date` DATE, `c_ts` DATETIMEV2(6), `c_ltz` DATETIMEV2(3), "
-                                + "`c_tz` DATETIMEV2(6), `c_arr` STRING, `c_map` STRING) "
+                                + "`c_date` DATE, `c_time` STRING, `c_ts` DATETIMEV2(6), "
+                                + "`c_ltz` DATETIMEV2(3), `c_tz` DATETIMEV2(6), `c_arr` STRING, "
+                                + "`c_map` STRING) "
                                 + "UNIQUE KEY(`c_char`) DISTRIBUTED BY HASH(`c_char`) BUCKETS AUTO");
+    }
+
+    @Test
+    public void testAlterColumnToTimeIsAccepted() {
+        // A table with a TIME column used to fail the whole DDL application with
+        // "Unsupported type for Doris DDL"; both CREATE and MODIFY now map it to STRING.
+        Schema schema =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("c_time", DataTypes.TIME())
+                        .primaryKey("id")
+                        .build();
+
+        List<String> sqls =
+                defaultBuilder()
+                        .buildAlterColumnTypeSql(
+                                new AlterColumnTypeEvent(
+                                        ORDERS,
+                                        Collections.singletonMap("c_time", DataTypes.TIME())),
+                                Optional.of(schema));
+
+        assertThat(sqls).hasSize(1);
+        assertThat(sqls.get(0)).contains("`c_time` STRING");
     }
 
     @Test
@@ -327,7 +354,33 @@ public class DorisDdlBuilderTest {
                         .buildAlterTableCommentSql(
                                 new AlterTableCommentEvent(ORDERS, null, null, "new comment"));
 
-        assertThat(sqls).containsExactly("ALTER TABLE `shop`.`orders` COMMENT 'new comment'");
+        // "ALTER TABLE t COMMENT '...'" is a syntax error in Doris (verified against 2.1.8); the
+        // table comment is changed with MODIFY COMMENT.
+        assertThat(sqls)
+                .containsExactly("ALTER TABLE `shop`.`orders` MODIFY COMMENT 'new comment'");
+    }
+
+    @Test
+    public void testCommentSpecialCharactersAreEscaped() {
+        // A backslash is an escape character inside a Doris string literal: sent through unchanged
+        // it silently eats the next character (verified against 2.1.8, where 'C:\path\to' is stored
+        // as 'C:path<TAB>o'). Doris and MySQL both double a quote, so both are doubled here.
+        assertThat(
+                        defaultBuilder()
+                                .buildAlterTableCommentSql(
+                                        new AlterTableCommentEvent(
+                                                ORDERS, null, null, "C:\\path\\to")))
+                .containsExactly("ALTER TABLE `shop`.`orders` MODIFY COMMENT 'C:\\\\path\\\\to'");
+        assertThat(
+                        defaultBuilder()
+                                .buildAlterColumnCommentSql(
+                                        new AlterColumnCommentEvent(
+                                                ORDERS,
+                                                Collections.singletonMap(
+                                                        "name", "it's a \\ backslash"))))
+                .containsExactly(
+                        "ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` COMMENT "
+                                + "'it''s a \\\\ backslash'");
     }
 
     @Test
@@ -485,5 +538,23 @@ public class DorisDdlBuilderTest {
         assertThat(sqls.get(0)).contains("\"group_commit_interval_ms\" = \"5000\"");
         // Framework-injected properties are still present
         assertThat(sqls.get(0)).contains("\"function_column.sequence_col\" = \"cdc_sequence\"");
+    }
+
+    @Test
+    public void testTablePropertySpecialCharactersAreEscaped() {
+        Configuration config = new Configuration();
+        config.set(
+                DorisDataSinkOptions.TABLE_PROPERTIES,
+                Collections.singletonMap("replication_allocation", "tag.location=\"default\""));
+        DorisDdlBuilder builder = builder(new DorisDataSinkOptions(config));
+
+        Schema schema =
+                Schema.newBuilder().physicalColumn("id", DataTypes.INT()).primaryKey("id").build();
+
+        // A property value is a double-quoted string inside the DDL: an unescaped quote would end
+        // it
+        // early and leave the rest of the statement as garbage.
+        assertThat(builder.buildCreateTableSql(new CreateTableEvent(ORDERS, schema)).get(0))
+                .contains("\"replication_allocation\" = \"tag.location=\\\"default\\\"\"");
     }
 }

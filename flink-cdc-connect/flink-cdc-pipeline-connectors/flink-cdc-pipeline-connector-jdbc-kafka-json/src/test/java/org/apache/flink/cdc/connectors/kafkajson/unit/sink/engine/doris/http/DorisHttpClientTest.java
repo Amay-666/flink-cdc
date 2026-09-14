@@ -25,6 +25,7 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
@@ -67,9 +68,16 @@ public class DorisHttpClientTest {
     }
 
     @Test
-    public void testStreamLoadLabelAlreadyExistsTreatedAsSuccess() throws IOException {
+    public void testStreamLoadLabelAlreadyExistsWithFinishedJobIsIdempotentSuccess()
+            throws IOException {
+        // Doris answers a re-issued label with "Label Already Exists"; the earlier job with that
+        // label FINISHED, so this batch is already in Doris and must not be loaded a second time.
         try (MockDorisServer server =
-                new MockDorisServer(req -> Response.ok("{\"Status\":\"Label Already Exists\"}"))) {
+                new MockDorisServer(
+                        req ->
+                                Response.ok(
+                                        "{\"Status\":\"Label Already Exists\","
+                                                + "\"ExistingJobStatus\":\"FINISHED\"}"))) {
             DorisHttpClient client = client(server);
 
             client.streamLoad(
@@ -78,6 +86,70 @@ public class DorisHttpClientTest {
                     "cdc_label_1",
                     Collections.singletonList(Collections.emptyMap()));
 
+            assertThat(server.recorded).hasSize(1);
+        }
+    }
+
+    @Test
+    public void testStreamLoadLabelAlreadyExistsWithUnfinishedJobFails() throws IOException {
+        // "Label Already Exists" alone says nothing about the rows: when the earlier job was
+        // CANCELLED the batch was never written, so it must not be reported as a success.
+        try (MockDorisServer server =
+                new MockDorisServer(
+                        req ->
+                                Response.ok(
+                                        "{\"Status\":\"Label Already Exists\","
+                                                + "\"ExistingJobStatus\":\"CANCELLED\"}"))) {
+            DorisHttpClient client = client(server);
+
+            assertThatThrownBy(
+                            () ->
+                                    client.streamLoad(
+                                            "shop",
+                                            "orders",
+                                            "cdc_label_1",
+                                            Collections.singletonList(Collections.emptyMap())))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("Label Already Exists");
+            // Retried once with the same label (maxRetries = 1), then surfaced.
+            assertThat(server.recorded).hasSize(2);
+        }
+    }
+
+    @Test
+    public void testStreamLoadLabelAlreadyExistsWithoutJobStatusFails() throws IOException {
+        // Defensive: a response that reports neither a job status nor a success is not a success.
+        try (MockDorisServer server =
+                new MockDorisServer(req -> Response.ok("{\"Status\":\"Label Already Exists\"}"))) {
+            DorisHttpClient client = client(server);
+
+            assertThatThrownBy(
+                            () ->
+                                    client.streamLoad(
+                                            "shop",
+                                            "orders",
+                                            "cdc_label_1",
+                                            Collections.singletonList(Collections.emptyMap())))
+                    .isInstanceOf(IOException.class);
+        }
+    }
+
+    @Test
+    public void testStreamLoadPublishTimeoutIsSuccess() throws IOException {
+        // Doris reports this once the rows are written and the transaction is still publishing;
+        // the released Doris connector counts it as a success as well.
+        try (MockDorisServer server =
+                new MockDorisServer(req -> Response.ok("{\"Status\":\"Publish Timeout\"}"))) {
+            DorisHttpClient client = client(server);
+
+            int bytes =
+                    client.streamLoad(
+                            "shop",
+                            "orders",
+                            "cdc_label_1",
+                            Collections.singletonList(Collections.singletonMap("id", 1)));
+
+            assertThat(bytes).isGreaterThan(0);
             assertThat(server.recorded).hasSize(1);
         }
     }
@@ -266,6 +338,29 @@ public class DorisHttpClientTest {
     }
 
     @Test
+    public void testRetryHitsTheNextFeAfterAFailedAttempt() throws IOException {
+        try (MockDorisServer fe1 = new MockDorisServer(req -> new Response(500, "boom"));
+                MockDorisServer fe2 =
+                        new MockDorisServer(req -> Response.ok("{\"Status\":\"Success\"}"))) {
+            DorisHttpClient client =
+                    new DorisHttpClient(fe1.endpoint() + "," + fe2.endpoint(), "root", "123456", 1);
+
+            client.streamLoad(
+                    "shop",
+                    "orders",
+                    "l1",
+                    Collections.singletonList(Collections.singletonMap("id", 1)));
+
+            // The retry has to be rebuilt against the next FE. A request built once for the whole
+            // operation keeps pointing at the endpoint that just failed, so the second FE is never
+            // reached and an unreachable first FE fails the job forever — the multi-FE list would
+            // be dead weight.
+            assertThat(fe1.recorded).hasSize(1);
+            assertThat(fe2.recorded).hasSize(1);
+        }
+    }
+
+    @Test
     public void testStreamLoadPassesThroughConfiguredProperties() throws IOException {
         try (MockDorisServer server =
                 new MockDorisServer(req -> Response.ok("{\"Status\":\"Success\"}"))) {
@@ -275,7 +370,10 @@ public class DorisHttpClientTest {
                             "root",
                             "123456",
                             1,
-                            mapOf("max_filter_ratio", "0.1", "columns", "a,b,c", "format", "csv"));
+                            mapOf(
+                                    "max_filter_ratio", "0.1",
+                                    "columns", "a,b,c",
+                                    "timezone", "Asia/Shanghai"));
             client.streamLoad(
                     "shop",
                     "orders",
@@ -286,9 +384,61 @@ public class DorisHttpClientTest {
             RecordedRequest request = server.recorded.get(0);
             assertThat(request.headers).containsEntry("max_filter_ratio", "0.1");
             assertThat(request.headers).containsEntry("columns", "a,b,c");
-            // A sink.properties entry overrides the connector's json format default.
-            assertThat(request.headers).containsEntry("format", "csv");
+            assertThat(request.headers).containsEntry("timezone", "Asia/Shanghai");
+            // The properties the write protocol depends on keep the connector's values.
+            assertThat(request.headers).containsEntry("format", "json");
+            assertThat(request.headers).containsEntry("strip_outer_array", "true");
         }
+    }
+
+    @Test
+    public void testReservedStreamLoadPropertiesAreRejected() {
+        // Each of these either carries the write protocol, decides the idempotency contract, or
+        // would leave the load uncommitted: overriding them would silently change the semantics of
+        // every write, so the client refuses to be constructed with one.
+        for (String reserved : Arrays.asList("label", "format", "strip_outer_array")) {
+            assertThatThrownBy(
+                            () ->
+                                    new DorisHttpClient(
+                                            "http://localhost:8030",
+                                            "root",
+                                            "123456",
+                                            1,
+                                            Collections.singletonMap(reserved, "x")))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining(reserved);
+        }
+    }
+
+    @Test
+    public void testReservedStreamLoadPropertyNamesAreCaseInsensitive() {
+        // HTTP header names are case-insensitive, and Doris accepts either spelling.
+        assertThatThrownBy(
+                        () ->
+                                new DorisHttpClient(
+                                        "http://localhost:8030",
+                                        "root",
+                                        "123456",
+                                        1,
+                                        Collections.singletonMap("Hidden_Columns", "x")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Hidden_Columns");
+    }
+
+    @Test
+    public void testReservedTwoPhaseCommitPropertyIsRejected() {
+        // This client loads in one shot: with two_phase_commit=true Doris would hold the rows
+        // uncommitted until a commit call that never comes, and the data would never be visible.
+        assertThatThrownBy(
+                        () ->
+                                new DorisHttpClient(
+                                        "http://localhost:8030",
+                                        "root",
+                                        "123456",
+                                        1,
+                                        Collections.singletonMap("two_phase_commit", "true")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("two_phase_commit");
     }
 
     // ===== Group Commit tests =====

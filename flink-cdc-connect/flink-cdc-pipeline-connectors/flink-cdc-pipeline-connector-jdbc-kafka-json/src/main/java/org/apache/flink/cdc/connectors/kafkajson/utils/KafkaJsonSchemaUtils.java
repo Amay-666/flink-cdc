@@ -138,6 +138,30 @@ public class KafkaJsonSchemaUtils {
                 .build();
     }
 
+    /**
+     * Converts a Debezium column into this connector's {@link Column} representation.
+     *
+     * <p>This is the single mapping shared by every schema-building path — the table-level {@link
+     * #toSchema(Table)} used for {@code CreateTableEvent}s and the incremental column diff in
+     * {@code SchemaChangeUtil} that derives {@code AddColumnEvent}s — so the same Debezium column
+     * always yields an equal {@link Column}, whichever path produced it. An added column therefore
+     * reproduces the {@code CreateTableEvent} column exactly.
+     *
+     * <p>The default value expression is deliberately <b>not</b> carried over, even when Debezium
+     * reports one:
+     *
+     * <ul>
+     *   <li>Debezium cannot parse every default expression a MySQL-family server accepts, so what
+     *       it reports is not a faithful copy of the declaration the source table holds.
+     *   <li>Doris cannot change a column's default — the sink's {@code MODIFY COLUMN} statements
+     *       carry no {@code DEFAULT} clause — so a default travelling through a schema change event
+     *       could only ever be dropped downstream, never applied.
+     * </ul>
+     *
+     * <p>The source side of the connector never reads the default in the first place (see {@code
+     * KafkaJsonJdbcConnection}) and its DDL parser ignores default changes, so a default-free
+     * column is also what both ends of the pipeline already agree on.
+     */
     public static Column toColumn(io.debezium.relational.Column column) {
         return Column.physicalColumn(
                 column.name(),

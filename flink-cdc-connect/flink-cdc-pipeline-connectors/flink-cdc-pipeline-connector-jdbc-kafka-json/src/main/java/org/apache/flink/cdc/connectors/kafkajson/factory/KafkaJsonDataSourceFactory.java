@@ -200,15 +200,15 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
         if (databases.size() != 1) {
             throw new IllegalArgumentException(
                     String.format(
-                            "The canal pipeline connector supports a single database, but the option "
-                                    + "'tables' = %s captured tables from the databases %s.",
+                            "The jdbc-kafka-json pipeline connector supports a single database, but "
+                                    + "the option 'tables' = %s captured tables from the databases %s.",
                             tables, databases));
         }
         configFactory.databaseList(databases.iterator().next());
         configFactory.tableList(capturedTables.toArray(new String[0]));
 
         LOG.info(
-                "Properties for the Canal data source: "
+                "Properties for the jdbc-kafka-json data source: "
                         + "{hostname={}, port={}, tables={}, kafka-bootstrap-servers={}, "
                         + "kafka-topics={}, scan.startup.mode={}, message-format={}, ddl-parser={}}",
                 hostname,
@@ -290,7 +290,19 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
             case SCAN_STARTUP_MODE_VALUE_EARLIEST:
                 return StartupOptions.earliest();
             case SCAN_STARTUP_MODE_VALUE_TIMESTAMP:
-                return StartupOptions.timestamp(config.get(SCAN_STARTUP_TIMESTAMP_MILLIS));
+                // scan.startup.timestamp-millis has no default, so a plain get() would unbox null
+                // into the primitive long parameter of StartupOptions.timestamp and surface as a
+                // bare NPE instead of the actionable message below.
+                return StartupOptions.timestamp(
+                        config.getOptional(SCAN_STARTUP_TIMESTAMP_MILLIS)
+                                .orElseThrow(
+                                        () ->
+                                                new ValidationException(
+                                                        String.format(
+                                                                "Option '%s' is required when '%s' is set to '%s'.",
+                                                                SCAN_STARTUP_TIMESTAMP_MILLIS.key(),
+                                                                SCAN_STARTUP_MODE.key(),
+                                                                SCAN_STARTUP_MODE_VALUE_TIMESTAMP))));
             default:
                 // 'specific-offset' (binlog file/pos) has no canal counterpart: the stream offset
                 // is
@@ -324,7 +336,7 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
     }
 
     /**
-     * Resolves a {@code stringType()} canal option into its enum. Unlike {@link
+     * Resolves a {@code stringType()} connector option into its enum. Unlike {@link
      * org.apache.flink.configuration.ConfigurationUtils#convertToEnum}, both the kebab-case values
      * (e.g. {@code at-least-once}) and the underscore enum names are accepted.
      */

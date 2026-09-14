@@ -307,6 +307,42 @@ public class KafkaJsonEventDeserializerTest {
     }
 
     @Test
+    public void testRenameTableWithoutDdlStatement() throws Exception {
+        deserializer.deserialize(createRecord(BASE_TABLE));
+
+        Table renamedTable =
+                Table.editor()
+                        .tableId(new io.debezium.relational.TableId("test", null, "vip_users"))
+                        .addColumn(column("id", "BIGINT", Types.BIGINT, false, 1))
+                        .setPrimaryKeyNames("id")
+                        .create();
+
+        List<? extends Event> events =
+                deserializer.deserialize(renameTableRecord(renamedTable, "test.vip_users", null));
+
+        assertThat(events).hasSize(1);
+        RenameTableEvent rename = (RenameTableEvent) events.get(0);
+        assertThat(rename.getNewTableId()).isEqualTo(TableId.tableId("test", "vip_users"));
+        // The DDL statement is whatever the producing handler attached; a message that carries none
+        // must still yield a usable event — it is serialized on its way to the sink, so a null here
+        // must not fail that trip (see KafkaJsonEventSerializerTest).
+        assertThat(rename.getSql()).isNull();
+    }
+
+    @Test
+    public void testTruncateTableWithoutDdlStatement() throws Exception {
+        deserializer.deserialize(createRecord(BASE_TABLE));
+
+        List<? extends Event> events = deserializer.deserialize(truncateTableRecord(null));
+
+        assertThat(events).hasSize(1);
+        TruncateTableEvent truncate = (TruncateTableEvent) events.get(0);
+        assertThat(truncate.tableId()).isEqualTo(TABLE_ID);
+        assertThat(truncate.getSchema().getColumns()).hasSize(2);
+        assertThat(truncate.getSql()).isNull();
+    }
+
+    @Test
     public void testAlterRenameColumn() throws Exception {
         deserializer.deserialize(createRecord(BASE_TABLE));
 
@@ -443,8 +479,10 @@ public class KafkaJsonEventDeserializerTest {
                             .set(
                                     KafkaJsonSchemaChangeHandler.TABLE_CHANGE_TYPE,
                                     KafkaJsonSchemaChangeHandler.TABLE_CHANGE_TYPE_RENAME_TABLE)
-                            .set(KafkaJsonSchemaChangeHandler.NEW_TABLE_ID, newTableId)
-                            .set(HistoryRecord.Fields.DDL_STATEMENTS, sql);
+                            .set(KafkaJsonSchemaChangeHandler.NEW_TABLE_ID, newTableId);
+            if (sql != null) {
+                historyDoc.set(HistoryRecord.Fields.DDL_STATEMENTS, sql);
+            }
             String historyRecordStr = DocumentWriter.defaultWriter().write(historyDoc);
 
             Schema keySchema =
@@ -493,8 +531,10 @@ public class KafkaJsonEventDeserializerTest {
                     Document.create()
                             .set(
                                     KafkaJsonSchemaChangeHandler.TABLE_CHANGE_TYPE,
-                                    KafkaJsonSchemaChangeHandler.TABLE_CHANGE_TYPE_TRUNCATE_TABLE)
-                            .set(HistoryRecord.Fields.DDL_STATEMENTS, sql);
+                                    KafkaJsonSchemaChangeHandler.TABLE_CHANGE_TYPE_TRUNCATE_TABLE);
+            if (sql != null) {
+                historyDoc.set(HistoryRecord.Fields.DDL_STATEMENTS, sql);
+            }
             String historyRecordStr = DocumentWriter.defaultWriter().write(historyDoc);
 
             Schema keySchema =

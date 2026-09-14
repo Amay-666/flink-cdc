@@ -17,6 +17,8 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.http;
 
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.MediaType;
@@ -30,13 +32,20 @@ import org.slf4j.LoggerFactory;
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.apache.flink.cdc.common.utils.Preconditions.checkArgument;
 
 /**
  * HTTP client for the Doris StreamLoad API and the FE query (DDL) API.
@@ -72,6 +81,40 @@ public class DorisHttpClient implements Closeable {
     /** The FE answers a StreamLoad PUT with this and a {@code Location} pointing at the BE. */
     private static final int HTTP_TEMP_REDIRECT = 307;
 
+    /** Base of the linear retry backoff: attempt {@code n} waits {@code n * this} milliseconds. */
+    private static final long RETRY_BASE_BACKOFF_MILLIS = 500L;
+
+    /** Reported in errors so a rejected endpoint list can be traced back to its option. */
+    private static final String FENODES_OPTION_KEY = DorisDataSinkOptions.FENODES.key();
+
+    /**
+     * Doris {@code Status} values that mean the batch was committed. Doris reports {@code "Publish
+     * Timeout"} when the rows were written and the transaction is still being published — the data
+     * becomes visible shortly after, and the released Doris Flink connector treats it as a success.
+     */
+    private static final Set<String> DORIS_SUCCESS_STATUS =
+            Collections.unmodifiableSet(new HashSet<>(Arrays.asList("Success", "Publish Timeout")));
+
+    /**
+     * StreamLoad properties this client manages itself; a {@code sink.properties} entry must not
+     * override them. Each one either carries the write protocol ({@code format}, {@code
+     * strip_outer_array}, {@code hidden_columns}), decides the idempotency contract ({@code label},
+     * {@code group_commit}), or would leave the load's transaction uncommitted forever ({@code
+     * two_phase_commit} — this client never sends the precommit/commit call). Overriding any of
+     * them would silently change the write semantics instead of failing, so they are rejected when
+     * the client is constructed.
+     */
+    private static final Set<String> RESERVED_STREAM_LOAD_PROPERTIES =
+            Collections.unmodifiableSet(
+                    new HashSet<>(
+                            Arrays.asList(
+                                    "label",
+                                    "format",
+                                    "strip_outer_array",
+                                    "hidden_columns",
+                                    "group_commit",
+                                    "two_phase_commit")));
+
     /**
      * Column name of the per-row delete marker carried in the imported data. A row with this column
      * set to {@code true} is deleted (matched by primary key); {@code false} upserts it. Doris
@@ -102,11 +145,12 @@ public class DorisHttpClient implements Closeable {
     }
 
     /**
-     * @param streamLoadProperties arbitrary Doris StreamLoad properties (e.g. {@code columns},
-     *     {@code max_filter_ratio}, {@code timezone}) sent as request headers. A property may
-     *     override the protocol defaults ({@code format}/{@code strip_outer_array}/{@code
-     *     hidden_columns}/{@code label}); {@code Authorization} and {@code Expect} stay managed by
-     *     this client.
+     * @param streamLoadProperties extra Doris StreamLoad properties (e.g. {@code columns}, {@code
+     *     max_filter_ratio}, {@code timezone}, {@code exec_mem_limit}) sent as request headers.
+     *     Properties the write protocol depends on ({@code format}, {@code strip_outer_array},
+     *     {@code hidden_columns}, {@code label}, {@code group_commit}, {@code two_phase_commit})
+     *     are managed by this client and rejected here; {@code Authorization} and {@code Expect}
+     *     stay managed by this client as well.
      */
     public DorisHttpClient(
             String fenodes,
@@ -118,11 +162,12 @@ public class DorisHttpClient implements Closeable {
     }
 
     /**
-     * @param streamLoadProperties arbitrary Doris StreamLoad properties (e.g. {@code columns},
-     *     {@code max_filter_ratio}, {@code timezone}) sent as request headers. A property may
-     *     override the protocol defaults ({@code format}/{@code strip_outer_array}/{@code
-     *     hidden_columns}/{@code label}); {@code Authorization} and {@code Expect} stay managed by
-     *     this client.
+     * @param streamLoadProperties extra Doris StreamLoad properties (e.g. {@code columns}, {@code
+     *     max_filter_ratio}, {@code timezone}, {@code exec_mem_limit}) sent as request headers.
+     *     Properties the write protocol depends on ({@code format}, {@code strip_outer_array},
+     *     {@code hidden_columns}, {@code label}, {@code group_commit}, {@code two_phase_commit})
+     *     are managed by this client and rejected here; {@code Authorization} and {@code Expect}
+     *     stay managed by this client as well.
      * @param groupCommitMode Group Commit mode: {@code "off"}, {@code "sync_mode"} or {@code
      *     "async_mode"}. When not {@code "off"}, callers should pass a {@code null} label to {@link
      *     #streamLoad} so the {@code group_commit} header is sent instead of a label.
@@ -134,8 +179,10 @@ public class DorisHttpClient implements Closeable {
             int maxRetries,
             Map<String, String> streamLoadProperties,
             String groupCommitMode) {
-        this.fenodes = fenodes.split(",");
-        this.maxRetries = Math.max(1, maxRetries);
+        this.fenodes = parseFenodes(fenodes);
+        // Retries on top of the first attempt, so 0 means "fail without retrying" — clamping this
+        // to 1 instead would quietly turn sink.max-retries=0 into one retry.
+        this.maxRetries = Math.max(0, maxRetries);
         this.authorizationHeader =
                 "Basic "
                         + Base64.getEncoder()
@@ -143,7 +190,10 @@ public class DorisHttpClient implements Closeable {
                                         (username + ":" + password)
                                                 .getBytes(StandardCharsets.UTF_8));
         this.streamLoadProperties =
-                streamLoadProperties == null ? Collections.emptyMap() : streamLoadProperties;
+                validateStreamLoadProperties(
+                        streamLoadProperties == null
+                                ? Collections.emptyMap()
+                                : streamLoadProperties);
         this.groupCommitMode = groupCommitMode == null ? "off" : groupCommitMode.toLowerCase();
         this.client =
                 new OkHttpClient.Builder()
@@ -183,81 +233,64 @@ public class DorisHttpClient implements Closeable {
             return 0;
         }
         byte[] body = OBJECT_MAPPER.writeValueAsBytes(rows);
+        String operation = describeStreamLoad(database, table, label);
         // Doris 2.x answers the StreamLoad PUT on the FE with a 307 whose Location points at the BE
         // owning the tablets. OkHttp does not follow redirects for PUT, so the two-step dance is
         // performed here: the FE is asked first (it requires the Expect: 100-continue header) and,
         // when it redirects, the load is re-issued against the backend. A non-redirecting FE (or a
-        // test stub) evaluates the response directly.
-        Request feRequest =
-                loadRequest(
-                        feEndpoint() + "/api/" + database + "/" + table + "/_stream_load",
-                        body,
-                        label,
-                        true);
-        for (int attempt = 0; ; attempt++) {
-            try {
-                try (Response response = client.newCall(feRequest).execute()) {
-                    if (response.code() == HTTP_TEMP_REDIRECT) {
-                        String location = response.header("Location");
-                        if (location == null) {
-                            throw new IOException(
-                                    "FE redirected StreamLoad of "
-                                            + database
-                                            + "."
-                                            + table
-                                            + " without a Location header.");
-                        }
-                        // The FE bakes the credentials into the redirect target; OkHttp strips the
-                        // Authorization header on a cross-host redirect, so strip the userinfo and
-                        // let the load request's Authorization header carry the credentials.
-                        return performStreamLoad(
-                                stripUserInfo(location), body, database, table, label);
+        // test stub) evaluates the response directly. A StreamLoad failure is retried with the same
+        // label, which Doris deduplicates, making the retry idempotent.
+        return executeWithRetry(
+                () ->
+                        loadRequest(
+                                feEndpoint() + "/api/" + database + "/" + table + "/_stream_load",
+                                body,
+                                label,
+                                true),
+                response -> {
+                    if (response.code() != HTTP_TEMP_REDIRECT) {
+                        return evaluateStreamLoad(response, database, table, label, body.length);
                     }
-                    return evaluateStreamLoad(response, database, table, label, body.length);
-                }
-            } catch (IOException e) {
-                // A StreamLoad failure is retried with the same label (idempotent in Doris).
-                if (attempt >= maxRetries) {
-                    throw e;
-                }
-                LOG.warn(
-                        "StreamLoad attempt {} for {}.{} failed: {}. Retrying ({}).",
-                        attempt + 1,
-                        database,
-                        table,
-                        e.getMessage(),
-                        label != null ? "label " + label : "group commit");
-                sleepQuietly(attempt);
-            }
-        }
+                    String location = response.header("Location");
+                    if (location == null) {
+                        throw new IOException(
+                                "FE redirected " + operation + " without a Location header.");
+                    }
+                    // The FE bakes the credentials into the redirect target; OkHttp strips the
+                    // Authorization header on a cross-host redirect, so strip the userinfo and let
+                    // the load request's Authorization header carry the credentials.
+                    return performStreamLoad(stripUserInfo(location), body, database, table, label);
+                },
+                operation,
+                HTTP_TEMP_REDIRECT);
     }
 
     /**
      * Re-issues a load against the backend URL from the FE redirect, retrying with the same label.
+     * The backend is the one Doris chose for those tablets, so unlike the FE list there is nothing
+     * to fail over to: the URL is fixed and only the request is rebuilt per attempt.
      */
     private int performStreamLoad(
             String beUrl, byte[] body, String database, String table, String label)
             throws IOException {
-        Request request = loadRequest(beUrl, body, label, false);
-        for (int attempt = 0; ; attempt++) {
-            try {
-                try (Response response = client.newCall(request).execute()) {
-                    return evaluateStreamLoad(response, database, table, label, body.length);
-                }
-            } catch (IOException e) {
-                if (attempt >= maxRetries) {
-                    throw e;
-                }
-                LOG.warn(
-                        "StreamLoad attempt {} for {}.{} failed: {}. Retrying ({}).",
-                        attempt + 1,
-                        database,
-                        table,
-                        e.getMessage(),
-                        label != null ? "label " + label : "group commit");
-                sleepQuietly(attempt);
-            }
-        }
+        return executeWithRetry(
+                () -> loadRequest(beUrl, body, label, false),
+                response -> evaluateStreamLoad(response, database, table, label, body.length),
+                describeStreamLoad(database, table, label));
+    }
+
+    /**
+     * Names the operation for logs and error messages. A {@code null} label is the Group Commit
+     * case, where Doris assigns the label itself — saying so is more useful than printing "null".
+     */
+    private static String describeStreamLoad(String database, String table, String label) {
+        return "StreamLoad of "
+                + database
+                + "."
+                + table
+                + " ("
+                + (label != null ? "label " + label : "group commit")
+                + ")";
     }
 
     private Request loadRequest(String url, byte[] body, String label, boolean expectContinue) {
@@ -276,8 +309,9 @@ public class DorisHttpClient implements Closeable {
         if (groupCommit) {
             headers.put("group_commit", groupCommitMode);
         }
-        // sink.properties pass-through: user-supplied StreamLoad properties override the defaults
-        // above (e.g. format=csv, columns=..., max_filter_ratio=..., timezone=...).
+        // sink.properties pass-through: user-supplied StreamLoad properties (columns=...,
+        // max_filter_ratio=..., timezone=..., ...). A key colliding with one of the protocol
+        // headers set above has already been rejected by the constructor.
         headers.putAll(streamLoadProperties);
         Request.Builder builder =
                 new Request.Builder().url(url).put(RequestBody.create(JSON, body));
@@ -322,7 +356,23 @@ public class DorisHttpClient implements Closeable {
                 return bytes;
             }
         } else {
-            if ("Success".equals(status) || "Label Already Exists".equals(status)) {
+            if (DORIS_SUCCESS_STATUS.contains(status)) {
+                return bytes;
+            }
+            // "Label Already Exists" on its own is not a success: it only says that some load with
+            // this label reached Doris before. The batch counts as committed only when that earlier
+            // job actually FINISHED — a RUNNING/PRECOMMITTED job can still fail, and a CANCELLED
+            // one means the rows were never written. Treating the status as an unconditional
+            // success would silently drop the batch, so anything but FINISHED is left to the retry
+            // loop below, which re-issues the same label and is therefore still idempotent.
+            if ("Label Already Exists".equals(status)
+                    && "FINISHED".equals(root.path("ExistingJobStatus").asText())) {
+                LOG.info(
+                        "StreamLoad label {} for {}.{} was already used by a FINISHED job; "
+                                + "treating this batch as committed.",
+                        label,
+                        database,
+                        table);
                 return bytes;
             }
         }
@@ -342,35 +392,43 @@ public class DorisHttpClient implements Closeable {
         return location.replaceFirst("^([a-zA-Z][a-zA-Z0-9+.-]*://)[^@/]*@", "$1");
     }
 
+    /**
+     * Rejects {@code sink.properties} entries that collide with a header this client manages itself
+     * (see {@link #RESERVED_STREAM_LOAD_PROPERTIES}). Header names are case-insensitive in HTTP, so
+     * the comparison is done on lower-cased keys.
+     */
+    private static Map<String, String> validateStreamLoadProperties(
+            Map<String, String> properties) {
+        for (String key : properties.keySet()) {
+            if (key != null
+                    && RESERVED_STREAM_LOAD_PROPERTIES.contains(key.toLowerCase(Locale.ROOT))) {
+                throw new IllegalArgumentException(
+                        "StreamLoad property '"
+                                + key
+                                + "' is managed by this connector and cannot be set through"
+                                + " sink.properties. Reserved properties: "
+                                + RESERVED_STREAM_LOAD_PROPERTIES);
+            }
+        }
+        return properties;
+    }
+
     /** Executes a DDL statement in the given database. */
     public void executeSql(String database, String sql) throws IOException {
-        Request request =
-                new Request.Builder()
-                        .url(feEndpoint() + "/api/query/default_cluster/" + database)
-                        .post(
-                                RequestBody.create(
-                                        JSON,
-                                        OBJECT_MAPPER.writeValueAsBytes(
-                                                Collections.singletonMap("stmt", sql))))
-                        .addHeader("Authorization", authorizationHeader)
-                        .build();
-        for (int attempt = 0; ; attempt++) {
-            try {
-                try (Response response = client.newCall(request).execute()) {
-                    if (!response.isSuccessful()) {
-                        throw new IOException(
-                                "HTTP "
-                                        + response.code()
-                                        + " for DDL on database "
-                                        + database
-                                        + ": "
-                                        + sql);
-                    }
+        executeWithRetry(
+                () -> queryRequest(feEndpoint(), database, sql),
+                response -> {
+                    // Only a 5xx/408/429 reaches the handler as an unsuccessful response (the
+                    // non-retryable ones were already surfaced as DorisHttpException). Such a body
+                    // is an error page, not the {"code":...} envelope the check below expects:
+                    // reading it as if it were would find no "code" field and report a failed DDL
+                    // as done.
+                    requireSuccessful(response);
                     String responseBody = response.body() != null ? response.body().string() : "";
                     JsonNode root = OBJECT_MAPPER.readTree(responseBody);
                     JsonNode codeNode = root.get("code");
                     if (codeNode == null || codeNode.asInt(-1) == 0) {
-                        return;
+                        return null;
                     }
                     // Application-level DDL failure: surface immediately, do not retry — DDL is
                     // not idempotent (e.g. CREATE TABLE is only valid once).
@@ -383,22 +441,8 @@ public class DorisHttpClient implements Closeable {
                                     + responseBody
                                     + "; sql: "
                                     + sql);
-                }
-            } catch (DorisHttpException e) {
-                throw e;
-            } catch (IOException e) {
-                if (attempt >= maxRetries) {
-                    throw e;
-                }
-                LOG.warn(
-                        "DDL attempt {} on database {} failed: {}. sql: {}",
-                        attempt + 1,
-                        database,
-                        e.getMessage(),
-                        sql);
-                sleepQuietly(attempt);
-            }
-        }
+                },
+                "DDL on database " + database + ": " + sql);
     }
 
     /**
@@ -414,28 +458,10 @@ public class DorisHttpClient implements Closeable {
      * @return the raw response body string
      */
     public String executeQuery(String database, String sql) throws IOException {
-        Request request =
-                new Request.Builder()
-                        .url(feEndpoint() + "/api/query/default_cluster/" + database)
-                        .post(
-                                RequestBody.create(
-                                        JSON,
-                                        OBJECT_MAPPER.writeValueAsBytes(
-                                                Collections.singletonMap("stmt", sql))))
-                        .addHeader("Authorization", authorizationHeader)
-                        .build();
-        for (int attempt = 0; ; attempt++) {
-            try {
-                try (Response response = client.newCall(request).execute()) {
-                    if (!response.isSuccessful()) {
-                        throw new IOException(
-                                "HTTP "
-                                        + response.code()
-                                        + " for query on database "
-                                        + database
-                                        + ": "
-                                        + sql);
-                    }
+        return executeWithRetry(
+                () -> queryRequest(feEndpoint(), database, sql),
+                response -> {
+                    requireSuccessful(response);
                     String responseBody = response.body() != null ? response.body().string() : "";
                     JsonNode root = OBJECT_MAPPER.readTree(responseBody);
                     JsonNode codeNode = root.get("code");
@@ -453,19 +479,33 @@ public class DorisHttpClient implements Closeable {
                                     + responseBody
                                     + "; sql: "
                                     + sql);
-                }
-            } catch (IOException e) {
-                if (attempt >= maxRetries) {
-                    throw e;
-                }
-                LOG.warn(
-                        "Query attempt {} on database {} failed: {}. sql: {}",
-                        attempt + 1,
-                        database,
-                        e.getMessage(),
-                        sql);
-                sleepQuietly(attempt);
-            }
+                },
+                "query on database " + database + ": " + sql);
+    }
+
+    /** Builds a {@code POST /api/query/default_cluster/{database}} statement request. */
+    private Request queryRequest(String feEndpoint, String database, String sql)
+            throws IOException {
+        return new Request.Builder()
+                .url(feEndpoint + "/api/query/default_cluster/" + database)
+                .post(
+                        RequestBody.create(
+                                JSON,
+                                OBJECT_MAPPER.writeValueAsBytes(
+                                        Collections.singletonMap("stmt", sql))))
+                .addHeader("Authorization", authorizationHeader)
+                .build();
+    }
+
+    /**
+     * Rejects an unsuccessful response whose body is not the JSON envelope the caller parses. Such
+     * a response only gets here when it is retryable (5xx/408/429 — the non-retryable statuses were
+     * already surfaced as {@link DorisHttpException}), so the thrown {@link IOException} sends the
+     * operation to the next attempt, or out of the retry loop once the attempts run out.
+     */
+    private static void requireSuccessful(Response response) throws IOException {
+        if (!response.isSuccessful()) {
+            throw new IOException("HTTP " + response.code());
         }
     }
 
@@ -475,16 +515,140 @@ public class DorisHttpClient implements Closeable {
         client.connectionPool().evictAll();
     }
 
+    /**
+     * Splits the configured FE list and rejects one that cannot yield a usable endpoint. A blank
+     * entry — {@code "fe1:8030, fe2:8030"} after a naive split, or a trailing comma — would
+     * otherwise reach OkHttp as the URL {@code http://} and fail the job with a bare {@code
+     * IllegalArgumentException} from OkHttp instead of naming the option to fix. An input with no
+     * endpoint at all would make {@link #feEndpoint()} divide by zero.
+     */
+    private static String[] parseFenodes(String fenodes) {
+        checkArgument(
+                fenodes != null && !fenodes.trim().isEmpty(),
+                "Option '%s' must be set to a non-empty, comma-separated list of Doris FE "
+                        + "addresses, e.g. \"fe1:8030,fe2:8030\".",
+                FENODES_OPTION_KEY);
+        List<String> endpoints = new ArrayList<>();
+        for (String candidate : fenodes.split(",")) {
+            String endpoint = candidate.trim();
+            if (!endpoint.isEmpty()) {
+                endpoints.add(endpoint);
+            }
+        }
+        checkArgument(
+                !endpoints.isEmpty(),
+                "Option '%s' is set to \"%s\", which contains no usable Doris FE address.",
+                FENODES_OPTION_KEY,
+                fenodes);
+        return endpoints.toArray(new String[0]);
+    }
+
     private String feEndpoint() {
         String fe = fenodes[Math.floorMod(nextFe.getAndIncrement(), fenodes.length)];
         return fe.startsWith("http://") || fe.startsWith("https://") ? fe : "http://" + fe;
     }
 
-    private static void sleepQuietly(int attempt) {
+    /**
+     * Builds the request for one attempt. It is deliberately a factory rather than a request: see
+     * {@link #executeWithRetry}.
+     */
+    @FunctionalInterface
+    private interface RequestFactory {
+        Request create() throws IOException;
+    }
+
+    /** Turns one HTTP exchange into the operation's result, or throws to fail or retry it. */
+    @FunctionalInterface
+    private interface ResponseHandler<T> {
+        T handle(Response response) throws IOException;
+    }
+
+    /**
+     * Runs an operation against the FE list, retrying transient failures on the next endpoint.
+     *
+     * <p>The request is built once per attempt, not once per operation. A request built up front
+     * keeps pointing at the endpoint that just failed, so every retry would hit the same dead FE —
+     * that turns a multi-FE {@code sink.fenodes} list into dead weight and, because each new
+     * attempt starts again at the first entry, leaves an unreachable first FE failing the job
+     * forever.
+     *
+     * <p>Failures Doris understood and refused are surfaced right away rather than retried: an
+     * application-level rejection ({@link DorisHttpException}) or a 4xx other than 408/429 means
+     * the request itself was wrong — bad credentials, unknown table, malformed SQL — and repeating
+     * it cannot succeed (for DDL it is not even idempotent). A 5xx or a transport failure is
+     * transient, so it is worth another endpoint.
+     *
+     * @param handledStatuses non-2xx statuses that are an outcome rather than a failure for this
+     *     operation, so the handler has to see them: the StreamLoad {@code 307} pointing at the
+     *     backend that owns the tablets. Such a status is neither retried nor reported as an error;
+     *     every other operation classifies it as a failure as usual.
+     */
+    private <T> T executeWithRetry(
+            RequestFactory requestFactory,
+            ResponseHandler<T> handler,
+            String operation,
+            int... handledStatuses)
+            throws IOException {
+        for (int attempt = 0; ; attempt++) {
+            try {
+                Request request = requestFactory.create();
+                try (Response response = client.newCall(request).execute()) {
+                    int status = response.code();
+                    if (!response.isSuccessful()
+                            && !isRetryableStatus(status)
+                            && !isHandledStatus(status, handledStatuses)) {
+                        throw new DorisHttpException("HTTP " + status + " for " + operation);
+                    }
+                    return handler.handle(response);
+                }
+            } catch (DorisHttpException e) {
+                throw e;
+            } catch (IOException e) {
+                if (attempt >= maxRetries) {
+                    throw e;
+                }
+                LOG.warn(
+                        "{} attempt {} failed: {}. Retrying ({} of {}).",
+                        operation,
+                        attempt + 1,
+                        e.getMessage(),
+                        attempt + 1,
+                        maxRetries);
+                sleepBeforeRetry(attempt);
+            }
+        }
+    }
+
+    /**
+     * Whether an HTTP status is worth another attempt. Only server-side failures and the two
+     * transient client statuses qualify; the remaining 4xx codes describe a request that will be
+     * rejected just as firmly next time.
+     */
+    private static boolean isRetryableStatus(int status) {
+        return status >= 500 || status == 408 || status == 429;
+    }
+
+    /** Whether the caller declared this status as an outcome it handles itself. */
+    private static boolean isHandledStatus(int status, int[] handledStatuses) {
+        for (int handled : handledStatuses) {
+            if (handled == status) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Backs off before the next attempt. A task thread is cancelled by interrupting it, so the wait
+     * is abandoned on interrupt instead of being swallowed: keeping the interrupt flag and retrying
+     * anyway would hold the cancelled task alive until the retries run out.
+     */
+    private static void sleepBeforeRetry(int attempt) throws IOException {
         try {
-            Thread.sleep(500L * (attempt + 1));
+            Thread.sleep(RETRY_BASE_BACKOFF_MILLIS * (attempt + 1));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while waiting to retry", e);
         }
     }
 

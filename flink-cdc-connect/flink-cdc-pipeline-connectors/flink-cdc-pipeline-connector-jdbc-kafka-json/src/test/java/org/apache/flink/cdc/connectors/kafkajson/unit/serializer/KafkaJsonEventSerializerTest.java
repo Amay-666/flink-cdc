@@ -38,16 +38,38 @@ import org.junit.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.util.Arrays;
 import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Unit test for the canal serialization stack: {@link KafkaJsonEventTypeInfo} produces {@link
- * KafkaJsonEventSerializer}, which must round-trip a {@link RenameTableEvent} alongside the
+ * Unit test for the connector serialization stack: {@link KafkaJsonEventTypeInfo} produces {@link
+ * KafkaJsonEventSerializer}, which must round-trip the connector's custom events alongside the
  * released event types.
+ *
+ * <p>Two properties of the string fields are pinned here because the events are serialized on the
+ * wire — {@code PrePartitionOperator} broadcasts them to every sink subtask through a Shuffle — and
+ * the DDL statement is {@code null} whenever the source message did not carry one (see {@code
+ * KafkaJsonEventDeserializer}, which reads it with a lookup that yields {@code null} for an absent
+ * field):
+ *
+ * <ul>
+ *   <li>a {@code null} DDL statement must survive, and stay distinct from an empty one;
+ *   <li>a DDL statement longer than the 64 KiB that {@code DataOutputView#writeUTF} can encode must
+ *       survive — a DDL statement is one string and its length is not bounded by this connector.
+ * </ul>
+ *
+ * <p>Both hold because the string fields go through {@link
+ * org.apache.flink.api.common.typeutils.base.StringSerializer}, which delegates to Flink's {@code
+ * StringValue#writeString}/{@code readString}: the length is a varint offset by one, so zero means
+ * {@code null} and long strings are not capped. Swapping in {@code writeUTF} — the obvious-looking
+ * simplification — would break both, which is what these tests are here to catch.
  */
 public class KafkaJsonEventSerializerTest {
+
+    /** Longer than the 64 KiB an {@code writeUTF} encoding could carry. */
+    private static final int LONG_DDL_LENGTH = 200_000;
 
     @Test
     public void testProducedTypeIsKafkaJsonEventTypeInfo() {
@@ -56,28 +78,14 @@ public class KafkaJsonEventSerializerTest {
 
     @Test
     public void testRenameTableEventRoundTrip() throws Exception {
-        TypeSerializer<Event> serializer =
-                new KafkaJsonEventTypeInfo().createSerializer(new ExecutionConfig());
-
         RenameTableEvent original =
                 new RenameTableEvent(
                         TableId.tableId("test", "users"),
                         TableId.tableId("test", "vip_users"),
-                        Schema.newBuilder()
-                                .setColumns(
-                                        Collections.singletonList(
-                                                Column.physicalColumn(
-                                                        "id", DataTypes.BIGINT(), null)))
-                                .primaryKey(Collections.singletonList("id"))
-                                .build(),
+                        schema(),
                         "RENAME TABLE `test`.`users` TO `test`.`vip_users`");
 
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        serializer.serialize(original, new DataOutputViewStreamWrapper(baos));
-        Event restored =
-                serializer.deserialize(
-                        new DataInputViewStreamWrapper(
-                                new ByteArrayInputStream(baos.toByteArray())));
+        Event restored = roundTrip(original);
 
         assertThat(restored).isInstanceOf(RenameTableEvent.class);
         assertThat(restored).isEqualTo(original);
@@ -85,27 +93,13 @@ public class KafkaJsonEventSerializerTest {
 
     @Test
     public void testTruncateTableEventRoundTrip() throws Exception {
-        TypeSerializer<Event> serializer =
-                new KafkaJsonEventTypeInfo().createSerializer(new ExecutionConfig());
-
         TruncateTableEvent original =
                 new TruncateTableEvent(
                         TableId.tableId("test", "users"),
-                        Schema.newBuilder()
-                                .setColumns(
-                                        Collections.singletonList(
-                                                Column.physicalColumn(
-                                                        "id", DataTypes.BIGINT(), null)))
-                                .primaryKey(Collections.singletonList("id"))
-                                .build(),
+                        schema(),
                         "TRUNCATE TABLE `test`.`users`");
 
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        serializer.serialize(original, new DataOutputViewStreamWrapper(baos));
-        Event restored =
-                serializer.deserialize(
-                        new DataInputViewStreamWrapper(
-                                new ByteArrayInputStream(baos.toByteArray())));
+        Event restored = roundTrip(original);
 
         assertThat(restored).isInstanceOf(TruncateTableEvent.class);
         assertThat(restored).isEqualTo(original);
@@ -113,20 +107,12 @@ public class KafkaJsonEventSerializerTest {
 
     @Test
     public void testAlterColumnCommentEventRoundTrip() throws Exception {
-        TypeSerializer<Event> serializer =
-                new KafkaJsonEventTypeInfo().createSerializer(new ExecutionConfig());
-
         AlterColumnCommentEvent original =
                 new AlterColumnCommentEvent(
                         TableId.tableId("test", "users"),
                         Collections.singletonMap("name", "nickname"));
 
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        serializer.serialize(original, new DataOutputViewStreamWrapper(baos));
-        Event restored =
-                serializer.deserialize(
-                        new DataInputViewStreamWrapper(
-                                new ByteArrayInputStream(baos.toByteArray())));
+        Event restored = roundTrip(original);
 
         assertThat(restored).isInstanceOf(AlterColumnCommentEvent.class);
         assertThat(restored).isEqualTo(original);
@@ -134,27 +120,11 @@ public class KafkaJsonEventSerializerTest {
 
     @Test
     public void testDropTableEventRoundTrip() throws Exception {
-        TypeSerializer<Event> serializer =
-                new KafkaJsonEventTypeInfo().createSerializer(new ExecutionConfig());
-
         DropTableEvent original =
                 new DropTableEvent(
-                        TableId.tableId("test", "users"),
-                        Schema.newBuilder()
-                                .setColumns(
-                                        Collections.singletonList(
-                                                Column.physicalColumn(
-                                                        "id", DataTypes.BIGINT(), null)))
-                                .primaryKey(Collections.singletonList("id"))
-                                .build(),
-                        "DROP TABLE `test`.`users`");
+                        TableId.tableId("test", "users"), schema(), "DROP TABLE `test`.`users`");
 
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        serializer.serialize(original, new DataOutputViewStreamWrapper(baos));
-        Event restored =
-                serializer.deserialize(
-                        new DataInputViewStreamWrapper(
-                                new ByteArrayInputStream(baos.toByteArray())));
+        Event restored = roundTrip(original);
 
         assertThat(restored).isInstanceOf(DropTableEvent.class);
         assertThat(restored).isEqualTo(original);
@@ -162,30 +132,136 @@ public class KafkaJsonEventSerializerTest {
 
     @Test
     public void testAlterTableCommentEventRoundTrip() throws Exception {
-        TypeSerializer<Event> serializer =
-                new KafkaJsonEventTypeInfo().createSerializer(new ExecutionConfig());
-
         AlterTableCommentEvent original =
                 new AlterTableCommentEvent(
                         TableId.tableId("test", "users"),
-                        Schema.newBuilder()
-                                .setColumns(
-                                        Collections.singletonList(
-                                                Column.physicalColumn(
-                                                        "id", DataTypes.BIGINT(), null)))
-                                .primaryKey(Collections.singletonList("id"))
-                                .build(),
+                        schema(),
                         "ALTER TABLE `test`.`users` COMMENT = 'vip users'",
                         "vip users");
 
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        serializer.serialize(original, new DataOutputViewStreamWrapper(baos));
-        Event restored =
-                serializer.deserialize(
-                        new DataInputViewStreamWrapper(
-                                new ByteArrayInputStream(baos.toByteArray())));
+        Event restored = roundTrip(original);
 
         assertThat(restored).isInstanceOf(AlterTableCommentEvent.class);
         assertThat(restored).isEqualTo(original);
+    }
+
+    @Test
+    public void testNullDdlStatementSurvivesRoundTrip() throws Exception {
+        // A source message that carries no DDL statement leaves the field null, and the event is
+        // still broadcast and serialized like any other.
+        RenameTableEvent rename =
+                new RenameTableEvent(
+                        TableId.tableId("test", "users"),
+                        TableId.tableId("test", "vip_users"),
+                        schema());
+        TruncateTableEvent truncate =
+                new TruncateTableEvent(TableId.tableId("test", "users"), schema());
+        DropTableEvent drop = new DropTableEvent(TableId.tableId("test", "users"), schema(), null);
+        AlterTableCommentEvent comment =
+                new AlterTableCommentEvent(
+                        TableId.tableId("test", "users"), schema(), null, "vip users");
+
+        assertThat(((RenameTableEvent) roundTrip(rename)).getSql()).isNull();
+        assertThat(roundTrip(rename)).isEqualTo(rename);
+
+        assertThat(((TruncateTableEvent) roundTrip(truncate)).getSql()).isNull();
+        assertThat(roundTrip(truncate)).isEqualTo(truncate);
+
+        assertThat(((DropTableEvent) roundTrip(drop)).getSql()).isNull();
+        assertThat(roundTrip(drop)).isEqualTo(drop);
+
+        assertThat(((AlterTableCommentEvent) roundTrip(comment)).getSql()).isNull();
+        assertThat(roundTrip(comment)).isEqualTo(comment);
+    }
+
+    @Test
+    public void testNullDdlStatementStaysDistinctFromEmptyOne() throws Exception {
+        // The encoding writes null as a zero length, so an empty statement must not decode as null:
+        // the coordinator compares replayed events with equals, and conflating the two would make a
+        // replayed event look different from the one already applied.
+        TruncateTableEvent withNull =
+                new TruncateTableEvent(TableId.tableId("test", "users"), schema());
+        TruncateTableEvent withEmpty =
+                new TruncateTableEvent(TableId.tableId("test", "users"), schema(), "");
+
+        assertThat(((TruncateTableEvent) roundTrip(withNull)).getSql()).isNull();
+        assertThat(((TruncateTableEvent) roundTrip(withEmpty)).getSql()).isEmpty();
+        assertThat(roundTrip(withEmpty)).isNotEqualTo(roundTrip(withNull));
+    }
+
+    @Test
+    public void testLongDdlStatementSurvivesRoundTrip() throws Exception {
+        String longSql = repeat('d', LONG_DDL_LENGTH);
+        TruncateTableEvent original =
+                new TruncateTableEvent(TableId.tableId("test", "users"), schema(), longSql);
+
+        byte[] bytes = serialize(original);
+        assertThat(bytes.length).isGreaterThan(0xFFFF);
+
+        TruncateTableEvent restored = (TruncateTableEvent) roundTrip(original);
+
+        assertThat(restored.getSql()).hasSize(LONG_DDL_LENGTH);
+        assertThat(restored).isEqualTo(original);
+    }
+
+    @Test
+    public void testLongCommentSurvivesRoundTrip() throws Exception {
+        // The comment fields are written with the same string encoding, so they carry the same
+        // length bound; a column comment is the larger of the two in practice.
+        String longComment = repeat('c', LONG_DDL_LENGTH);
+        AlterTableCommentEvent tableComment =
+                new AlterTableCommentEvent(
+                        TableId.tableId("test", "users"), schema(), null, longComment);
+        AlterColumnCommentEvent columnComment =
+                new AlterColumnCommentEvent(
+                        TableId.tableId("test", "users"),
+                        Collections.singletonMap("name", longComment));
+
+        assertThat(((AlterTableCommentEvent) roundTrip(tableComment)).getComment())
+                .hasSize(LONG_DDL_LENGTH);
+        assertThat(roundTrip(tableComment)).isEqualTo(tableComment);
+
+        assertThat(
+                        ((AlterColumnCommentEvent) roundTrip(columnComment))
+                                .getCommentMapping()
+                                .get("name"))
+                .hasSize(LONG_DDL_LENGTH);
+        assertThat(roundTrip(columnComment)).isEqualTo(columnComment);
+    }
+
+    private static Event roundTrip(Event original) throws Exception {
+        TypeSerializer<Event> serializer =
+                new KafkaJsonEventTypeInfo().createSerializer(new ExecutionConfig());
+        Event restored =
+                serializer.deserialize(
+                        new DataInputViewStreamWrapper(
+                                new ByteArrayInputStream(serialize(original))));
+        // A format that silently dropped or truncated a field would still decode, so check the
+        // encoding is stable too: re-encoding the restored event must reproduce the same bytes.
+        assertThat(serialize(restored)).isEqualTo(serialize(original));
+        return restored;
+    }
+
+    private static byte[] serialize(Event event) throws Exception {
+        TypeSerializer<Event> serializer =
+                new KafkaJsonEventTypeInfo().createSerializer(new ExecutionConfig());
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        serializer.serialize(event, new DataOutputViewStreamWrapper(baos));
+        return baos.toByteArray();
+    }
+
+    private static Schema schema() {
+        return Schema.newBuilder()
+                .setColumns(
+                        Collections.singletonList(
+                                Column.physicalColumn("id", DataTypes.BIGINT(), null)))
+                .primaryKey(Collections.singletonList("id"))
+                .build();
+    }
+
+    private static String repeat(char c, int length) {
+        char[] chars = new char[length];
+        Arrays.fill(chars, c);
+        return new String(chars);
     }
 }
