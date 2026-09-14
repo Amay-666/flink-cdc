@@ -298,7 +298,6 @@ public class KafkaJsonDdlBlockingITCase {
         DorisSinkExample.buildSink(
                 source,
                 new DorisDataSinkOptions(sinkConfig),
-                2,
                 Duration.ofSeconds(30),
                 SchemaChangeBehavior.EVOLVE,
                 "Asia/Shanghai");

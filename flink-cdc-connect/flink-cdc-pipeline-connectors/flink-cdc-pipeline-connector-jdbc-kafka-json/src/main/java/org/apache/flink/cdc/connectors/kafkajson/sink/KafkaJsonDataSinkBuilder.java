@@ -37,6 +37,9 @@ import org.apache.flink.streaming.api.datastream.DataStream;
 
 import org.apache.flink.shaded.guava31.com.google.common.hash.Hashing;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.time.Duration;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -58,11 +61,22 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *                KafkaJsonPrePartitionOperator)             // broadcast DDL/flush, hash data by table+pk
  *        .setParallelism(p)
  *        .partitionCustom(EventPartitioner, PartitioningEventKeySelector)
- *        .map(PostPartitionProcessor, KafkaJsonEventTypeInfo).name("PostPartition")
+ *        .map(PostPartitionProcessor, KafkaJsonEventTypeInfo)
+ *        .setParallelism(p).name("PostPartition")   // a map inherits the env parallelism by itself
  *   └─ transform("kafka-json-sink-writer", CommittableMessageTypeInfo.noOutput(),
  *                DataSinkWriterOperatorFactory)             // released writer operator drives the dialect Sink
  *        .setParallelism(p)
  * }</pre>
+ *
+ * <p>Every stage runs at the parallelism of the source stream it is given, so the chain stays
+ * forward-connected and the events are never rebalanced on their way in. A rebalance round-robins
+ * the events one upstream subtask produced across the downstream subtasks, which breaks the
+ * per-primary-key order the partitioning chain relies on: the rows of one key would be re-hashed to
+ * the same sink subtask from several upstream subtasks, in whatever order those produced them, and
+ * a delete could be loaded before the insert it followed. The source stream's parallelism is
+ * therefore the job's parallelism -- set it with {@code env.setParallelism(p)} or {@code
+ * source.setParallelism(p)}, the way the released composer runs a whole job at one {@code
+ * pipeline.parallelism}.
  *
  * <p>The schema operator's {@code OperatorID} is derived from its uid with the same murmur3_128(0)
  * hash Flink's {@code StreamGraphHasherV2} applies (see
@@ -78,6 +92,8 @@ public class KafkaJsonDataSinkBuilder {
     public static final String POST_PARTITION_NAME = "PostPartition";
     public static final String SINK_WRITER_NAME = "kafka-json-sink-writer";
 
+    private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonDataSinkBuilder.class);
+
     private final KafkaJsonDataSinkDialect dialect;
 
     public KafkaJsonDataSinkBuilder(KafkaJsonDataSinkDialect dialect) {
@@ -85,38 +101,40 @@ public class KafkaJsonDataSinkBuilder {
     }
 
     /**
-     * Builds the full sink topology: schema operator, partitioning chain and the Doris writer. The
+     * Builds the full sink topology: schema operator, partitioning chain and the writer. Every
+     * stage runs at the parallelism of {@code source}, so the whole chain is forward-connected. The
      * returned stream carries the writer operator's (empty) {@link CommittableMessage} output and
      * is normally ignored; it is returned so tests can attach collectors to it.
+     *
+     * @param source the event stream to consume. Its parallelism is the job's parallelism: give it
+     *     {@code env.setParallelism(p)} (or {@code source.setParallelism(p)}) to run the sink with
+     *     {@code p} subtasks.
      */
     public DataStream<CommittableMessage<Void>> build(
             DataStream<Event> source,
-            int sinkParallelism,
             Duration rpcTimeout,
             SchemaChangeBehavior schemaChangeBehavior,
             String timezone) {
+        LOG.info(
+                "Building the sink chain at parallelism {}: every sink operator takes the source"
+                        + " stream's parallelism, so the events are not rebalanced on the way in.",
+                source.getParallelism());
         MetadataApplier metadataApplier = dialect.createMetadataApplier();
         DataStream<Event> schemaStream =
                 buildSchemaOperator(
-                        source,
-                        sinkParallelism,
-                        metadataApplier,
-                        rpcTimeout,
-                        schemaChangeBehavior,
-                        timezone);
+                        source, metadataApplier, rpcTimeout, schemaChangeBehavior, timezone);
         OperatorID schemaOperatorID = generateOperatorID(SCHEMA_OPERATOR_UID);
         DataStream<Event> partitionedStream =
-                buildPartitionedStream(schemaStream, sinkParallelism, schemaOperatorID);
-        return buildSinkWriter(partitionedStream, sinkParallelism, schemaOperatorID);
+                buildPartitionedStream(schemaStream, schemaOperatorID);
+        return buildSinkWriter(partitionedStream, schemaOperatorID);
     }
 
     /**
-     * Adds the schema operator (released {@code SchemaOperator} + connector coordinator). The
-     * operator runs at the sink parallelism, like the released composer.
+     * Adds the schema operator (released {@code SchemaOperator} + connector coordinator) at the
+     * input's parallelism, like the released composer.
      */
     public DataStream<Event> buildSchemaOperator(
             DataStream<Event> input,
-            int parallelism,
             MetadataApplier metadataApplier,
             Duration rpcTimeout,
             SchemaChangeBehavior schemaChangeBehavior,
@@ -127,17 +145,22 @@ public class KafkaJsonDataSinkBuilder {
                         new KafkaJsonSchemaOperatorFactory(
                                 metadataApplier, rpcTimeout, schemaChangeBehavior, timezone))
                 .uid(SCHEMA_OPERATOR_UID)
-                .setParallelism(parallelism);
+                .setParallelism(input.getParallelism());
     }
 
     /**
      * Adds the partitioning chain that keys data by {@code (table original name, primary key)}:
      * schema-change/flush events are broadcast to every partition, data-change events are hashed to
      * a single partition. Mirrors the released {@code PartitioningTranslator} with the connector's
-     * serializers.
+     * serializers, except that the post-partition map also gets its parallelism set explicitly: a
+     * {@code map} otherwise takes the environment's default parallelism, which rebalances the
+     * events between the partitioner and the very operator that is supposed to see them in order.
+     * The released translator can leave it implicit because the composer runs the whole job at one
+     * {@code pipeline.parallelism}, so the inherited value is that value.
      */
     public DataStream<Event> buildPartitionedStream(
-            DataStream<Event> input, int parallelism, OperatorID schemaOperatorID) {
+            DataStream<Event> input, OperatorID schemaOperatorID) {
+        int parallelism = input.getParallelism();
         return input.transform(
                         PRE_PARTITION_NAME,
                         new KafkaJsonPartitioningEventTypeInfo(),
@@ -148,6 +171,7 @@ public class KafkaJsonDataSinkBuilder {
                 .setParallelism(parallelism)
                 .partitionCustom(new EventPartitioner(), new PartitioningEventKeySelector())
                 .map(new PostPartitionProcessor(), new KafkaJsonEventTypeInfo())
+                .setParallelism(parallelism)
                 .name(POST_PARTITION_NAME);
     }
 
@@ -157,12 +181,12 @@ public class KafkaJsonDataSinkBuilder {
      * (the {@code CommittableMessage} output is {@code noOutput()}).
      */
     public DataStream<CommittableMessage<Void>> buildSinkWriter(
-            DataStream<Event> input, int parallelism, OperatorID schemaOperatorID) {
+            DataStream<Event> input, OperatorID schemaOperatorID) {
         return input.transform(
                         SINK_WRITER_NAME,
                         CommittableMessageTypeInfo.noOutput(),
                         new DataSinkWriterOperatorFactory<>(dialect.createSink(), schemaOperatorID))
-                .setParallelism(parallelism);
+                .setParallelism(input.getParallelism());
     }
 
     /**

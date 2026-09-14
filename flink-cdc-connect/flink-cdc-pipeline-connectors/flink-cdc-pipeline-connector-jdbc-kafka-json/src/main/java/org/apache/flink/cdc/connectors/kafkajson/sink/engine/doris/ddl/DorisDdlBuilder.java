@@ -481,7 +481,7 @@ public class DorisDdlBuilder implements Serializable {
             case CHAR:
                 int oldCap = dorisCapacity(oldType);
                 int newCap = dorisCapacity(newType);
-                return oldCap >= 0 && newCap >= 0 && newCap < oldCap;
+                return newCap >= 0 && newCap < oldCap;
             case DECIMAL:
                 // Doris DECIMAL(p,s) stores (p − s) integer digits and s fraction digits; the old
                 // column accepts all narrower data iff neither budget grows.

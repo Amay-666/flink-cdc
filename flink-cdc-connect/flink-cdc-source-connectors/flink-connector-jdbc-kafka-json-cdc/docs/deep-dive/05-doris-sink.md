@@ -181,7 +181,7 @@ executeSql：网络层失败按 max-retries 重试；应用层失败（HTTP code
 | `DorisDataSinkDialect` | `sink/engine/doris/` | extends `KafkaJsonDataSinkDialect`，组装 sink/applier/converter |
 | `DorisRowConverter` / `DorisWriteMetrics` | `sink/engine/doris/` | 行转换 / 写吞吐指标 |
 | `KafkaJsonRowConverter` | `sink/converter/` | 行转换抽象基类 |
-| `DorisSinkExample` | `example/` | 完整组装，可跑 MiniCluster |
+| `DorisSinkExample` | `test/example/`（test 源集） | 完整组装，可跑 MiniCluster；示例不随连接器 jar 发布 |
 
 ---
 
@@ -189,6 +189,7 @@ executeSql：网络层失败按 max-retries 重试；应用层失败（HTTP code
 
 | 风险 | 应对 |
 |---|---|
+| source 与 sink 并行度不一致 | sink 链每个算子都取**输入流的并行度**（且**逐个显式设置**——`.map()` 默认取 env 并行度），所以 source 的并行度就是整条链（也就是整个作业）的并行度；不一致时 Flink 会在 source 与 schema 算子之间插 rebalance，按主键有序的前提被破坏（见 [ARCHITECTURE.md §3.4](../ARCHITECTURE.md)） |
 | FE 执行 DDL 需 `is_execute_sql_in_http=true`（默认 false） | 主走 HTTP；无法开启时后续切 MySQL 协议 JDBC（可选项，未实现） |
 | StreamLoad 非 2PC = 至少一次 | 每 checkpoint/flush 一次 PUT + label 幂等；2PC 列后续增强 |
 | Doris 2.x 拒绝 `enable_batch_delete_by_default` | 改用 `hidden_columns=__DORIS_DELETE_SIGN__` header |

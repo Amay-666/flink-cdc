@@ -46,16 +46,30 @@ import java.time.ZoneId;
  * primary key)} so a large table is spread across the sink subtasks.
  *
  * <p>The static {@link #buildSource}/{@link #buildSink} methods are the reusable seams — tests and
- * the simulated-sink ITCase drive the same topology.
+ * the simulated-sink ITCase drive the same topology. The example lives in the test sources because
+ * it is a runnable reference, not part of the connector's published surface.
+ *
+ * <p>Source and sink run at one parallelism, like the released composer runs a job at one {@code
+ * pipeline.parallelism}: the sink chain takes the parallelism of the stream it is given, so the
+ * parallelism set on the source is the parallelism of the whole job. That single value matters --
+ * if the sink ran at a different parallelism from the source, Flink would rebalance the events in
+ * front of the schema operator and the rows of one primary key would no longer arrive in the order
+ * they happened (see {@link KafkaJsonDataSinkBuilder}).
  */
 public class DorisSinkExample {
 
     /** The connector source identifier of the underlying canal connector. */
     public static final String CANAL_SOURCE_IDENTIFIER = "jdbc-kafka-json-cdc";
 
+    /** The parallelism of the whole job: the source and every sink operator run at this value. */
+    private static final int PARALLELISM = 4;
+
     public static void main(String[] args) throws Exception {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.enableCheckpointing(60_000L);
+        // The source runs at this parallelism (buildSource inherits it) and the sink chain follows
+        // the source, so one setting covers the whole job.
+        env.setParallelism(PARALLELISM);
 
         KafkaJsonSourceConfigFactory configFactory =
                 new KafkaJsonSourceConfigFactory()
@@ -81,7 +95,6 @@ public class DorisSinkExample {
         buildSink(
                 source,
                 new DorisDataSinkOptions(sinkConfig),
-                4,
                 Duration.ofSeconds(30),
                 SchemaChangeBehavior.EVOLVE,
                 "Asia/Shanghai");
@@ -90,9 +103,10 @@ public class DorisSinkExample {
     }
 
     /**
-     * Builds the canal-sourced {@code Event} stream. {@code KafkaJsonDataSource} wraps the Kafka
-     * source whose deserializer produces the connector's own {@code KafkaJsonEventTypeInfo}, so the
-     * whole downstream chain can serialize the five custom schema-change events.
+     * Builds the canal-sourced {@code Event} stream at the environment's parallelism, which the
+     * sink chain then follows. {@code KafkaJsonDataSource} wraps the Kafka source whose
+     * deserializer produces the connector's own {@code KafkaJsonEventTypeInfo}, so the whole
+     * downstream chain can serialize the five custom schema-change events.
      */
     public static DataStream<Event> buildSource(
             StreamExecutionEnvironment env, KafkaJsonSourceConfigFactory configFactory) {
@@ -105,18 +119,18 @@ public class DorisSinkExample {
 
     /**
      * Builds the sink topology for a Doris target: schema operator + partitioning chain + the
-     * writer operator driving {@code DorisSink}. Returns the writer operator's (empty) commit
-     * output stream; callers that only run the job can ignore it.
+     * writer operator driving {@code DorisSink}. The whole chain runs at the parallelism of {@code
+     * source}. Returns the writer operator's (empty) commit output stream; callers that only run
+     * the job can ignore it.
      */
     public static DataStream<CommittableMessage<Void>> buildSink(
             DataStream<Event> source,
             DorisDataSinkOptions sinkOptions,
-            int sinkParallelism,
             Duration rpcTimeout,
             SchemaChangeBehavior schemaChangeBehavior,
             String timezone) {
         return new KafkaJsonDataSinkBuilder(
                         new DorisDataSinkDialect(sinkOptions, ZoneId.of(timezone)))
-                .build(source, sinkParallelism, rpcTimeout, schemaChangeBehavior, timezone);
+                .build(source, rpcTimeout, schemaChangeBehavior, timezone);
     }
 }

@@ -164,7 +164,7 @@ released 发行版（零改动，硬约束；事件类型无关，直接复用�
 ### 3.4 sink 链：DDL 阻塞协调放大
 
 自建 DataStream 组装在 pipeline 模块 `sink/KafkaJsonDataSinkBuilder.java`
-（`:113` schema 算子 → `:135` 分区 → `:155` writer）。跨进程的**阻塞-确认协议**
+（`:136` schema 算子 → `:161` 分区 → `:183` writer）。跨进程的**阻塞-确认协议**
 见 [04-ddl-blocking.md](./deep-dive/04-ddl-blocking.md)：
 
 ```
@@ -192,6 +192,17 @@ released 发行版（零改动，硬约束；事件类型无关，直接复用�
 
 > 协调器内部对 5 标准 + 5 自定义事件全部用 `instanceof` 分派，不碰 released 的
 > `getType()` / `acceptsSchemaEvolutionType`——这是必须自写 coordinator 的根本原因（[04](./deep-dive/04-ddl-blocking.md) §1）。
+
+> **并行度 = 一个值**：sink 链的每个算子都取**输入流的并行度**（`KafkaJsonDataSinkBuilder`
+> 不再单独接收并行度），所以 source 的并行度就是整条链、也就是整个作业的并行度——与 released
+> composer 用 `pipeline.parallelism` 统一设置全作业同构。注意**每一步都必须显式设置**：Flink 的
+> `.map()` 取的是 **env 的默认并行度**，不是上游算子的并行度——released `PartitioningTranslator`
+> 后置的 `PostPartitionProcessor` 就没设（composer 全作业同构，继承值恰好正确），本连接器既然按
+> source 派生，就必须在链上逐个显式设置，否则会在分区算子与消费端之间凭空插一次 rebalance。
+> 若 sink 与 source 并行度不同，Flink 会在 source 与 schema 算子之间插入 rebalance：rebalance 把
+> 同一 subtask 的事件轮询分给下游各 subtask，分区链再按「表 + 主键」hash 回来时，同一个主键的行
+> 就不是按它发生的顺序到达 sink 了（delete 可能被 load 到它跟随的那条 insert 之前）。示例里一个
+> 常量同时决定 source 与 sink 的并行度（`DorisSinkExample`）。
 
 ---
 
