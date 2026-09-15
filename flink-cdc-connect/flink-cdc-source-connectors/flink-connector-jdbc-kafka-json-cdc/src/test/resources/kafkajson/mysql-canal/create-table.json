@@ -1,0 +1,15 @@
+{
+  "data": null,
+  "database": "inventory",
+  "es": 1705300000000,
+  "id": 1,
+  "isDdl": true,
+  "mysqlType": null,
+  "old": null,
+  "pkNames": null,
+  "sql": "CREATE TABLE `orders` (`id` bigint(20) NOT NULL AUTO_INCREMENT, `customer_id` bigint(20) DEFAULT NULL, `amount` decimal(10,2) DEFAULT NULL, `created_at` datetime DEFAULT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+  "sqlType": null,
+  "table": "orders",
+  "ts": 1705300000500,
+  "type": "CREATE"
+}

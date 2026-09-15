@@ -1,0 +1,30 @@
+{
+  "schema": {
+    "type": "struct",
+    "name": "test.test_schema_change3.Envelope",
+    "optional": false
+  },
+  "payload": {
+    "before": {
+      "id": 1,
+      "called_phone": "1123499816",
+      "price": "1235.45"
+    },
+    "after": {
+      "id": 1,
+      "called_phone": "1123499817",
+      "price": "1235.45"
+    },
+    "source": {
+      "version": "2.4.0.Final",
+      "connector": "mysql",
+      "db": "test",
+      "table": "test_schema_change3",
+      "ts_ms": 1789464764221,
+      "commit_ts": 469097451151949838,
+      "cluster_id": "7678521529001634246"
+    },
+    "op": "u",
+    "ts_ms": 1789464764913
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": 0,
+  "database": "test",
+  "table": "test_schema_change4",
+  "pkNames": null,
+  "isDdl": true,
+  "type": "CREATE",
+  "es": 1789455150000,
+  "ts": 1789455150800,
+  "sql": "CREATE TABLE `test_schema_change4` (`id` bigint(20) NOT NULL AUTO_INCREMENT, `called_phone` varchar(32) DEFAULT NULL, `price` decimal(10,2) DEFAULT NULL, `created_time` datetime DEFAULT NULL, `updated_time` datetime DEFAULT NULL, `upload_time` varchar(64) DEFAULT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin",
+  "sqlType": null,
+  "mysqlType": null,
+  "data": null,
+  "old": null,
+  "_tidb": {
+    "commitTs": 469094931000000000
+  }
+}

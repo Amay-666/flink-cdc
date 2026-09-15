@@ -1,0 +1,1 @@
+{"data":null,"database":"inventory","es":1789474157000,"gtid":"","id":3,"isDdl":true,"mysqlType":null,"old":null,"pkNames":null,"sql":"ALTER TABLE orders_archive ADD COLUMN note VARCHAR(64) DEFAULT NULL","sqlType":null,"table":"orders_archive","ts":1789474158055,"type":"ALTER"}

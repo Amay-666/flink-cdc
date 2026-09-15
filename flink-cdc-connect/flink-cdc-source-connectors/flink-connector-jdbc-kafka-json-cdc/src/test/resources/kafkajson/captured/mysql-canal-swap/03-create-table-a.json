@@ -1,0 +1,1 @@
+{"data":null,"database":"inventory","es":1789475603000,"gtid":"","id":3,"isDdl":true,"mysqlType":null,"old":null,"pkNames":null,"sql":"CREATE TABLE a (id INT NOT NULL, v VARCHAR(8) DEFAULT NULL, PRIMARY KEY (id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4","sqlType":null,"table":"a","ts":1789475603531,"type":"CREATE"}

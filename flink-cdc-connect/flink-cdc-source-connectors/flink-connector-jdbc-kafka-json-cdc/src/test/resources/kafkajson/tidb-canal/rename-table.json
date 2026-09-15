@@ -1,0 +1,18 @@
+{
+  "id": 0,
+  "database": "test",
+  "table": "test_schema_change3",
+  "pkNames": null,
+  "isDdl": true,
+  "type": "RENAME",
+  "es": 1789455152021,
+  "ts": 1789455153019,
+  "sql": "RENAME TABLE `test_schema_change4` TO `test_schema_change3`",
+  "sqlType": null,
+  "mysqlType": null,
+  "data": null,
+  "old": null,
+  "_tidb": {
+    "commitTs": 469094931371393026
+  }
+}

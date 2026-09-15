@@ -448,6 +448,18 @@ limitations under the License.
                         <exclude>
                             flink-cdc-connect/flink-cdc-source-connectors/flink-connector-mysql-cdc/src/test/resources/file/*.json
                         </exclude>
+                        <!--
+                            Kafka message fixtures of the jdbc-kafka-json connector: Kafka message bodies,
+                            not source. The ones under captured/ are byte-exact recordings of what a real
+                            producer wrote to a topic, so a license header would corrupt them and destroy
+                            the only property that makes them evidence.
+                        -->
+                        <exclude>
+                            flink-cdc-connect/flink-cdc-source-connectors/flink-connector-jdbc-kafka-json-cdc/src/test/resources/kafkajson/**
+                        </exclude>
+                        <exclude>
+                            flink-cdc-connect/flink-cdc-pipeline-connectors/flink-cdc-pipeline-connector-jdbc-kafka-json/src/test/resources/kafkajson/**
+                        </exclude>
                         <exclude>
                             flink-cdc-connect/flink-cdc-source-connectors/flink-connector-db2-cdc/src/test/resources/db2_server/Dockerfile
                         </exclude>

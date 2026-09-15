@@ -1,0 +1,111 @@
+{
+  "source": {
+    "db": "inventory"
+  },
+  "position": {
+    "partition": "0",
+    "offset": "7",
+    "eventTime": "1789475603000"
+  },
+  "databaseName": "inventory",
+  "ddl": "RENAME TABLE a TO a_tmp, b TO a, a_tmp TO b",
+  "tableChanges": [
+    {
+      "type": "CREATE",
+      "id": "\"inventory\".\"b\"",
+      "table": {
+        "defaultCharsetName": null,
+        "primaryKeyColumnNames": [
+          "id"
+        ],
+        "columns": [
+          {
+            "name": "id",
+            "jdbcType": 4,
+            "typeName": "INT",
+            "typeExpression": "int",
+            "charsetName": null,
+            "length": 0,
+            "position": 1,
+            "optional": true,
+            "autoIncremented": false,
+            "generated": false,
+            "comment": null,
+            "hasDefaultValue": true,
+            "enumValues": []
+          },
+          {
+            "name": "v",
+            "jdbcType": 12,
+            "typeName": "VARCHAR",
+            "typeExpression": "varchar(8)",
+            "charsetName": null,
+            "length": 8,
+            "position": 2,
+            "optional": true,
+            "autoIncremented": false,
+            "generated": false,
+            "comment": null,
+            "hasDefaultValue": true,
+            "enumValues": []
+          }
+        ]
+      },
+      "comment": null
+    },
+    {
+      "type": "CREATE",
+      "id": "\"inventory\".\"a\"",
+      "table": {
+        "defaultCharsetName": null,
+        "primaryKeyColumnNames": [
+          "id"
+        ],
+        "columns": [
+          {
+            "name": "id",
+            "jdbcType": 4,
+            "typeName": "INT",
+            "typeExpression": "int",
+            "charsetName": null,
+            "length": 0,
+            "position": 1,
+            "optional": true,
+            "autoIncremented": false,
+            "generated": false,
+            "comment": null,
+            "hasDefaultValue": true,
+            "enumValues": []
+          },
+          {
+            "name": "v",
+            "jdbcType": 12,
+            "typeName": "VARCHAR",
+            "typeExpression": "varchar(8)",
+            "charsetName": null,
+            "length": 8,
+            "position": 2,
+            "optional": true,
+            "autoIncremented": false,
+            "generated": false,
+            "comment": null,
+            "hasDefaultValue": true,
+            "enumValues": []
+          }
+        ]
+      },
+      "comment": null
+    }
+  ],
+  "tableChangeType": "RENAME_TABLE",
+  "renamePairs": [
+    {
+      "oldTableId": "inventory.a",
+      "newTableId": "inventory.b"
+    },
+    {
+      "oldTableId": "inventory.b",
+      "newTableId": "inventory.a"
+    }
+  ]
+}

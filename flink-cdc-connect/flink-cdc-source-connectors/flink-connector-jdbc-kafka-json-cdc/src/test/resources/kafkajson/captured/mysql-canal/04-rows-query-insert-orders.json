@@ -1,0 +1,1 @@
+{"data":null,"database":"","es":1789474157000,"gtid":"","id":2,"isDdl":false,"mysqlType":null,"old":null,"pkNames":null,"sql":"INSERT INTO orders (customer_id, amount, created_at) VALUES (1001, 12.34, '2026-09-15 10:00:00')","sqlType":null,"table":"orders","ts":1789474157951,"type":"QUERY"}

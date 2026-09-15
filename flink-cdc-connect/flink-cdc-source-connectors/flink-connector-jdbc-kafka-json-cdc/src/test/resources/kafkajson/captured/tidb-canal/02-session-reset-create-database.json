@@ -1,0 +1,1 @@
+{"id":0,"database":"test","table":"","pkNames":null,"isDdl":true,"type":"QUERY","es":1789474703982,"ts":1789474704069,"sql":"CREATE DATABASE IF NOT EXISTS `test`","sqlType":null,"mysqlType":null,"data":null,"old":null}

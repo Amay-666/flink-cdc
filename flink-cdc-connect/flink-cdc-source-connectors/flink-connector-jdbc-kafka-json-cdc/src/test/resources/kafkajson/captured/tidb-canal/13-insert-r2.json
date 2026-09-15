@@ -1,0 +1,1 @@
+{"id":0,"database":"test","table":"r2","pkNames":["id"],"isDdl":false,"type":"INSERT","es":1789474704382,"ts":1789474711208,"sql":"","sqlType":{"id":4,"v":12},"mysqlType":{"id":"int","v":"varchar"},"old":null,"data":[{"id":"2","v":"two"}]}

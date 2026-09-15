@@ -1,0 +1,1 @@
+{"data":[{"id":"2","v":"b"}],"database":"inventory","es":1789475603000,"gtid":"","id":3,"isDdl":false,"mysqlType":{"id":"INT","v":"VARCHAR(8)"},"old":null,"pkNames":["id"],"sql":"","sqlType":{"id":4,"v":12},"table":"b","ts":1789475603531,"type":"INSERT"}

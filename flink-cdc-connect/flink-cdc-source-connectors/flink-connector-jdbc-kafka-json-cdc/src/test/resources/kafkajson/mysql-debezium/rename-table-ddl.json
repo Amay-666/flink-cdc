@@ -1,0 +1,27 @@
+{
+  "source": {
+    "version": "1.9.7.Final",
+    "connector": "mysql",
+    "server": "mysql-server-1"
+  },
+  "databaseName": "inventory",
+  "ddl": "RENAME TABLE `orders` TO `orders_archive`",
+  "tableChanges": [
+    {
+      "type": "CREATE",
+      "id": "\"inventory\".\"orders_archive\"",
+      "table": {
+        "defaultCharsetName": "utf8mb4",
+        "columnNames": [
+          "id",
+          "customer_id",
+          "amount",
+          "created_at"
+        ],
+        "primaryKeyColumnNames": [
+          "id"
+        ]
+      }
+    }
+  ]
+}

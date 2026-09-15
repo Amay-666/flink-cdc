@@ -1,0 +1,26 @@
+{
+  "schema": {
+    "type": "struct",
+    "name": "inventory.orders.Envelope",
+    "optional": false
+  },
+  "payload": {
+    "before": null,
+    "after": {
+      "id": 1,
+      "customer_id": 1001,
+      "amount": 12.34,
+      "created_at": 1789456800000
+    },
+    "source": {
+      "version": "1.9.7.Final",
+      "connector": "mysql",
+      "db": "inventory",
+      "table": "orders",
+      "ts_ms": 1705300100000,
+      "snapshot": "false"
+    },
+    "op": "c",
+    "ts_ms": 1705300100500
+  }
+}

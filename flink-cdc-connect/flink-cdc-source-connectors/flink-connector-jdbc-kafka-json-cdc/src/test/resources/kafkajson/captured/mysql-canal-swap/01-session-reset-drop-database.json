@@ -1,0 +1,1 @@
+{"data":null,"database":"inventory","es":1789475603000,"gtid":"","id":3,"isDdl":true,"mysqlType":null,"old":null,"pkNames":null,"sql":"DROP DATABASE IF EXISTS inventory","sqlType":null,"table":"","ts":1789475603531,"type":"QUERY"}

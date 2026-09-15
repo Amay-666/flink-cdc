@@ -1,0 +1,1 @@
+{"data":null,"database":"","es":1789474157000,"gtid":"","id":2,"isDdl":false,"mysqlType":null,"old":null,"pkNames":null,"sql":"INSERT INTO orders_archive (customer_id, amount, created_at) VALUES (1002, 55.55, '2026-09-15 10:05:00')","sqlType":null,"table":"orders_archive","ts":1789474157951,"type":"QUERY"}

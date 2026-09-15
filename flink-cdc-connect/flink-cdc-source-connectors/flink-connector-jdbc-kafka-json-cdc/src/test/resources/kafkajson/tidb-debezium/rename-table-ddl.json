@@ -1,0 +1,15 @@
+{
+  "payload": {
+    "databaseName": "test",
+    "ddl": "RENAME TABLE `test_schema_change4` TO `test_schema_change3`",
+    "tableChanges": [],
+    "ts_ms": 1789455153019,
+    "source": {
+      "db": "test",
+      "table": null,
+      "ts_ms": 1789455152021,
+      "commit_ts": 469094931371393026,
+      "cluster_id": "7678521529001634246"
+    }
+  }
+}

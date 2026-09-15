@@ -1,0 +1,1 @@
+{"data":null,"database":"inventory","es":1789474157000,"gtid":"","id":2,"isDdl":true,"mysqlType":null,"old":null,"pkNames":null,"sql":"RENAME TABLE t1 TO t1_new, t2 TO t2_new","sqlType":null,"table":"t1_new","ts":1789474157951,"type":"RENAME"}

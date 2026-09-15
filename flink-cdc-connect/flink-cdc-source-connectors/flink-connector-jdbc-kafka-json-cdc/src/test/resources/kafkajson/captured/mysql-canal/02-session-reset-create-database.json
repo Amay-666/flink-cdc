@@ -1,0 +1,1 @@
+{"data":null,"database":"inventory","es":1789474103000,"gtid":"","id":1,"isDdl":true,"mysqlType":null,"old":null,"pkNames":null,"sql":"CREATE DATABASE inventory DEFAULT CHARSET utf8mb4","sqlType":null,"table":"","ts":1789474106233,"type":"QUERY"}

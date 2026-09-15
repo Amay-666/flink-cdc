@@ -1,0 +1,1 @@
+{"id":0,"database":"test","table":"r1","pkNames":null,"isDdl":true,"type":"CREATE","es":1789474704282,"ts":1789474707719,"sql":"CREATE TABLE `test`.`r1` (`id` INT NOT NULL,`v` VARCHAR(8) DEFAULT NULL,PRIMARY KEY(`id`))","sqlType":null,"mysqlType":null,"data":null,"old":null}

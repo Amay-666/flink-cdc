@@ -1,0 +1,1 @@
+{"id":0,"database":"test","table":"r1_new","pkNames":null,"isDdl":true,"type":"RENAME","es":1789474704432,"ts":1789474711331,"sql":"RENAME TABLE `test`.`r1` TO `test`.`r1_new`","sqlType":null,"mysqlType":null,"data":null,"old":null}

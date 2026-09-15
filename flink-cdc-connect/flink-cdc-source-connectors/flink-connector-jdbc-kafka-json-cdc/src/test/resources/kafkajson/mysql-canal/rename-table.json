@@ -1,0 +1,15 @@
+{
+  "data": null,
+  "database": "inventory",
+  "es": 1705300200000,
+  "id": 4,
+  "isDdl": true,
+  "mysqlType": null,
+  "old": null,
+  "pkNames": null,
+  "sql": "RENAME TABLE `orders` TO `orders_archive`",
+  "sqlType": null,
+  "table": "orders",
+  "ts": 1705300200500,
+  "type": "RENAME"
+}

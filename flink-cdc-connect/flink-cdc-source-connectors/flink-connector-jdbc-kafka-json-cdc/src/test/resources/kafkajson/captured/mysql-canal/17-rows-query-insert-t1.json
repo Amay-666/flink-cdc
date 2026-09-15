@@ -1,0 +1,1 @@
+{"data":null,"database":"","es":1789474157000,"gtid":"","id":2,"isDdl":false,"mysqlType":null,"old":null,"pkNames":null,"sql":"INSERT INTO t1 VALUES (1, 'one')","sqlType":null,"table":"t1","ts":1789474157951,"type":"QUERY"}

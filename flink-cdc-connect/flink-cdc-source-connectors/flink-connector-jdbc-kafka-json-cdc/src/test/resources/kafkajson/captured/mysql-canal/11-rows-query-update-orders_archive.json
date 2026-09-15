@@ -1,0 +1,1 @@
+{"data":null,"database":"","es":1789474157000,"gtid":"","id":2,"isDdl":false,"mysqlType":null,"old":null,"pkNames":null,"sql":"UPDATE orders_archive SET amount = 66.66 WHERE id = 2","sqlType":null,"table":"orders_archive","ts":1789474157951,"type":"QUERY"}
