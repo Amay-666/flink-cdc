@@ -25,6 +25,7 @@ import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
+import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent.TableRename;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.serializer.KafkaJsonEventTypeInfo;
 import org.apache.flink.cdc.connectors.kafkajson.source.handler.KafkaJsonSchemaChangeHandler;
@@ -38,12 +39,15 @@ import org.apache.flink.cdc.debezium.table.DebeziumChangelogMode;
 import io.debezium.connector.AbstractSourceInfo;
 import io.debezium.data.Envelope;
 import io.debezium.document.Array;
+import io.debezium.document.Document;
 import io.debezium.relational.Tables;
 import io.debezium.relational.history.HistoryRecord;
 import io.debezium.relational.history.TableChanges;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
+
+import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -95,7 +99,7 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
             try {
                 HistoryRecord historyRecord = getHistoryRecord(record);
                 if (isRenameTableChange(historyRecord)) {
-                    return handleRenameTable(record, historyRecord);
+                    return handleRenameTable(historyRecord);
                 }
                 if (isTruncateTableChange(historyRecord)) {
                     return handleTruncateTable(record, historyRecord);
@@ -169,50 +173,84 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
     }
 
     /**
-     * Rebuilds the {@link RenameTableEvent} of a {@code RENAME_TABLE} schema-change record. The old
-     * table id comes from the record's {@code source}, the new table id and the renamed schema come
-     * from the custom history-record fields the canal DDL handler attached.
+     * Rebuilds the {@link RenameTableEvent} of a {@code RENAME_TABLE} schema-change record.
+     *
+     * <p>Both table ids of every pair come from the custom history-record fields the DDL handler
+     * attached, never from the record's {@code source}: a canal message announces the
+     * <b>post</b>-rename table name, so a pair rebuilt from the source would read {@code old ==
+     * new}, and a Debezium schema-change record announces no table name at all. The schema of each
+     * renamed table travels as a CREATE change under its new table id, in the same order as the
+     * pairs.
      */
-    private List<SchemaChangeEvent> handleRenameTable(
-            SourceRecord record, HistoryRecord historyRecord) throws IOException {
-        String newTableIdStr =
-                historyRecord.document().getString(KafkaJsonSchemaChangeHandler.NEW_TABLE_ID);
-        if (newTableIdStr == null) {
+    private List<SchemaChangeEvent> handleRenameTable(HistoryRecord historyRecord)
+            throws IOException {
+        Array pairsArray =
+                historyRecord.document().getArray(KafkaJsonSchemaChangeHandler.RENAME_PAIRS);
+        if (pairsArray == null || pairsArray.isEmpty()) {
             return Collections.emptyList();
         }
-        TableId oldTableId = getTableId(record);
-        TableId newTableId =
-                KafkaJsonSchemaUtils.toCommonTableId(
-                        io.debezium.relational.TableId.parse(newTableIdStr));
-        // The schema of the renamed table travels as the single CREATE change of the history
-        // record.
-        io.debezium.relational.Table newTable = findCreatedTable(historyRecord);
-        // Keep the internal registry in sync: the old table is gone, the new table registered.
-        tables.removeTable(KafkaJsonSchemaUtils.toDbzTableId(oldTableId));
-        if (newTable != null) {
-            tables.overwriteTable(newTable);
+        List<io.debezium.relational.Table> newTables = findCreatedTables(historyRecord);
+        List<TableRename> pairs = new ArrayList<>(pairsArray.size());
+        for (int i = 0; i < pairsArray.size(); i++) {
+            Document pairDocument = pairsArray.get(i).asDocument();
+            TableId oldTableId =
+                    readTableId(pairDocument, KafkaJsonSchemaChangeHandler.OLD_TABLE_ID);
+            TableId newTableId =
+                    readTableId(pairDocument, KafkaJsonSchemaChangeHandler.NEW_TABLE_ID);
+            if (oldTableId == null || newTableId == null) {
+                continue;
+            }
+            io.debezium.relational.Table newTable = i < newTables.size() ? newTables.get(i) : null;
+            // Keep the internal registry in sync: the old table is gone, the new one registered.
+            tables.removeTable(KafkaJsonSchemaUtils.toDbzTableId(oldTableId));
+            if (newTable != null) {
+                tables.overwriteTable(newTable);
+            }
+            pairs.add(
+                    new TableRename(
+                            oldTableId,
+                            newTableId,
+                            newTable == null
+                                    ? org.apache.flink.cdc.common.schema.Schema.newBuilder().build()
+                                    : KafkaJsonSchemaUtils.toSchema(newTable)));
+        }
+        if (pairs.isEmpty()) {
+            return Collections.emptyList();
         }
         String sql = historyRecord.document().getString(HistoryRecord.Fields.DDL_STATEMENTS);
-        org.apache.flink.cdc.common.schema.Schema schema =
-                newTable == null
-                        ? org.apache.flink.cdc.common.schema.Schema.newBuilder().build()
-                        : KafkaJsonSchemaUtils.toSchema(newTable);
-        return Collections.singletonList(new RenameTableEvent(oldTableId, newTableId, schema, sql));
+        return Collections.singletonList(new RenameTableEvent(pairs, sql));
     }
 
-    private io.debezium.relational.Table findCreatedTable(HistoryRecord historyRecord)
+    /** Reads one table id of a rename-pair document, or {@code null} when the field is absent. */
+    @Nullable
+    private static TableId readTableId(Document pairDocument, String field) {
+        if (pairDocument == null) {
+            return null;
+        }
+        String value = pairDocument.getString(field);
+        return value == null
+                ? null
+                : KafkaJsonSchemaUtils.toCommonTableId(io.debezium.relational.TableId.parse(value));
+    }
+
+    /**
+     * Returns the tables of every CREATE change of the history record, in order: a rename carries
+     * one per pair, under the pair's new table id.
+     */
+    private List<io.debezium.relational.Table> findCreatedTables(HistoryRecord historyRecord)
             throws IOException {
         Array tableChanges = historyRecord.document().getArray(HistoryRecord.Fields.TABLE_CHANGES);
         if (tableChanges == null) {
-            return null;
+            return Collections.emptyList();
         }
         TableChanges changes = TABLE_CHANGE_SERIALIZER.deserialize(tableChanges, true);
+        List<io.debezium.relational.Table> created = new ArrayList<>();
         for (TableChanges.TableChange change : changes) {
             if (change.getType() == TableChanges.TableChangeType.CREATE) {
-                return change.getTable();
+                created.add(change.getTable());
             }
         }
-        return null;
+        return created;
     }
 
     /**

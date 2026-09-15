@@ -33,6 +33,7 @@ import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordinator.KafkaJs
 import org.junit.Test;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -109,6 +110,40 @@ public class KafkaJsonSchemaManagerTest {
         assertThat(manager.getLatestEvolvedSchema(ORDERS)).contains(SCHEMA_V2);
         assertThat(manager.getLatestOriginalSchema(ORDERS)).contains(SCHEMA_V2);
         assertThat(manager.getEvolvedSchema(ORDERS, 0)).isEqualTo(SCHEMA_V2);
+    }
+
+    @Test
+    public void testRenamingTwoTablesThatExchangeNamesKeepsBothSchemas() {
+        apply(new CreateTableEvent(ORDERS, SCHEMA_V1));
+        apply(new CreateTableEvent(ARCHIVE, SCHEMA_V2));
+
+        RenameTableEvent swap =
+                new RenameTableEvent(
+                        Arrays.asList(
+                                new RenameTableEvent.TableRename(ORDERS, ARCHIVE, SCHEMA_V1),
+                                new RenameTableEvent.TableRename(ARCHIVE, ORDERS, SCHEMA_V2)),
+                        "RENAME TABLE `shop`.`orders` TO `shop`.`orders_archive`, "
+                                + "`shop`.`orders_archive` TO `shop`.`orders`");
+
+        // Both target names are names the statement itself renames away, so "the target already has
+        // a registered schema" says nothing about whether the swap was applied: it is applied
+        // again, which is idempotent.
+        assertThat(manager.isOriginalSchemaChangeEventRedundant(swap)).isFalse();
+
+        apply(swap);
+
+        // Each table keeps its own columns and only its name moves, so applying the pairs in place
+        // would have the second pair read back the schema the first just wrote.
+        assertThat(manager.getLatestOriginalSchema(ORDERS)).contains(SCHEMA_V2);
+        assertThat(manager.getLatestOriginalSchema(ARCHIVE)).contains(SCHEMA_V1);
+        assertThat(manager.getLatestEvolvedSchema(ORDERS)).contains(SCHEMA_V2);
+        assertThat(manager.getLatestEvolvedSchema(ARCHIVE)).contains(SCHEMA_V1);
+
+        // A replay of the statement is idempotent for the same reason.
+        apply(swap);
+
+        assertThat(manager.getLatestOriginalSchema(ORDERS)).contains(SCHEMA_V2);
+        assertThat(manager.getLatestEvolvedSchema(ARCHIVE)).contains(SCHEMA_V1);
     }
 
     @Test

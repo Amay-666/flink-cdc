@@ -60,6 +60,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
+import java.util.stream.Collectors;
 
 import static org.apache.flink.cdc.common.utils.Preconditions.checkArgument;
 
@@ -220,11 +221,26 @@ public class KafkaJsonSchemaManager {
             }
             return true;
         } else if (event instanceof RenameTableEvent) {
-            // Applied once the renamed table id has been registered. An id that is free again still
-            // has an entry, so it is checked against the removed set as well.
-            TableId newTableId = ((RenameTableEvent) event).getNewTableId();
-            return getLatestOriginalSchema(newTableId).isPresent()
-                    && !removedTables.contains(newTableId);
+            // Applied once every renamed table id has been registered. An id that is free again
+            // still has an entry, so it is checked against the removed set as well.
+            List<RenameTableEvent.TableRename> pairs = ((RenameTableEvent) event).getPairs();
+            Set<TableId> oldTableIds =
+                    pairs.stream()
+                            .map(RenameTableEvent.TableRename::getOldTableId)
+                            .collect(Collectors.toSet());
+            for (RenameTableEvent.TableRename pair : pairs) {
+                TableId newTableId = pair.getNewTableId();
+                // A name that the same statement renames away is occupied before and after it —
+                // an `a TO b, b TO a` swap leaves both names holding a table, so both targets
+                // already have a registered schema and "already registered" says nothing about
+                // whether this rename was applied.
+                if (oldTableIds.contains(newTableId)
+                        || !getLatestOriginalSchema(newTableId).isPresent()
+                        || removedTables.contains(newTableId)) {
+                    return false;
+                }
+            }
+            return true;
         } else if (event instanceof DropTableEvent) {
             // Drop is re-playable: DROP TABLE IF EXISTS is idempotent, and the schema entry is kept
             return false;
@@ -359,19 +375,33 @@ public class KafkaJsonSchemaManager {
             return;
         }
         if (event instanceof RenameTableEvent) {
-            // Register the renamed schema under the new table id and keep the old table id entry
-            // (the released SchemaOperator refreshes its per-table caches under the old id after
-            // processing a rename).
+            // Register every renamed schema under its new table id and keep the old table id
+            // entries (the released SchemaOperator refreshes its per-table caches under the first
+            // old id after processing a rename).
             RenameTableEvent renameTableEvent = (RenameTableEvent) event;
             LOG.info("Handling schema change event: {}", event);
-            TableId newTableId = renameTableEvent.getNewTableId();
-            // The old id is free again: no table carries it any more, so a later CREATE TABLE of
-            // that name — or a rename back onto it — must be applied rather than discarded.
-            removedTables.add(renameTableEvent.getOldTableId());
-            if (resetRemovedTable(schemaMap, newTableId, renameTableEvent.getSchema(), lastApply)) {
-                return;
+            List<RenameTableEvent.TableRename> pairs = renameTableEvent.getPairs();
+            Set<TableId> newTableIds =
+                    pairs.stream()
+                            .map(RenameTableEvent.TableRename::getNewTableId)
+                            .collect(Collectors.toSet());
+            for (RenameTableEvent.TableRename pair : pairs) {
+                // The old id is free again: no table carries it any more, so a later CREATE TABLE
+                // of that name — or a rename back onto it — must be applied rather than discarded.
+                // A name another pair of the same statement renames onto is the exception: a swap
+                // leaves it occupied, and marking it removed would discard what that pair
+                // registers for it.
+                if (!newTableIds.contains(pair.getOldTableId())) {
+                    removedTables.add(pair.getOldTableId());
+                }
             }
-            registerNewSchema(schemaMap, newTableId, renameTableEvent.getSchema());
+            for (RenameTableEvent.TableRename pair : pairs) {
+                if (resetRemovedTable(
+                        schemaMap, pair.getNewTableId(), pair.getSchema(), lastApply)) {
+                    continue;
+                }
+                registerNewSchema(schemaMap, pair.getNewTableId(), pair.getSchema());
+            }
             return;
         }
         if (event instanceof DropTableEvent) {

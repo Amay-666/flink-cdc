@@ -225,15 +225,28 @@ public class DorisSinkWriter implements SinkWriter<Event> {
                     create.tableId(), new DorisRowConverter(create.getSchema(), pipelineZoneId));
         } else if (event instanceof RenameTableEvent) {
             RenameTableEvent rename = (RenameTableEvent) event;
-            // Subsequent data carries the new table id: re-key the local view.
-            schemaMaps.remove(rename.getOldTableId());
-            rowConverters.remove(rename.getOldTableId());
-            schemaMaps.put(rename.getNewTableId(), rename.getSchema());
-            rowConverters.put(
-                    rename.getNewTableId(),
-                    new DorisRowConverter(rename.getSchema(), pipelineZoneId));
-            if (buffer.containsKey(rename.getOldTableId())) {
-                buffer.put(rename.getNewTableId(), buffer.remove(rename.getOldTableId()));
+            // Subsequent data carries the new table ids: re-key the local view. Every source key is
+            // read out before any target key is written — an `a TO b, b TO a` swap moves both
+            // names, and in-place moves would have the second pair read back what the first wrote.
+            //
+            // Moving the buffered rows is defensive: the blocking protocol flushes the writer
+            // before the rename DDL is applied, so the buffers are normally empty here.
+            List<RenameTableEvent.TableRename> pairs = rename.getPairs();
+            Map<TableId, ArrayDeque<Map<String, Object>>> movedBuffers = new HashMap<>();
+            for (RenameTableEvent.TableRename pair : pairs) {
+                schemaMaps.remove(pair.getOldTableId());
+                rowConverters.remove(pair.getOldTableId());
+                ArrayDeque<Map<String, Object>> rows = buffer.remove(pair.getOldTableId());
+                if (rows != null) {
+                    movedBuffers.put(pair.getNewTableId(), rows);
+                }
+            }
+            buffer.putAll(movedBuffers);
+            for (RenameTableEvent.TableRename pair : pairs) {
+                schemaMaps.put(pair.getNewTableId(), pair.getSchema());
+                rowConverters.put(
+                        pair.getNewTableId(),
+                        new DorisRowConverter(pair.getSchema(), pipelineZoneId));
             }
         } else if (event instanceof DropTableEvent) {
             ArrayDeque<Map<String, Object>> dropped = buffer.remove(event.tableId());

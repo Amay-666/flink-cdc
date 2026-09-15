@@ -51,6 +51,7 @@ import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.Test;
 
 import java.sql.Types;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -276,6 +277,7 @@ public class KafkaJsonEventDeserializerTest {
                 deserializer.deserialize(
                         renameTableRecord(
                                 renamedTable,
+                                "test.users",
                                 "test.vip_users",
                                 "RENAME TABLE `test`.`users` TO `test`.`vip_users`"));
 
@@ -287,6 +289,52 @@ public class KafkaJsonEventDeserializerTest {
         assertThat(rename.getSchema().getColumns()).hasSize(2);
         assertThat(rename.getSchema().primaryKeys()).containsExactly("id");
         assertThat(rename.getSql()).contains("RENAME TABLE");
+    }
+
+    @Test
+    public void testRenameTableOfSeveralPairsBecomesOneEvent() throws Exception {
+        deserializer.deserialize(createRecord(BASE_TABLE));
+
+        // RENAME TABLE users TO orders, orders TO users: the two tables exchange names, so the
+        // renamed `orders` content is registered under `users` and vice versa.
+        Table ordersRenamedToUsers =
+                Table.editor()
+                        .tableId(new io.debezium.relational.TableId("test", null, "users"))
+                        .addColumn(column("id", "BIGINT", Types.BIGINT, false, 1))
+                        .setPrimaryKeyNames("id")
+                        .create();
+        Table usersRenamedToOrders =
+                Table.editor()
+                        .tableId(new io.debezium.relational.TableId("test", null, "orders"))
+                        .addColumn(column("id", "BIGINT", Types.BIGINT, false, 1))
+                        .addColumn(column("name", "VARCHAR", Types.VARCHAR, true, 2, 255))
+                        .setPrimaryKeyNames("id")
+                        .create();
+
+        List<? extends Event> events =
+                deserializer.deserialize(
+                        renameTableRecord(
+                                Arrays.asList(ordersRenamedToUsers, usersRenamedToOrders),
+                                Arrays.asList("test.orders", "test.users"),
+                                Arrays.asList("test.users", "test.orders"),
+                                "RENAME TABLE `test`.`users` TO `test`.`orders`, "
+                                        + "`test`.`orders` TO `test`.`users`"));
+
+        // One statement is one event carrying both pairs: a sink that has to exchange two Doris
+        // table names needs to see the cycle, and the released SchemaOperator would deadlock a
+        // coordinator that waited for a second event to arrive.
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0)).isInstanceOf(RenameTableEvent.class);
+        List<RenameTableEvent.TableRename> pairs = ((RenameTableEvent) events.get(0)).getPairs();
+        assertThat(pairs).hasSize(2);
+        // every pair carries the schema of its own table, zipped from the CREATE changes in order
+        assertThat(pairs.get(0).getOldTableId()).isEqualTo(TableId.tableId("test", "orders"));
+        assertThat(pairs.get(0).getNewTableId()).isEqualTo(TABLE_ID);
+        assertThat(pairs.get(0).getSchema().getColumns()).hasSize(1);
+        assertThat(pairs.get(1).getOldTableId()).isEqualTo(TABLE_ID);
+        assertThat(pairs.get(1).getNewTableId()).isEqualTo(TableId.tableId("test", "orders"));
+        assertThat(pairs.get(1).getSchema().getColumns()).hasSize(2);
+        assertThat(pairs.get(1).getSchema().primaryKeys()).containsExactly("id");
     }
 
     @Test
@@ -318,7 +366,8 @@ public class KafkaJsonEventDeserializerTest {
                         .create();
 
         List<? extends Event> events =
-                deserializer.deserialize(renameTableRecord(renamedTable, "test.vip_users", null));
+                deserializer.deserialize(
+                        renameTableRecord(renamedTable, "test.users", "test.vip_users", null));
 
         assertThat(events).hasSize(1);
         RenameTableEvent rename = (RenameTableEvent) events.get(0);
@@ -465,13 +514,40 @@ public class KafkaJsonEventDeserializerTest {
 
     /**
      * Builds a schema-change record for a {@code RENAME TABLE}: the schema of the renamed table is
-     * carried as a single CREATE table change, and the canal DDL handler attaches the custom {@code
-     * tableChangeType}/{@code newTableId} fields to the history record.
+     * carried as a single CREATE table change under its new id, and the canal DDL handler attaches
+     * the custom {@code tableChangeType}/{@code renamePairs} fields to the history record.
+     *
+     * <p>The record's {@code source.table} announces the <b>post</b>-rename name, as a canal
+     * message does, so a reader that took the old id from the source would end up with {@code old
+     * == new}: both ids have to come from the pairs.
      */
-    private static SourceRecord renameTableRecord(Table table, String newTableId, String sql) {
+    private static SourceRecord renameTableRecord(
+            Table table, String oldTableId, String newTableId, String sql) {
+        return renameTableRecord(
+                Collections.singletonList(table),
+                Collections.singletonList(oldTableId),
+                Collections.singletonList(newTableId),
+                sql);
+    }
+
+    /**
+     * Builds a {@code RENAME TABLE} schema-change record of several pairs; the CREATE changes carry
+     * the schema of each renamed table, in the same order as the pairs.
+     */
+    private static SourceRecord renameTableRecord(
+            List<Table> tables, List<String> oldTableIds, List<String> newTableIds, String sql) {
         try {
             TableChanges changes = new TableChanges();
-            changes.create(table);
+            Array pairs = Array.create();
+            for (int i = 0; i < tables.size(); i++) {
+                changes.create(tables.get(i));
+                pairs.add(
+                        Document.create()
+                                .set(KafkaJsonSchemaChangeHandler.OLD_TABLE_ID, oldTableIds.get(i))
+                                .set(
+                                        KafkaJsonSchemaChangeHandler.NEW_TABLE_ID,
+                                        newTableIds.get(i)));
+            }
             Array array = new FlinkJsonTableChangeSerializer().serialize(changes);
             Document historyDoc =
                     Document.create()
@@ -479,7 +555,7 @@ public class KafkaJsonEventDeserializerTest {
                             .set(
                                     KafkaJsonSchemaChangeHandler.TABLE_CHANGE_TYPE,
                                     KafkaJsonSchemaChangeHandler.TABLE_CHANGE_TYPE_RENAME_TABLE)
-                            .set(KafkaJsonSchemaChangeHandler.NEW_TABLE_ID, newTableId);
+                            .set(KafkaJsonSchemaChangeHandler.RENAME_PAIRS, pairs);
             if (sql != null) {
                 historyDoc.set(HistoryRecord.Fields.DDL_STATEMENTS, sql);
             }
@@ -505,7 +581,9 @@ public class KafkaJsonEventDeserializerTest {
                                     "source",
                                     new Struct(sourceSchema)
                                             .put("db", "test")
-                                            .put("table", "users"))
+                                            .put(
+                                                    "table",
+                                                    tables.get(tables.size() - 1).id().table()))
                             .put("historyRecord", historyRecordStr);
             return new SourceRecord(
                     Collections.emptyMap(),

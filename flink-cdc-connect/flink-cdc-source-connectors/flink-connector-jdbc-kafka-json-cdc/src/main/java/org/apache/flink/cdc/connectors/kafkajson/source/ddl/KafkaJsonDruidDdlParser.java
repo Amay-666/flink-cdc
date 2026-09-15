@@ -76,7 +76,7 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
 
     @Override
     public KafkaJsonDdlParsedResult parse(
-            String database, TableId tableId, @Nullable Table currentTable, String ddl) {
+            String database, @Nullable TableId tableId, @Nullable Table currentTable, String ddl) {
         try {
             return parseStatement(database, tableId, currentTable, ddl);
         } catch (Exception e) {
@@ -98,16 +98,24 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
     }
 
     private static KafkaJsonDdlParsedResult parseStatement(
-            String database, TableId tableId, @Nullable Table currentTable, String ddl) {
+            String database, @Nullable TableId tableId, @Nullable Table currentTable, String ddl) {
         SQLStatement statement = SQLUtils.parseSingleMysqlStatement(ddl);
         if (statement instanceof SQLCreateTableStatement) {
-            return parseCreate((SQLCreateTableStatement) statement, tableId);
+            // A CREATE needs the id of the table it creates, which the message supplies; it does
+            // not
+            // carry one for a Debezium schema-change record, and deriving it from the statement
+            // would
+            // build a schema under a name the sink's table mapping has not seen.
+            return tableId == null
+                    ? null
+                    : parseCreate((SQLCreateTableStatement) statement, tableId);
         }
         if (statement instanceof MySqlRenameTableStatement) {
-            return parseRenameTable((MySqlRenameTableStatement) statement, tableId, currentTable);
+            return parseRenameTable(
+                    (MySqlRenameTableStatement) statement, database, tableId, currentTable);
         }
         if (statement instanceof SQLAlterTableStatement) {
-            return parseAlter((SQLAlterTableStatement) statement, tableId, currentTable);
+            return parseAlter((SQLAlterTableStatement) statement, database, tableId, currentTable);
         }
         if (statement instanceof SQLDropTableStatement) {
             return KafkaJsonDdlParsedResult.drop(tableId, currentTable);
@@ -171,32 +179,56 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
     }
 
     /**
-     * Parses a {@code RENAME TABLE a TO b} (the statement may rename several tables at once; only
-     * the first pair is modeled, matching the single table announced by the canal message).
+     * Parses a {@code RENAME TABLE a TO b[, c TO d]}. Every pair of the statement is modeled — a
+     * rename is applied atomically by the database, and keeping the pairs together is what lets a
+     * downstream tell a plain rename from a name swap. The announced {@code tableId} is ignored for
+     * the old side (see {@link KafkaJsonRenameTableIds}): the SQL names the tables.
      */
     @Nullable
     private static KafkaJsonDdlParsedResult parseRenameTable(
-            MySqlRenameTableStatement statement, TableId tableId, @Nullable Table currentTable) {
-        List<MySqlRenameTableStatement.Item> items = statement.getItems();
-        if (items == null || items.isEmpty()) {
+            MySqlRenameTableStatement statement,
+            String database,
+            @Nullable TableId tableId,
+            @Nullable Table currentTable) {
+        List<KafkaJsonRenamePair> ids = KafkaJsonRenameTableIds.extract(statement, database);
+        if (ids == null) {
             return null;
         }
-        MySqlRenameTableStatement.Item item = items.get(0);
-        if (item.getTo() == null) {
-            return null;
-        }
-        TableId newTableId =
-                new TableId(
-                        tableId.catalog(), tableId.schema(), unquote(item.getTo().getSimpleName()));
-        Table newTable =
-                currentTable == null ? null : currentTable.edit().tableId(newTableId).create();
-        return KafkaJsonDdlParsedResult.renameTable(tableId, newTableId, currentTable, newTable);
+        return KafkaJsonDdlParsedResult.renameTable(resolveRenamePairs(ids, tableId, currentTable));
+    }
+
+    /**
+     * Resolves the schema of every rename pair. Only the table the caller announced a schema for
+     * can be resolved here — the parser sees a single {@code currentTable} — so the pairs of a
+     * multi-table statement other than the announced one carry a {@code null} schema, which {@code
+     * KafkaJsonSchemaChangeHandler} fills in from the shared registry.
+     */
+    private static List<KafkaJsonRenamePair> resolveRenamePairs(
+            List<KafkaJsonRenamePair> ids,
+            @Nullable TableId tableId,
+            @Nullable Table currentTable) {
+        return KafkaJsonDdlParsedResult.resolveSchemas(
+                ids, oldTableId -> oldTableId.equals(tableId) ? currentTable : null);
     }
 
     @Nullable
     private static KafkaJsonDdlParsedResult parseAlter(
-            SQLAlterTableStatement statement, TableId tableId, @Nullable Table currentTable) {
+            SQLAlterTableStatement statement,
+            String database,
+            @Nullable TableId tableId,
+            @Nullable Table currentTable) {
         if (currentTable == null) {
+            // A rename needs no pre-rename schema to be announced — only its two table ids, which
+            // come from the SQL. Announcing it lets the schema handler report the unknown table
+            // instead of silently dropping the change; every other ALTER cannot be applied without
+            // a schema to apply it on and is skipped.
+            List<KafkaJsonRenamePair> renameIds =
+                    KafkaJsonRenameTableIds.extract(statement, database);
+            if (renameIds != null && !renameIds.isEmpty()) {
+                KafkaJsonRenamePair pair = renameIds.get(0);
+                return KafkaJsonDdlParsedResult.renameTable(
+                        pair.getOldTableId(), pair.getNewTableId(), null, null);
+            }
             LOG.warn("Skipping ALTER on {} without a known current schema: {}", tableId, statement);
             return null;
         }
@@ -293,8 +325,16 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
         }
         Table newTable = table.create();
         if (!effectiveTableId.equals(tableId)) {
+            // The pre-rename id comes from the statement, not from the announced table: a canal
+            // message announces the post-rename name, so the announced id is the *new* side.
+            List<KafkaJsonRenamePair> renameIds =
+                    KafkaJsonRenameTableIds.extract(statement, database);
+            KafkaJsonRenamePair pair =
+                    renameIds == null || renameIds.isEmpty()
+                            ? KafkaJsonRenamePair.of(tableId, effectiveTableId)
+                            : renameIds.get(0);
             return KafkaJsonDdlParsedResult.renameTable(
-                    tableId, effectiveTableId, currentTable, newTable);
+                    pair.getOldTableId(), pair.getNewTableId(), currentTable, newTable);
         }
         if (KafkaJsonDdlParsedResult.isPureColumnRename(currentTable, newTable)) {
             return KafkaJsonDdlParsedResult.renameColumn(tableId, currentTable, newTable);

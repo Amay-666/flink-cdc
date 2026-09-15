@@ -17,6 +17,8 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.ddl;
 
+import com.alibaba.druid.sql.SQLUtils;
+import com.alibaba.druid.sql.ast.SQLStatement;
 import io.debezium.connector.mysql.antlr.MySqlAntlrDdlParser;
 import io.debezium.relational.Table;
 import io.debezium.relational.TableId;
@@ -38,10 +40,16 @@ import java.util.stream.Collectors;
  * <p>The current schema, when known, is seeded into the {@link Tables} instance so that {@code
  * ALTER} statements are applied on top of it; after {@code parse} the affected table is read back
  * from the same instance. The change type is inferred from the seed: a table that existed before
- * and is gone afterwards without any replacement was dropped, the same table present under another
- * id was renamed ({@link KafkaJsonTableChangeType#RENAME_TABLE}), a table that did not exist and
- * now does was created, anything else on a known table is an alter — or a single-column rename,
- * when the two schemas only differ in one column name.
+ * and is gone afterwards without any replacement was dropped, a table that did not exist and now
+ * does was created, anything else on a known table is an alter — or a single-column rename, when
+ * the two schemas only differ in one column name.
+ *
+ * <p>Table renames are the exception: they are read from the statement with Druid ({@link
+ * KafkaJsonRenameTableIds}) instead of being inferred from the seeded tables. The ANTLR parser
+ * cannot even apply a rename whose pre-rename schema was never seeded, and inferring it from "the
+ * announced table id disappeared and exactly one new one appeared" recognizes neither the several
+ * pairs of one {@code RENAME TABLE} nor an {@code a TO b, b TO a} swap — both would degrade to a
+ * drop. The inference is kept as a fallback below for a rename Druid cannot parse.
  */
 public class KafkaJsonDebeziumDdlParser implements KafkaJsonDdlParser {
 
@@ -52,8 +60,23 @@ public class KafkaJsonDebeziumDdlParser implements KafkaJsonDdlParser {
 
     @Override
     public KafkaJsonDdlParsedResult parse(
-            String database, TableId tableId, @Nullable Table currentTable, String ddl) {
+            String database, @Nullable TableId tableId, @Nullable Table currentTable, String ddl) {
         try {
+            List<KafkaJsonRenamePair> renamePairs = parseRenameIds(database, ddl);
+            if (renamePairs != null) {
+                return KafkaJsonDdlParsedResult.renameTable(
+                        KafkaJsonDdlParsedResult.resolveSchemas(
+                                renamePairs,
+                                oldTableId -> oldTableId.equals(tableId) ? currentTable : null));
+            }
+            if (tableId == null) {
+                // No id to look the change up under: a Debezium schema-change record names its
+                // database and its DDL but no table, and the ANTLR parse below is read back by
+                // table
+                // id. Diffing the parsed tables instead would recognize neither a multi-pair rename
+                // nor an a-to-b, b-to-a swap, so the change is reported as no change.
+                return null;
+            }
             tables.clear();
             if (currentTable != null) {
                 tables.overwriteTable(currentTable);
@@ -97,10 +120,32 @@ public class KafkaJsonDebeziumDdlParser implements KafkaJsonDdlParser {
     }
 
     /**
+     * Returns the rename pairs of the statement, or {@code null} when it is not a rename this
+     * parser recognizes. The name resolution lives in {@link KafkaJsonRenameTableIds}, which both
+     * DDL parsers share; a statement Druid cannot parse falls through to the ANTLR path below
+     * rather than being reported as a rename.
+     */
+    @Nullable
+    private static List<KafkaJsonRenamePair> parseRenameIds(String database, String ddl) {
+        SQLStatement statement;
+        try {
+            statement = SQLUtils.parseSingleMysqlStatement(ddl);
+        } catch (Exception e) {
+            LOG.debug("Druid cannot parse this DDL, using the ANTLR parser instead: {}", ddl, e);
+            return null;
+        }
+        if (!KafkaJsonRenameTableIds.isRename(statement)) {
+            return null;
+        }
+        return KafkaJsonRenameTableIds.extract(statement, database);
+    }
+
+    /**
      * Returns the id of the table {@code tableId} was renamed to, or {@code null} when the
      * announced table was dropped instead: a table id present after the parse but not among the
-     * seeded current schema. Only a single replacement is recognized (a statement renaming several
-     * tables at once falls back to a {@code DROP}).
+     * seeded current schema. This is the fallback for a rename {@link #parseRenameIds} does not
+     * recognize, and only a single replacement is recognized (a statement renaming several tables
+     * at once falls back to a {@code DROP}).
      */
     @Nullable
     private static TableId findRenamedTable(TableId tableId, Set<TableId> tableIds) {

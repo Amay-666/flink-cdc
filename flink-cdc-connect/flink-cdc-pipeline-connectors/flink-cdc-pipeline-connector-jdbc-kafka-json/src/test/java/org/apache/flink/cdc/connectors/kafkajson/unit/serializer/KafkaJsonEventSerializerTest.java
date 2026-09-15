@@ -92,6 +92,30 @@ public class KafkaJsonEventSerializerTest {
     }
 
     @Test
+    public void testRenameTableEventOfSeveralPairsRoundTrip() throws Exception {
+        RenameTableEvent original =
+                new RenameTableEvent(
+                        Arrays.asList(
+                                new RenameTableEvent.TableRename(
+                                        TableId.tableId("test", "users"),
+                                        TableId.tableId("test", "orders"),
+                                        schema()),
+                                new RenameTableEvent.TableRename(
+                                        TableId.tableId("test", "orders"),
+                                        TableId.tableId("test", "users"),
+                                        schema())),
+                        "RENAME TABLE `test`.`users` TO `test`.`orders`, `test`.`orders` TO `test`.`users`");
+
+        Event restored = roundTrip(original);
+
+        assertThat(restored).isInstanceOf(RenameTableEvent.class);
+        // the pairs travel as a whole and in order, so a swap can be detected downstream
+        assertThat(((RenameTableEvent) restored).getPairs())
+                .containsExactlyElementsOf(original.getPairs());
+        assertThat(restored).isEqualTo(original);
+    }
+
+    @Test
     public void testTruncateTableEventRoundTrip() throws Exception {
         TruncateTableEvent original =
                 new TruncateTableEvent(

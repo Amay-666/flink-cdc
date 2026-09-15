@@ -36,7 +36,11 @@ public interface KafkaJsonDdlParser {
      *
      * @param database the database the message belongs to
      * @param tableId the table the message announces (from the message {@code database}/{@code
-     *     table}); the canonical id of the affected table
+     *     table}), or {@code null} when the message names no table — a Debezium schema-change
+     *     record carries only its database and its DDL. A rename is unaffected (its table names
+     *     come from the statement); for any other statement a {@code null} id means the affected
+     *     table cannot be named, so a parser must report no change rather than build one without an
+     *     id
      * @param currentTable the schema of the table before the DDL, or {@code null} if unknown
      * @param ddl the DDL statement
      * @return the parsed result, or {@code null} if the statement does not affect the table schema
@@ -44,5 +48,5 @@ public interface KafkaJsonDdlParser {
      */
     @Nullable
     KafkaJsonDdlParsedResult parse(
-            String database, TableId tableId, @Nullable Table currentTable, String ddl);
+            String database, @Nullable TableId tableId, @Nullable Table currentTable, String ddl);
 }

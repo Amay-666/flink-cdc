@@ -23,6 +23,7 @@ import org.apache.flink.cdc.connectors.kafkajson.source.ddl.KafkaJsonDdlParsedRe
 import org.apache.flink.cdc.connectors.kafkajson.source.ddl.KafkaJsonDdlParser;
 import org.apache.flink.cdc.connectors.kafkajson.source.ddl.KafkaJsonDebeziumDdlParser;
 import org.apache.flink.cdc.connectors.kafkajson.source.ddl.KafkaJsonDruidDdlParser;
+import org.apache.flink.cdc.connectors.kafkajson.source.ddl.KafkaJsonRenamePair;
 import org.apache.flink.cdc.connectors.kafkajson.source.ddl.KafkaJsonTableChangeType;
 import org.apache.flink.cdc.connectors.kafkajson.source.fetch.KafkaJsonSourceFetchTaskContext;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonMessage;
@@ -37,6 +38,7 @@ import io.debezium.connector.AbstractSourceInfo;
 import io.debezium.connector.SnapshotRecord;
 import io.debezium.connector.mysql.MySqlConnectorConfig;
 import io.debezium.connector.mysql.MySqlTopicSelector;
+import io.debezium.document.Array;
 import io.debezium.document.Document;
 import io.debezium.document.DocumentWriter;
 import io.debezium.pipeline.DataChangeEvent;
@@ -53,7 +55,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -84,8 +89,8 @@ public class KafkaJsonSchemaChangeHandler {
      * The custom fields set on the history-record document of a rename/truncate schema change. They
      * are read by {@code KafkaJsonEventDeserializer} (in the pipeline module) to rebuild the rename
      * or truncate that the Debezium {@code TableChanges.TableChangeType} cannot express: {@code
-     * RENAME_TABLE} carries the {@link #NEW_TABLE_ID} of the renamed table, {@code RENAME_COLUMN}
-     * only the type marker, {@code TRUNCATE_TABLE} only the type marker.
+     * RENAME_TABLE} carries its pairs in {@link #RENAME_PAIRS}, {@code RENAME_COLUMN} only the type
+     * marker, {@code TRUNCATE_TABLE} only the type marker.
      */
     public static final String TABLE_CHANGE_TYPE = "tableChangeType";
 
@@ -94,6 +99,26 @@ public class KafkaJsonSchemaChangeHandler {
     public static final String TABLE_CHANGE_TYPE_TRUNCATE_TABLE = "TRUNCATE_TABLE";
     public static final String TABLE_CHANGE_TYPE_ALTER_COLUMN_TYPE = "ALTER_COLUMN_TYPE";
     public static final String TABLE_CHANGE_TYPE_ALTER_COLUMN_COMMENT = "ALTER_COLUMN_COMMENT";
+
+    /**
+     * The custom history-record field carrying the renames of a {@code RENAME_TABLE} as an array of
+     * {@code {oldTableId, newTableId}} documents: one per table the statement moved, in statement
+     * order, with the temporary names of a swap folded into the rename that started them (see
+     * {@link #applyRename}).
+     *
+     * <p>Both sides of every pair come from the DDL statement, never from the message: a canal
+     * message announces the <b>post</b>-rename table name, so the announced name is the new side of
+     * the pair and the old side appears nowhere but in the SQL. The pairs stay together because the
+     * statement applied them together — and because a downstream that has to decide between a plain
+     * {@code ALTER TABLE ... RENAME} and a name swap (Doris) can only tell whether the names form a
+     * cycle when it sees all of them at once.
+     */
+    public static final String RENAME_PAIRS = "renamePairs";
+
+    /** The {@code oldTableId} field of one element of {@link #RENAME_PAIRS}. */
+    public static final String OLD_TABLE_ID = "oldTableId";
+
+    /** The {@code newTableId} field of one element of {@link #RENAME_PAIRS}. */
     public static final String NEW_TABLE_ID = "newTableId";
 
     private static final DocumentWriter DOCUMENT_WRITER = DocumentWriter.defaultWriter();
@@ -136,42 +161,142 @@ public class KafkaJsonSchemaChangeHandler {
         if (sql == null || sql.isEmpty()) {
             return;
         }
-        TableId tableId =
-                new TableId(
-                        message.getDatabase() == null ? "" : message.getDatabase(),
-                        null,
-                        message.getTable());
-        Table currentTable = context.getDatabaseSchema().tableFor(tableId);
+        // The announced table name is only a hint: it is the *pre*-change name for CREATE / ALTER /
+        // DROP, but a canal message announces the *post*-rename name for a rename, and a Debezium
+        // schema-change record announces no name at all (`table` is null, and a TableId cannot hold
+        // a null table name). Both DDL parsers therefore take the tables of a rename from the
+        // statement itself, and this lookup is only what seeds an ALTER.
+        TableId announcedTableId =
+                message.getTable() == null
+                        ? null
+                        : new TableId(
+                                message.getDatabase() == null ? "" : message.getDatabase(),
+                                null,
+                                message.getTable());
+        Table currentTable =
+                announcedTableId == null
+                        ? null
+                        : context.getDatabaseSchema().tableFor(announcedTableId);
         KafkaJsonDdlParsedResult result =
-                ddlParser.parse(message.getDatabase(), tableId, currentTable, sql);
+                ddlParser.parse(message.getDatabase(), announcedTableId, currentTable, sql);
         if (result == null) {
             LOG.debug("Skipping DDL that does not change the table schema: {}", sql);
             return;
         }
-        applySchemaChange(context, result);
+        if (result.getType() != KafkaJsonTableChangeType.RENAME_TABLE
+                && result.getTableId() == null) {
+            // The message named no table and the statement is neither a rename (whose table names
+            // come from the SQL) nor attributable to one, so applying it would register or drop a
+            // table with no name.
+            LOG.warn("Skipping a DDL that cannot be attributed to a table: {}", sql);
+            return;
+        }
+        List<KafkaJsonRenamePair> renamePairs = applySchemaChange(context, result);
         if (context.getSourceConfig().isIncludeSchemaChanges()) {
-            enqueueSchemaChange(context, message, offset, result);
+            enqueueSchemaChange(context, message, offset, result, renamePairs);
         }
     }
 
-    private static void applySchemaChange(
+    /**
+     * Applies the parsed change to the shared schema and returns the rename pairs it resolved (an
+     * empty list for every other change type).
+     */
+    private static List<KafkaJsonRenamePair> applySchemaChange(
             KafkaJsonSourceFetchTaskContext context, KafkaJsonDdlParsedResult result) {
         KafkaJsonTableChangeType type = result.getType();
         if (type == KafkaJsonTableChangeType.DROP) {
             context.getDatabaseSchema().removeTable(result.getTableId());
-        } else if (type == KafkaJsonTableChangeType.RENAME_TABLE) {
-            // The old table is gone; register the renamed table so that subsequent data records of
-            // the new table are decoded with the new schema. When the old schema was not observed,
-            // the new table cannot be registered (its schema is unknown) but the rename is still
-            // announced.
-            context.getDatabaseSchema().removeTable(result.getTableId());
-            if (result.getNewTable() != null) {
-                context.getDatabaseSchema().registerTable(result.getNewTable());
-            }
-        } else if (result.getNewTable() != null) {
+            return Collections.emptyList();
+        }
+        if (type == KafkaJsonTableChangeType.RENAME_TABLE) {
+            return applyRename(context, result);
+        }
+        if (result.getNewTable() != null) {
             // CREATE / ALTER / RENAME_COLUMN all leave the affected table under the same id
             context.getDatabaseSchema().registerTable(result.getNewTable());
         }
+        return Collections.emptyList();
+    }
+
+    /**
+     * Applies the pairs of a rename to the shared registry in statement order, resolving each
+     * pair's pre-rename schema as it goes, and returns the pairs that a downstream has to act on:
+     * one per table the statement moved, with the temporary names composed away.
+     *
+     * <p>The pairs are applied one after another, exactly as the source engine applies them: each
+     * one moves its source table onto its target, and the next sees the state the previous one
+     * left. That order is what makes the temporary name of a swap resolvable — {@code RENAME TABLE
+     * a TO a_tmp, b TO a, a_tmp TO b} moves {@code a} onto a name that exists only inside the
+     * statement and moves it on again in the last pair, so afterwards nothing is left under it. The
+     * idiom is the only way to swap two tables, because the direct {@code RENAME TABLE a TO b, b TO
+     * a} is refused by MySQL and TiDB with {@code ERROR 1050 Table 'b' already exists} — verified
+     * on MySQL 8.0, which also refuses the shorter chain {@code RENAME TABLE a TO b, b TO c}.
+     * Because a target may therefore never be a name that already exists, no pair can overwrite
+     * another's registration, and no interleaving is needed.
+     *
+     * <p>A pair whose source is a name an earlier pair of the same statement produced does not
+     * rename a table of its own: it moves on the very table that pair moved aside, and the name in
+     * between never exists outside the statement. Such a pair is folded into the pair that started
+     * the chain, so the returned pairs name only tables that exist on both sides of the statement —
+     * which is what a downstream needs. A consumer cannot act on the transient name: Doris would be
+     * asked to rename a table it has never seen ({@code ALTER TABLE a_tmp RENAME b} after the swap
+     * idiom) and would leave a stray table under the temporary name, where the composed pair
+     * instead reports the plain exchange of {@code a} and {@code b} and lets the sink express it as
+     * one atomic statement. The statement itself is not lost — it travels in the schema-change
+     * record's DDL field.
+     *
+     * <p>Both schemas of each returned pair come from the pair's own old table id rather than from
+     * the message, which is what makes the lookup hit at all for a canal message (it announces the
+     * new name). A miss means the rename was announced for a table whose {@code CREATE} this
+     * connector never saw — in that case the renamed table would be registered with an empty schema
+     * and every following data record of it would be decoded as a row of zero columns, so it is
+     * reported instead.
+     */
+    private static List<KafkaJsonRenamePair> applyRename(
+            KafkaJsonSourceFetchTaskContext context, KafkaJsonDdlParsedResult result) {
+        List<KafkaJsonRenamePair> resolved = new ArrayList<>(result.getRenamePairs().size());
+        // The name a pair of this statement left a table under -> the position of that table's pair
+        // in `resolved`. An entry means the name currently belongs to a rename already reported,
+        // so a pair starting from it continues that rename rather than starting a new one.
+        Map<String, Integer> chainPosition = new HashMap<>();
+        for (KafkaJsonRenamePair pair : result.getRenamePairs()) {
+            Table oldTable = context.getDatabaseSchema().tableFor(pair.getOldTableId());
+            if (oldTable == null) {
+                throw new IllegalStateException(
+                        "Cannot apply the rename of "
+                                + pair.getOldTableId()
+                                + " to "
+                                + pair.getNewTableId()
+                                + ": the schema of the table being renamed was never observed, so "
+                                + "the renamed table would be registered without any columns. Start "
+                                + "the job (or its Kafka start offset) at a point where the CREATE "
+                                + "of that table is seen before the rename.");
+            }
+            Table newTable =
+                    pair.getNewTable() != null
+                            ? pair.getNewTable()
+                            : oldTable.edit().tableId(pair.getNewTableId()).create();
+            context.getDatabaseSchema().removeTable(pair.getOldTableId());
+            context.getDatabaseSchema().registerTable(newTable);
+            Integer chainedFrom = chainPosition.remove(pair.getOldTableId().toString());
+            if (chainedFrom == null) {
+                chainPosition.put(pair.getNewTableId().toString(), resolved.size());
+                resolved.add(pair.withSchemas(oldTable, newTable));
+            } else {
+                // The table of pair `chainedFrom` has just moved on: it keeps its pre-statement
+                // schema and its original id, and its target name becomes the one of this pair.
+                KafkaJsonRenamePair origin = resolved.get(chainedFrom);
+                chainPosition.put(pair.getNewTableId().toString(), chainedFrom);
+                resolved.set(
+                        chainedFrom,
+                        new KafkaJsonRenamePair(
+                                origin.getOldTableId(),
+                                pair.getNewTableId(),
+                                origin.getOldTable(),
+                                newTable));
+            }
+        }
+        return resolved;
     }
 
     /**
@@ -190,7 +315,8 @@ public class KafkaJsonSchemaChangeHandler {
             KafkaJsonSourceFetchTaskContext context,
             KafkaJsonMessage message,
             KafkaJsonOffset offset,
-            KafkaJsonDdlParsedResult result)
+            KafkaJsonDdlParsedResult result,
+            List<KafkaJsonRenamePair> renamePairs)
             throws IOException, InterruptedException {
         KafkaJsonSourceConfig sourceConfig = context.getSourceConfig();
         MySqlConnectorConfig dbzConfig = sourceConfig.getDbzConnectorConfig();
@@ -230,10 +356,11 @@ public class KafkaJsonSchemaChangeHandler {
             }
             tableChanges.alter(result.getNewTable());
         } else if (type == KafkaJsonTableChangeType.RENAME_TABLE) {
-            // The schema of the renamed table travels as a CREATE change of the new table id; the
-            // rename itself is carried by the custom history-record fields below.
-            if (result.getNewTable() != null) {
-                tableChanges.create(result.getNewTable());
+            // The schema of each renamed table travels as a CREATE change of its new table id, in
+            // the same order as the pairs; the rename itself is carried by the custom
+            // history-record fields below.
+            for (KafkaJsonRenamePair pair : renamePairs) {
+                tableChanges.create(pair.getNewTable());
             }
         } else if (type == KafkaJsonTableChangeType.TRUNCATE) {
             // TRUNCATE does not change the schema: the type marker below is what announces the
@@ -269,9 +396,7 @@ public class KafkaJsonSchemaChangeHandler {
         Document historyDocument = historyRecord.document();
         if (type == KafkaJsonTableChangeType.RENAME_TABLE) {
             historyDocument.set(TABLE_CHANGE_TYPE, TABLE_CHANGE_TYPE_RENAME_TABLE);
-            if (result.getNewTableId() != null) {
-                historyDocument.set(NEW_TABLE_ID, result.getNewTableId().toString());
-            }
+            historyDocument.set(RENAME_PAIRS, renamePairsDocument(renamePairs));
         } else if (type == KafkaJsonTableChangeType.RENAME_COLUMN) {
             historyDocument.set(TABLE_CHANGE_TYPE, TABLE_CHANGE_TYPE_RENAME_COLUMN);
         } else if (type == KafkaJsonTableChangeType.TRUNCATE) {
@@ -307,5 +432,20 @@ public class KafkaJsonSchemaChangeHandler {
     /** Returns the {@link KafkaJsonDdlParser} used by this handler (exposed for unit tests). */
     public KafkaJsonDdlParser getDdlParser() {
         return ddlParser;
+    }
+
+    /**
+     * Serializes the rename pairs into the {@link #RENAME_PAIRS} array of the history-record
+     * document, preserving statement order.
+     */
+    private static Array renamePairsDocument(List<KafkaJsonRenamePair> pairs) {
+        Array array = Array.create();
+        for (KafkaJsonRenamePair pair : pairs) {
+            Document pairDocument = Document.create();
+            pairDocument.set(OLD_TABLE_ID, pair.getOldTableId().toString());
+            pairDocument.set(NEW_TABLE_ID, pair.getNewTableId().toString());
+            array.add(pairDocument);
+        }
+        return array;
     }
 }

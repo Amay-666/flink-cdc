@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 
 import java.sql.Types;
 import java.util.Collections;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -95,6 +96,40 @@ class KafkaJsonDebeziumDdlParserTest {
         assertEquals(TABLE_ID, result.getTableId());
         assertEquals(new TableId("test", null, "vip_users"), result.getNewTableId());
         assertEquals(2, result.getNewTable().columns().size());
+    }
+
+    @Test
+    void testParseRenameTableOfSeveralPairs() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        baseTable(),
+                        "RENAME TABLE `test`.`users` TO `test`.`orders`, "
+                                + "`test`.`orders` TO `test`.`users`");
+
+        assertEquals(KafkaJsonTableChangeType.RENAME_TABLE, result.getType());
+        List<KafkaJsonRenamePair> pairs = result.getRenamePairs();
+        assertEquals(2, pairs.size());
+        assertEquals(TABLE_ID, pairs.get(0).getOldTableId());
+        assertEquals(new TableId("test", null, "orders"), pairs.get(0).getNewTableId());
+        assertEquals(new TableId("test", null, "orders"), pairs.get(1).getOldTableId());
+        assertEquals(TABLE_ID, pairs.get(1).getNewTableId());
+    }
+
+    @Test
+    void testParseRenameTableWithoutAnAnnouncedTable() {
+        // A Debezium schema-change record carries no table name at all, so the handler hands the
+        // parser a null id: both ids still come from the statement. The schemas stay null here and
+        // the handler resolves them from the shared registry.
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test", null, null, "RENAME TABLE `test`.`users` TO `test`.`vip_users`");
+
+        assertEquals(KafkaJsonTableChangeType.RENAME_TABLE, result.getType());
+        assertEquals(TABLE_ID, result.getTableId());
+        assertEquals(new TableId("test", null, "vip_users"), result.getNewTableId());
+        assertNull(result.getNewTable());
     }
 
     @Test

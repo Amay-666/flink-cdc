@@ -31,6 +31,7 @@ import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterTableCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
+import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent.TableRename;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.sink.KafkaJsonDataSinkOptions;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions;
@@ -46,12 +47,29 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit test for {@link DorisDdlBuilder}. */
 public class DorisDdlBuilderTest {
 
     private static final TableId ORDERS = TableId.tableId("shop", "orders");
     private static final TableId ORDERS_V2 = TableId.tableId("shop", "orders_v2");
+    private static final TableId CLICKS = TableId.tableId("dws", "clicks");
+    private static final TableId CLICKS_V2 = TableId.tableId("dws", "clicks_v2");
+
+    /** Three tables of one database, for the rename statements that rename several at once. */
+    private static final TableId X = TableId.tableId("shop", "x");
+
+    private static final TableId Y = TableId.tableId("shop", "y");
+    private static final TableId Z = TableId.tableId("shop", "z");
+
+    /** A rename does not change a table's schema, so the tests only need some schema. */
+    private static final Schema RENAME_SCHEMA =
+            Schema.newBuilder().physicalColumn("id", DataTypes.INT()).build();
+
+    private static RenameTableEvent rename(TableRename... pairs) {
+        return new RenameTableEvent(Arrays.asList(pairs), "RENAME TABLE ...");
+    }
 
     private DorisDdlBuilder builder(DorisDataSinkOptions options) {
         return new DorisDdlBuilder(options);
@@ -329,6 +347,126 @@ public class DorisDdlBuilderTest {
                                                 .build()));
 
         assertThat(sqls).containsExactly("ALTER TABLE `shop`.`orders` RENAME `orders_v2`");
+    }
+
+    @Test
+    public void testRenameTableOfSeveralPairsIsGroupedByMappedDatabase() {
+        List<String> sqls =
+                defaultBuilder()
+                        .buildRenameTableSql(
+                                rename(
+                                        new TableRename(ORDERS, ORDERS_V2, RENAME_SCHEMA),
+                                        new TableRename(CLICKS, CLICKS_V2, RENAME_SCHEMA)));
+
+        assertThat(sqls)
+                .containsExactly(
+                        "ALTER TABLE `shop`.`orders` RENAME `orders_v2`",
+                        "ALTER TABLE `dws`.`clicks` RENAME `clicks_v2`");
+    }
+
+    @Test
+    public void testRenameTableOfAChainMovesTheTableHoldingTheTargetNameFirst() {
+        // RENAME TABLE x TO y, y TO z: y has to move out of the way before x can take its name, so
+        // the statement order differs from the pair order of the DDL.
+        List<String> sqls =
+                defaultBuilder()
+                        .buildRenameTableSql(
+                                rename(
+                                        new TableRename(X, Y, RENAME_SCHEMA),
+                                        new TableRename(Y, Z, RENAME_SCHEMA)));
+
+        assertThat(sqls)
+                .containsExactly(
+                        "ALTER TABLE `shop`.`y` RENAME `z`", "ALTER TABLE `shop`.`x` RENAME `y`");
+    }
+
+    @Test
+    public void testRenameTableExchangingTwoNamesUsesOneAtomicSwap() {
+        // RENAME TABLE a TO b, b TO a exchanges the two tables; Doris expresses it as one atomic
+        // statement that keeps both tables and moves data and schema with the name.
+        List<String> sqls =
+                defaultBuilder()
+                        .buildRenameTableSql(
+                                rename(
+                                        new TableRename(X, Y, RENAME_SCHEMA),
+                                        new TableRename(Y, X, RENAME_SCHEMA)));
+
+        assertThat(sqls)
+                .containsExactly(
+                        "ALTER TABLE `shop`.`x` REPLACE WITH TABLE `y` PROPERTIES('swap' = 'true')");
+    }
+
+    @Test
+    public void testRenameTableOfAThreeTableCycleRotatesThroughATemporaryName() {
+        List<String> sqls =
+                defaultBuilder()
+                        .buildRenameTableSql(
+                                rename(
+                                        new TableRename(X, Y, RENAME_SCHEMA),
+                                        new TableRename(Y, Z, RENAME_SCHEMA),
+                                        new TableRename(Z, X, RENAME_SCHEMA)));
+
+        String first = sqls.get(0);
+        assertThat(first).startsWith("ALTER TABLE `shop`.`x` RENAME `__cdc_tmp_x_").endsWith("`");
+        String temporary = first.substring(first.indexOf("RENAME `") + "RENAME `".length());
+        temporary = temporary.substring(0, temporary.length() - 1);
+        // One table moves aside, then the cycle unwinds in reverse and the table moved aside takes
+        // the name its neighbour vacated.
+        assertThat(sqls)
+                .containsExactly(
+                        first,
+                        "ALTER TABLE `shop`.`z` RENAME `x`",
+                        "ALTER TABLE `shop`.`y` RENAME `z`",
+                        "ALTER TABLE `shop`.`" + temporary + "` RENAME `y`");
+    }
+
+    @Test
+    public void testRenameTableAcrossSourceDatabasesUnderAConstantMapping() {
+        // The user's database mapping puts every source database in one Doris database, so a rename
+        // that crosses source databases is one Doris rename and must not be rejected.
+        DorisDdlBuilder builder =
+                builder(
+                        new DorisDataSinkOptions(new Configuration())
+                                .withDatabaseMapping(tableId -> "ods_all"));
+
+        List<String> sqls =
+                builder.buildRenameTableSql(
+                        rename(new TableRename(ORDERS, TableId.tableId("dws", "orders_v2"), null)));
+
+        assertThat(sqls).containsExactly("ALTER TABLE `ods_all`.`orders` RENAME `orders_v2`");
+    }
+
+    @Test
+    public void testRenameTableAcrossMappedDatabasesFails() {
+        assertThatThrownBy(
+                        () ->
+                                defaultBuilder()
+                                        .buildRenameTableSql(
+                                                rename(
+                                                        new TableRename(
+                                                                ORDERS,
+                                                                TableId.tableId("dws", "orders_v2"),
+                                                                RENAME_SCHEMA))))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("shop")
+                .hasMessageContaining("dws")
+                .hasMessageContaining("within its database");
+    }
+
+    @Test
+    public void testRenameTableWhoseTableMappingKeepsTheNameEmitsNothing() {
+        // A table mapping that sends both names to one table means there is nothing to rename; the
+        // schema-change event still moves the tracked table id downstream.
+        DorisDdlBuilder builder =
+                builder(
+                        new DorisDataSinkOptions(new Configuration())
+                                .withTableMapping(tableId -> "all_rows"));
+
+        List<String> sqls =
+                builder.buildRenameTableSql(
+                        rename(new TableRename(ORDERS, ORDERS_V2, RENAME_SCHEMA)));
+
+        assertThat(sqls).isEmpty();
     }
 
     @Test

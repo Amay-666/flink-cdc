@@ -51,10 +51,12 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.concurrent.ScheduledFuture;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -212,6 +214,71 @@ public class DorisSinkWriterTest {
                                         + "{\"id\":2,\"name\":\"b\",\"__DORIS_DELETE_SIGN__\":false}]");
             }
         }
+    }
+
+    @Test
+    public void testRenameTableExchangingTwoNamesReKeysBothTables() throws Exception {
+        Schema twoColumns =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("name", DataTypes.VARCHAR(16))
+                        .build();
+        try (MockDorisServer server = server()) {
+            try (DorisSinkWriter writer = writer(server, options(server))) {
+                writer.write(new CreateTableEvent(ORDERS, twoColumns), null);
+                writer.write(new CreateTableEvent(ORDERS_V2, ORDERS_SCHEMA), null);
+                writer.write(
+                        insertEvent(ORDERS, twoColumns, 1, BinaryStringData.fromString("a")), null);
+                writer.write(insertEvent(ORDERS_V2, ORDERS_SCHEMA, 2), null);
+
+                // RENAME TABLE orders TO orders_v2, orders_v2 TO orders: each table keeps its own
+                // schema and only the name moves, so a pair applied in place would have the second
+                // read back what the first wrote.
+                writer.write(
+                        new RenameTableEvent(
+                                Arrays.asList(
+                                        new RenameTableEvent.TableRename(
+                                                ORDERS, ORDERS_V2, twoColumns),
+                                        new RenameTableEvent.TableRename(
+                                                ORDERS_V2, ORDERS, ORDERS_SCHEMA)),
+                                "RENAME TABLE `shop`.`orders` TO `shop`.`orders_v2`, "
+                                        + "`shop`.`orders_v2` TO `shop`.`orders`"),
+                        null);
+                writer.flush(false);
+
+                // The rows buffered for each table arrive under the name that table now carries,
+                // converted with that table's own schema.
+                assertThat(bodiesOf(server, "/api/shop/orders_v2/_stream_load"))
+                        .containsExactly(
+                                "[{\"id\":1,\"name\":\"a\",\"__DORIS_DELETE_SIGN__\":false}]");
+                assertThat(bodiesOf(server, "/api/shop/orders/_stream_load"))
+                        .containsExactly("[{\"id\":2,\"__DORIS_DELETE_SIGN__\":false}]");
+
+                // Data keeps flowing under the new ids, each name carrying the schema of the table
+                // that moved onto it: `orders` is the one-column table now and `orders_v2` the
+                // two-column one.
+                writer.write(insertEvent(ORDERS, ORDERS_SCHEMA, 3), null);
+                writer.write(
+                        insertEvent(ORDERS_V2, twoColumns, 4, BinaryStringData.fromString("d")),
+                        null);
+                writer.flush(false);
+                assertThat(bodiesOf(server, "/api/shop/orders/_stream_load"))
+                        .containsExactly(
+                                "[{\"id\":2,\"__DORIS_DELETE_SIGN__\":false}]",
+                                "[{\"id\":3,\"__DORIS_DELETE_SIGN__\":false}]");
+                assertThat(bodiesOf(server, "/api/shop/orders_v2/_stream_load"))
+                        .containsExactly(
+                                "[{\"id\":1,\"name\":\"a\",\"__DORIS_DELETE_SIGN__\":false}]",
+                                "[{\"id\":4,\"name\":\"d\",\"__DORIS_DELETE_SIGN__\":false}]");
+            }
+        }
+    }
+
+    private static List<String> bodiesOf(MockDorisServer server, String path) {
+        return server.recorded.stream()
+                .filter(request -> path.equals(request.path))
+                .map(request -> request.body)
+                .collect(Collectors.toList());
     }
 
     @Test

@@ -33,6 +33,7 @@ import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterTableCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
+import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent.TableRename;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions;
 
@@ -278,13 +279,199 @@ public class DorisDdlBuilder implements Serializable {
         return sqls;
     }
 
+    /**
+     * Builds the DDL of a table rename, one statement per rename — except for a name swap, which is
+     * one atomic statement.
+     *
+     * <p>Doris renames a table <b>within its database</b>: {@code ALTER TABLE db.a RENAME b}
+     * resolves {@code b} in {@code db} only, and the second name of {@code REPLACE WITH TABLE b} is
+     * resolved in the first table's database (verified against Doris 2.1.8). A rename whose two
+     * table ids map onto different Doris databases is therefore not expressible and fails fast.
+     *
+     * <p>Whether two renames of one statement collide — and whether they form the swap idiom {@code
+     * RENAME TABLE a TO b, b TO a} — depends on the <b>mapped</b> database, not the source one: a
+     * database mapping may put two source databases in one Doris database, or spread one source
+     * database over several. Two renames of the same source database that a mapping sends to
+     * different Doris databases never collide, while a rename across source databases that a
+     * constant mapping puts in one Doris database does. So the pairs are grouped and ordered by the
+     * mapped database, and the source database is never consulted.
+     */
     public List<String> buildRenameTableSql(RenameTableEvent event) {
-        // Doris renames a table within its database: ALTER TABLE db.old RENAME new
-        return singleton(
+        Map<String, List<TableRename>> byDatabase = new LinkedHashMap<>();
+        for (TableRename pair : event.getPairs()) {
+            String oldDatabase = options.mapDatabase(pair.getOldTableId());
+            String newDatabase = options.mapDatabase(pair.getNewTableId());
+            if (!oldDatabase.equals(newDatabase)) {
+                throw new UnsupportedOperationException(
+                        "Doris renames a table within its database, so the rename of "
+                                + pair.getOldTableId()
+                                + " to "
+                                + pair.getNewTableId()
+                                + " cannot be applied: the mapping sends them to the databases "
+                                + oldDatabase
+                                + " and "
+                                + newDatabase
+                                + ". Map both table ids of the pair onto one database (a database"
+                                + " mapping that returns a constant does that for every table),"
+                                + " or rename the table at the source in two steps through a"
+                                + " temporary name.");
+            }
+            byDatabase.computeIfAbsent(oldDatabase, database -> new ArrayList<>()).add(pair);
+        }
+        List<String> sqls = new ArrayList<>();
+        for (Map.Entry<String, List<TableRename>> entry : byDatabase.entrySet()) {
+            sqls.addAll(buildDatabaseRenameSql(entry.getKey(), entry.getValue()));
+        }
+        return sqls;
+    }
+
+    /**
+     * Orders the renames of one Doris database into executable statements.
+     *
+     * <p>Each round either completes one rename or frees one name by moving a table aside, so the
+     * queue strictly shrinks; the round bound only exists so that a mistake in that reasoning fails
+     * the job instead of spinning forever.
+     */
+    private List<String> buildDatabaseRenameSql(String database, List<TableRename> pairs) {
+        // The renames still to apply, as "the table named `from` has to end up named `to`". Several
+        // pairs cannot share a source name (a table is only renamed once per statement), so this
+        // map
+        // holds every rename exactly once.
+        Map<String, String> pending = new LinkedHashMap<>();
+        for (TableRename pair : pairs) {
+            String from = options.mapTable(pair.getOldTableId());
+            String to = options.mapTable(pair.getNewTableId());
+            if (from.equals(to)) {
+                LOG.warn(
+                        "Ignoring the rename of {}: the table mapping sends it to its own name {}.",
+                        pair.getOldTableId(),
+                        from);
+                continue;
+            }
+            pending.put(from, to);
+        }
+
+        List<String> sqls = new ArrayList<>();
+        int remainingRounds = pending.size() * 2 + 1;
+        while (!pending.isEmpty()) {
+            if (remainingRounds-- <= 0) {
+                throw new IllegalStateException(
+                        "Could not order the renames "
+                                + pending
+                                + " of database "
+                                + database
+                                + " into executable statements.");
+            }
+            if (!appendSwapSql(sqls, database, pending)
+                    && !appendUnblockedRenameSql(sqls, database, pending)) {
+                appendCycleBreakingRenameSql(sqls, database, pending);
+            }
+        }
+        return sqls;
+    }
+
+    /**
+     * Appends the statement of one two-table rename cycle, if the queue holds one, and returns
+     * whether it did.
+     *
+     * <p>{@code RENAME TABLE a TO b, b TO a} — the idiom for exchanging two tables — is Doris's
+     * {@code REPLACE WITH TABLE ... PROPERTIES('swap' = 'true')}, one atomic statement that moves
+     * the data and the schema of both tables to the other name and keeps both tables. It also
+     * avoids the window a rotation through a temporary name would open, in which neither table
+     * carries its final name and a reader of the sink would find the old name empty.
+     */
+    private boolean appendSwapSql(List<String> sqls, String database, Map<String, String> pending) {
+        for (Map.Entry<String, String> entry : pending.entrySet()) {
+            String from = entry.getKey();
+            String to = entry.getValue();
+            if (from.equals(pending.get(to))) {
+                // Doris takes the second name unqualified and resolves it in the first table's
+                // database, which is this group's database.
+                sqls.add(
+                        "ALTER TABLE "
+                                + quote(database)
+                                + "."
+                                + quote(from)
+                                + " REPLACE WITH TABLE "
+                                + quote(to)
+                                + " PROPERTIES('swap' = 'true')");
+                pending.remove(from);
+                pending.remove(to);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Appends the statement of one rename whose target name no pending rename still occupies, and
+     * returns whether it found one.
+     */
+    private boolean appendUnblockedRenameSql(
+            List<String> sqls, String database, Map<String, String> pending) {
+        for (Map.Entry<String, String> entry : pending.entrySet()) {
+            String from = entry.getKey();
+            String to = entry.getValue();
+            if (!pending.containsKey(to)) {
+                sqls.add(
+                        "ALTER TABLE "
+                                + quote(database)
+                                + "."
+                                + quote(from)
+                                + " RENAME "
+                                + quote(to));
+                pending.remove(from);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Appends the statement that breaks a rename cycle of three tables or more — or of two reached
+     * through a longer chain — by moving one table aside to a temporary name, which frees the
+     * target name of the next table of the cycle.
+     *
+     * <p>The temporary name is the only way to express such a cycle: one {@code ALTER TABLE} cannot
+     * rename several tables (a syntax error), and {@code REPLACE WITH TABLE} swaps exactly two. A
+     * failure between this statement and the one that moves the table to its final name leaves the
+     * table under the temporary name, so the rest has to be finished by hand — this is the one case
+     * the atomic swap cannot cover.
+     */
+    private void appendCycleBreakingRenameSql(
+            List<String> sqls, String database, Map<String, String> pending) {
+        String from = pending.keySet().iterator().next();
+        String to = pending.remove(from);
+        String temporary = temporaryName(from);
+        for (int i = 1; pending.containsKey(temporary); i++) {
+            temporary = temporaryName(from) + "_" + i;
+        }
+        LOG.info(
+                "Renaming {} to the temporary name {} to break the rename cycle {}: none of the"
+                        + " tables of the cycle can take its target name before the table holding"
+                        + " that name has moved.",
+                from,
+                temporary,
+                pending);
+        sqls.add(
                 "ALTER TABLE "
-                        + qualified(event.getOldTableId())
+                        + quote(database)
+                        + "."
+                        + quote(from)
                         + " RENAME "
-                        + quote(options.mapTable(event.getNewTableId())));
+                        + quote(temporary));
+        pending.put(temporary, to);
+    }
+
+    /**
+     * Returns a temporary table name for one of a rename's tables. Deterministic, so that a rerun
+     * of the same statement produces the same statement, and short enough to stay inside Doris's
+     * 64-byte table-name limit together with the counter {@link #appendCycleBreakingRenameSql(List,
+     * String, Map)} may append.
+     */
+    private static String temporaryName(String table) {
+        String readable = table.length() > 32 ? table.substring(0, 32) : table;
+        return "__cdc_tmp_" + readable + "_" + Integer.toHexString(table.hashCode());
     }
 
     public List<String> buildDropTableSql(DropTableEvent event) {

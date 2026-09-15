@@ -23,8 +23,10 @@ import io.debezium.relational.TableId;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Function;
 
 /**
  * The result of parsing one canal DDL message: the affected table, the type of the schema change
@@ -55,6 +57,17 @@ public class KafkaJsonDdlParsedResult {
      */
     private final List<ColumnChangeInfo> columnChanges;
 
+    /**
+     * The renames of a {@link KafkaJsonTableChangeType#RENAME_TABLE}, in statement order, or an
+     * empty list for every other type. A single DDL statement may rename several tables at once
+     * ({@code RENAME TABLE a TO b, c TO d}), and the pairs must stay together: they are applied
+     * atomically by the database, and a downstream that has to pick between a plain {@code ALTER
+     * TABLE ... RENAME} and a name swap can only tell whether the pairs form a cycle when it sees
+     * all of them. The first pair is mirrored into {@link #tableId} / {@link #newTableId} / {@link
+     * #oldTable} / {@link #newTable} so the single-pair accessors keep working.
+     */
+    private final List<KafkaJsonRenamePair> renamePairs;
+
     public KafkaJsonDdlParsedResult(
             KafkaJsonTableChangeType type,
             TableId tableId,
@@ -71,12 +84,24 @@ public class KafkaJsonDdlParsedResult {
             @Nullable Table oldTable,
             @Nullable Table newTable,
             List<ColumnChangeInfo> columnChanges) {
+        this(type, tableId, newTableId, oldTable, newTable, columnChanges, Collections.emptyList());
+    }
+
+    private KafkaJsonDdlParsedResult(
+            KafkaJsonTableChangeType type,
+            TableId tableId,
+            @Nullable TableId newTableId,
+            @Nullable Table oldTable,
+            @Nullable Table newTable,
+            List<ColumnChangeInfo> columnChanges,
+            List<KafkaJsonRenamePair> renamePairs) {
         this.type = type;
         this.tableId = tableId;
         this.newTableId = newTableId;
         this.oldTable = oldTable;
         this.newTable = newTable;
         this.columnChanges = columnChanges != null ? columnChanges : Collections.emptyList();
+        this.renamePairs = renamePairs != null ? renamePairs : Collections.emptyList();
     }
 
     public static KafkaJsonDdlParsedResult create(TableId tableId, Table newTable) {
@@ -114,8 +139,28 @@ public class KafkaJsonDdlParsedResult {
             TableId newTableId,
             @Nullable Table oldTable,
             @Nullable Table newTable) {
+        return renameTable(
+                Collections.singletonList(
+                        new KafkaJsonRenamePair(oldTableId, newTableId, oldTable, newTable)));
+    }
+
+    /**
+     * Returns a rename result carrying every rename of the statement, in statement order. The list
+     * must not be empty; the first pair doubles as the announced table (see {@link #getTableId()}).
+     */
+    public static KafkaJsonDdlParsedResult renameTable(List<KafkaJsonRenamePair> pairs) {
+        if (pairs == null || pairs.isEmpty()) {
+            throw new IllegalArgumentException("A rename must carry at least one table pair.");
+        }
+        KafkaJsonRenamePair first = pairs.get(0);
         return new KafkaJsonDdlParsedResult(
-                KafkaJsonTableChangeType.RENAME_TABLE, oldTableId, newTableId, oldTable, newTable);
+                KafkaJsonTableChangeType.RENAME_TABLE,
+                first.getOldTableId(),
+                first.getNewTableId(),
+                first.getOldTable(),
+                first.getNewTable(),
+                Collections.emptyList(),
+                new ArrayList<>(pairs));
     }
 
     public static KafkaJsonDdlParsedResult renameColumn(
@@ -168,6 +213,41 @@ public class KafkaJsonDdlParsedResult {
      */
     public List<ColumnChangeInfo> getColumnChanges() {
         return columnChanges;
+    }
+
+    /**
+     * Returns every rename of a {@link KafkaJsonTableChangeType#RENAME_TABLE} in statement order,
+     * or an empty list for any other type. The schema of a renamed table is <em>unknown</em> when
+     * it was never observed before the rename — the pair carries {@code null} there.
+     */
+    public List<KafkaJsonRenamePair> getRenamePairs() {
+        return renamePairs;
+    }
+
+    /**
+     * Attaches the schemas of every rename pair, looking the pre-rename schema of each pair up by
+     * its old table id and deriving the post-rename schema from it under the new table id.
+     *
+     * <p>A rename moves the table id but never the columns, and every lookup happens before any
+     * pair is applied, so one pair can never chain into another — including when a statement
+     * renames a whole cycle of tables at once.
+     *
+     * @param pairs the {@code old TO new} pairs in statement order, carrying no schemas yet
+     * @param schemaOfOld returns the pre-rename schema of an old table id, or {@code null} when it
+     *     was never observed
+     */
+    public static List<KafkaJsonRenamePair> resolveSchemas(
+            List<KafkaJsonRenamePair> pairs, Function<TableId, Table> schemaOfOld) {
+        List<KafkaJsonRenamePair> resolved = new ArrayList<>(pairs.size());
+        for (KafkaJsonRenamePair pair : pairs) {
+            Table oldTable = schemaOfOld.apply(pair.getOldTableId());
+            Table newTable =
+                    oldTable == null
+                            ? null
+                            : oldTable.edit().tableId(pair.getNewTableId()).create();
+            resolved.add(pair.withSchemas(oldTable, newTable));
+        }
+        return resolved;
     }
 
     /**

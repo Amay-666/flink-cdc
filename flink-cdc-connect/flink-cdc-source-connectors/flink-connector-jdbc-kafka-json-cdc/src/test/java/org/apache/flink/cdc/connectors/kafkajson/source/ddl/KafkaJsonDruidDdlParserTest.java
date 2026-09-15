@@ -413,6 +413,49 @@ class KafkaJsonDruidDdlParserTest {
     }
 
     @Test
+    void testParseRenameTableStatementOfSeveralPairs() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        baseTable(),
+                        "RENAME TABLE `test`.`users` TO `test`.`orders`, "
+                                + "`test`.`orders` TO `test`.`users`");
+
+        assertEquals(KafkaJsonTableChangeType.RENAME_TABLE, result.getType());
+        List<KafkaJsonRenamePair> pairs = result.getRenamePairs();
+        assertEquals(2, pairs.size());
+        // both ids of every pair come from the statement: the canal message announces the
+        // post-rename name, so nothing may be read off the announced table id
+        assertEquals(TABLE_ID, pairs.get(0).getOldTableId());
+        assertEquals(new TableId("test", null, "orders"), pairs.get(0).getNewTableId());
+        assertEquals(new TableId("test", null, "orders"), pairs.get(1).getOldTableId());
+        assertEquals(TABLE_ID, pairs.get(1).getNewTableId());
+        // the parser resolves the schema of the table it was handed (the announced one); the other
+        // pair is resolved by the handler from the shared schema registry
+        assertNotNull(pairs.get(0).getNewTable());
+        assertEquals("orders", pairs.get(0).getNewTable().id().table());
+        assertNull(pairs.get(1).getNewTable());
+        // the single-pair getters report the first pair, which represents the statement
+        assertEquals(TABLE_ID, result.getTableId());
+        assertEquals(new TableId("test", null, "orders"), result.getNewTableId());
+    }
+
+    @Test
+    void testParseRenameTableStatementAcrossDatabasesKeepsBothNames() {
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        baseTable(),
+                        "RENAME TABLE `test`.`users` TO `archive`.`users_old`");
+
+        assertEquals(KafkaJsonTableChangeType.RENAME_TABLE, result.getType());
+        assertEquals(TABLE_ID, result.getTableId());
+        assertEquals(new TableId("archive", null, "users_old"), result.getNewTableId());
+    }
+
+    @Test
     void testParseAlterRenameTable() {
         KafkaJsonDdlParsedResult result =
                 parser.parse(
