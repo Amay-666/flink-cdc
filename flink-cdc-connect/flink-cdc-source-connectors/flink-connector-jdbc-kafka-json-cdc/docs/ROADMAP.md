@@ -155,6 +155,31 @@ TSO 的 H ≥ 快照所有已捕获 commit_ts、且 topic 空也为非零 → �
 - 连接器自定义事件（RenameTable / DropTable / TruncateTable / AlterTableComment / AlterColumnComment）
   已落地并被自写 coordinator / DorisMetadataApplier 完整消费（见 [deep-dive/03](./deep-dive/03-event-model.md) 与 [deep-dive/05](./deep-dive/05-doris-sink.md)）。
 
+### P3-3 表改名（RENAME TABLE）以 SQL 为权威 + 多对原子事件 ✅（2026-09-15）
+
+**问题**：canal/TiCDC 的 `table` 字段是**改名后**的名字，Debezium 的 `source.table` 是整条语句所有名字的
+逗号串、甚至为 `null`。原实现假定 `table` 是**老名**，于是老 schema 取不到、新表注册为空，rename 之后该表
+的数据消息直接抛异常；Doris 侧还生成了 `ALTER TABLE db.x RENAME x` 自改名。
+
+**修复**：
+- 前后表名**一律从 DDL SQL 解析**（`KafkaJsonDruidDdlParser` 遍历 `MySqlRenameTableStatement` 的全部
+  items；Debezium 解析器同源，`findRenamedTable` 的 diff 降级为兜底）；旧表 schema 未知 → **fail-fast**。
+- 一条语句的多对是**一个** `RenameTableEvent`（`getPairs()` 有序 + 原始 SQL；`tableId()`/`getSchema()` =
+  第一对，单对路径行为不变）；history record 的自定义字段由单值 `canalNewTableId` 换成 `renamePairs` 数组。
+- source 侧把**经临时名中转**的对折叠成"净改名"（`RENAME TABLE a TO a_tmp, b TO a, a_tmp TO b` → `a→b` +
+  `b→a`），否则下游会去改一张它从未见过的 `a_tmp` 并留下野表。
+- Doris：两表成环 → 一条原子 `ALTER TABLE db.a REPLACE WITH TABLE b PROPERTIES('swap'='true')`；否则逐条
+  `RENAME`；≥3 表环 → 确定性临时名解开。跨（映射后）库的一对直接 fail-fast。
+- 四类生产者的真实抓包落在 `src/test/resources/kafkajson/captured/`（逐字节原样、永不修改），
+  `KafkaJsonCapturedMessageTest` + pipeline 侧 `KafkaJsonRenameFixtureTest` 端到端回放。
+
+**注意**：事件序列化格式随之变化，**旧 checkpoint 不兼容**（同分支未发布）。**已知限制**：TiCDC 的
+`debezium` 协议 8.5.1 **完全不发 DDL**，该协议下流中 DDL 不可见；生产者把多对语句拆开发时（TiCDC、Debezium）
+下游失去原子性（逐条执行仍正确）。
+
+详见 [deep-dive/02](./deep-dive/02-message-parsing.md) §8、[deep-dive/03](./deep-dive/03-event-model.md) §3、
+[deep-dive/05](./deep-dive/05-doris-sink.md) §4.4–4.5。
+
 ---
 
 ## P4 — Debezium（原低优先，2026-08-26 上提执行）

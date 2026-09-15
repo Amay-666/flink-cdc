@@ -101,7 +101,8 @@ pipeline 模块  flink-cdc-pipeline-connector-jdbc-kafka-json
     └─ KafkaJsonEventDeserializer（extends DebeziumEventDeserializationSchema）
             数据记录 → DataChangeEvent（父类处理）
             CREATE → CreateTableEvent；其余 DDL → 标准 SchemaChangeEvent
-            RENAME_TABLE → RenameTableEvent（KafkaJsonEventDeserializer.java:176 重建）
+            RENAME_TABLE → RenameTableEvent（KafkaJsonEventDeserializer.java:185 按 history record 的
+                           renamePairs 逐对重建，前后表名不取自 record.source.table）
             TRUNCATE → TruncateTableEvent
             事件流类型：KafkaJsonEventTypeInfo（自写序列化栈）
     ▼  Event 流（SchemaChangeEvent / DataChangeEvent / FlushEvent）
@@ -211,6 +212,7 @@ released 发行版（零改动，硬约束；事件类型无关，直接复用�
 | 决策 | 内容 | 详见 |
 |---|---|---|
 | **统一载体** | canal / Debezium 消息与 JDBC 快照行统一转成 **debezium envelope 形状的 SourceRecord**，下游 deserializer 统一处理 | [02](./deep-dive/02-message-parsing.md) |
+| **rename 以 SQL 为权威** | 四种生产者的"表名"字段对 rename 全都不可用（新名 / 逗号串 / null）→ 前后名一律从 DDL 语句解析；一条语句的多个 pairs 是**一个事件**，并折叠掉对调用的临时名 | [02](./deep-dive/02-message-parsing.md) §8、[03](./deep-dive/03-event-model.md) §3 |
 | **自包含序列化栈** | 新事件（RenameTable 等）的序列化全部复制到 pipeline 模块，released 零改动 | [03](./deep-dive/03-event-model.md) |
 | **DDL 双解析器** | `scan.ddl.parser = druid`（默认，Alibaba）或 `debezium`（ANTLR），共享类型转换层 | [02](./deep-dive/02-message-parsing.md) |
 | **自写 coordinator** | pipeline 侧自建 `KafkaJsonSchema*` coordinator，实现 DDL 阻塞-刷新-执行-放行，自定义事件安全 | [04](./deep-dive/04-ddl-blocking.md) |
@@ -221,13 +223,16 @@ released 发行版（零改动，硬约束；事件类型无关，直接复用�
 
 ## 5. 已知边界（一句话版）
 
-细节见各子文档，这里只列最重要的三条：
+细节见各子文档，这里只列最重要的几条：
 
-1. **`RenameTableEvent.getType()` 返回占位值 `CREATE_TABLE`**——released 枚举里没有 RENAME_TABLE。
-   自写序列化栈按 `instanceof`/class 分派不受影响，但**别把它喂给 released 的 SchemaManager/SchemaDerivation/EventSerializer**。
+1. **`RenameTableEvent.getType()` 抛 `UnsupportedOperationException`**——released 枚举里没有 RENAME_TABLE，
+   与其返回一个错的值让按 `getType()` 分派的代码走错分支，不如直接炸。自写序列化栈按 `instanceof`/class
+   分派、不碰 `getType()`，不受影响，但**别把它喂给 released 的 SchemaManager/SchemaDerivation/EventSerializer**。
 2. **快照阶段 `displayCurrentOffset` 的边界来源**：MySQL 强制跳过有界回填（topic 无持续边界信号），
    TiDB 用 `TIDB_WATERMARK` 推进位移、默认开启回填。
 3. **增量阶段的 DDL 只会对"流中见过 CREATE"的表产出列级事件**（L2 注册表约束）。
+4. **TiCDC 的 `debezium` 协议不发 DDL**（8.5.1 实测，只有 DML）→ 该协议下流中的建表/改表事件不可见，
+   建表事件只能来自 JDBC 快照。要用 TiCDC 且需要 DDL，请选 `canal-json` 协议。
 
 ---
 

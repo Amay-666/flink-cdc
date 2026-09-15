@@ -102,7 +102,7 @@ CanalMessage(isDdl=true, sql, database, table)
        ├─ 返回 null → 跳过（不改变 schema 的 DDL）
        ├─ applySchemaChange → 改源侧 KafkaJsonSchema
        └─ if isIncludeSchemaChanges:  enqueueSchemaChange
-              └─ 构造 schema-change SourceRecord（keySchema.name = io.debezium.connector.canal.SchemaChangeKey）
+              └─ 构造 schema-change SourceRecord（keySchema.name = io.debezium.connector.kafka.json.SchemaChangeKey）
                  → 入队
   → KafkaJsonEventDeserializer.isSchemaChangeRecord（按 keySchema.name 判断）
   → convertTableChange（CREATE/ALTER/DROP）或 handleRenameTable（见 03）
@@ -242,3 +242,87 @@ mvn -o -pl .../flink-cdc-pipeline-connector-jdbc-kafka-json test -Dtest=Debezium
 ```
 
 > 全绿 → 提交 push。任一真实链路暴露格式差异 → 如实报告，回计划层决策，不静默掩盖。
+
+---
+
+## 8. 四类生产者 × 事件 → SourceRecord → Event 全矩阵（基于真实抓包）
+
+本节是"从 Kafka 上的一条字节，到下游拿到的一个 Event"的**全路径地图**。每一条结论都来自
+`src/test/resources/kafkajson/captured/` 里的真实抓包（抓取方法见该目录的 `README.md`），
+由 `KafkaJsonCapturedMessageTest`（source 模块）与 `KafkaJsonRenameFixtureTest`（pipeline 模块）回放。
+
+### 8.1 生产者与版本（抓包实测）
+
+| 生产者 | 版本 | 格式开关 | DDL 落在哪 | 抓包目录 |
+|---|---|---|---|---|
+| canal-server | 1.1.8 | `scan.message.format=canal` | 同一个 topic（`isDdl=true`） | `captured/mysql-canal/`、`captured/mysql-canal-swap/` |
+| TiCDC | 8.5.1 | `canal`（`canal-json` 协议） | 同一个 topic | `captured/tidb-canal/` |
+| Debezium MySQL | 1.9.7（Kafka Connect 1.9） | `debezium` | **schema-history topic**，不在数据 topic 上 | `captured/mysql-debezium/` |
+| TiCDC | 8.5.1 | `debezium`（`enable-tidb-extension`） | **完全没有 DDL**（8.5.1 只发 DML） | `captured/tidb-debezium/` |
+
+### 8.2 全路径流程图
+
+```
+ ┌─ 生产者 ────────────────┐   ┌─ 消息 ────────────────────┐   ┌─ 解析 ─────────────────────┐   ┌─ SourceRecord ──────────┐   ┌─ Event ─────────────────┐
+ │ canal-server 1.1.8      │   │ flatMessage isDdl=false   │──▶│ CanalMessageParser         │──▶│ KafkaJsonRecordConverter │──▶│ DataChangeEvent         │
+ │ (MySQL, flat message)   │   │  (data[]/old[]/pkNames)   │   │  → CanalMessage            │   │  → DML 形状 SR           │   │                         │
+ │                         │   ├───────────────────────────┤   ├────────────────────────────┤   ├─────────────────────────┤   ├─────────────────────────┤
+ │                         │   │ flatMessage isDdl=true    │──▶│ CanalMessageParser         │──▶│ KafkaJsonSchemaChange-   │──▶│ CreateTableEvent        │
+ │                         │   │  (sql/table/database)     │   │                            │   │ Handler.handle           │   │ AddColumn/DropColumn/…   │
+ │                         │   ├───────────────────────────┤   ├────────────────────────────┤   │  ├ 改 L1 注册表          │   │ RenameTableEvent        │
+ │                         │   │ type=QUERY, isDdl=false,  │──▶│ 丢弃（0 条记录）            │   │  └ 入队 schema-change SR │   │ Truncate/DropTableEvent │
+ │                         │   │   data=null（ROWS_QUERY） │   │                            │   │                         │   │                         │
+ │                         │   ├───────────────────────────┤   ├────────────────────────────┤   │                         │   │                         │
+ │                         │   │ type=QUERY, isDdl=true    │──▶│ 按 DDL 解析（如            │   │                         │   │                         │
+ │                         │   │   （DDL 也复用 QUERY）     │   │   DROP DATABASE）           │   │                         │   │                         │
+ ├─────────────────────────┤   ├───────────────────────────┤   ├────────────────────────────┤   ├─────────────────────────┤   ├─────────────────────────┤
+ │ TiCDC 8.5.1             │   │ canal-json DML            │──▶│ 同上（table = 新名）        │──▶│ 同上                     │──▶│ 同上                     │
+ │ (MySQL/TiDB, canal-json)│   ├───────────────────────────┤   ├────────────────────────────┤   │                         │   │                         │
+ │                         │   │ canal-json DDL            │──▶│ 同上；多对 rename 已被      │   │                         │   │                         │
+ │                         │   │                           │   │ TiCDC 拆成一条一对          │   │                         │   │                         │
+ ├─────────────────────────┤   ├───────────────────────────┤   ├────────────────────────────┤   ├─────────────────────────┤   ├─────────────────────────┤
+ │ Debezium MySQL 1.9.7    │   │ 数据 topic envelope       │──▶│ DebeziumMessageParser      │──▶│ DebeziumRecordConverter  │──▶│ DataChangeEvent         │
+ │ (Kafka Connect 1.9)     │   │  (op/before/after/source) │   │  → DebeziumMessage         │   │  → DML 形状 SR           │   │                         │
+ │                         │   ├───────────────────────────┤   ├────────────────────────────┤   ├─────────────────────────┤   ├─────────────────────────┤
+ │                         │   │ schema-history record     │──▶│ DebeziumMessageParser      │──▶│ KafkaJsonSchemaChange-   │──▶│ CreateTableEvent        │
+ │                         │   │  (ddl + tableChanges)     │   │  → DebeziumMessage         │   │ Handler.handle           │   │ RenameTableEvent        │
+ ├─────────────────────────┤   ├───────────────────────────┤   ├────────────────────────────┤   ├─────────────────────────┤   ├─────────────────────────┤
+ │ TiCDC 8.5.1             │   │ 仅 DML envelope           │──▶│ DebeziumMessageParser      │──▶│ DebeziumRecordConverter  │──▶│ DataChangeEvent         │
+ │ (debezium 协议)          │   │  (source.commit_ts)       │   │  → TiCDC 自动探测           │   │                          │   │  ⚠ 无 DDL：建表事件只能   │
+ │                         │   │                           │   │                            │   │                          │   │  来自 JDBC 快照          │
+ └─────────────────────────┘   └───────────────────────────┘   └────────────────────────────┘   └─────────────────────────┘   └─────────────────────────┘
+                                                                          │
+                                                                          ▼
+                                                        KafkaJsonEventDeserializer（pipeline 模块）
+                                                          isSchemaChangeRecord? → 按 keySchema.name
+                                                          ├ 数据记录 → 父类 DebeziumEventDeserializationSchema
+                                                          ├ tableChangeType=RENAME_TABLE → handleRenameTable
+                                                          ├ tableChangeType=TRUNCATE_TABLE → TruncateTableEvent
+                                                          └ 其余 → convertTableChange（列级 diff）
+```
+
+### 8.3 逐事件矩阵（DML / CREATE / ALTER / RENAME / TRUNCATE / DROP）
+
+| 事件 | canal-server（flat） | TiCDC（canal-json） | Debezium 1.9.7（MySQL） | TiCDC（debezium） |
+|---|---|---|---|---|
+| **DML** | `data[]` 批（多行一条消息），值全 String，类型靠注册表 | 同 canal，`mysqlType` 全小写 | 数据 topic，typed `before`/`after`，`op` c/u/d/r | 同 Debezium + `source.commit_ts` |
+| **CREATE** | `isDdl=true,type=CREATE`，`table` = 新表名 | 同 canal | schema-history record，`tableChanges[0].type=CREATE` | **无** |
+| **ALTER** | `type=ALTER`；列级变更由 Druid AST + 前后 schema 双像 diff | 同 canal | schema-history record，`tableChanges[0].type=ALTER`（**只有后像**） | **无** |
+| **RENAME** | 一条消息含**全部 pairs**，`table` = **第一对的 new 名**；`ALTER … RENAME TO` 也报 `type=RENAME` | **每对一条消息**，SQL 被 TiCDC 重写成单对语句；`table` = new 名 | **每对一条记录**，`ddl` 被重写成单对；`source.table` 是**整条语句所有名字的逗号串**（`"t2_new,t1_new"`），根本不是表名 | **无** |
+| **TRUNCATE** | `type=TRUNCATE` | 同 canal | schema-history record（TRUNCATE 不改变 schema，靠类型标记送下游） | **无** |
+| **DROP** | `type=ERASE`（实测唯一取值，不是 `DROP`） | 同 canal | schema-history record | **无** |
+| **ROWS_QUERY** | `type=QUERY` + `isDdl=false`：`data=null`、`database=""`、`sql` 是原始 DML 文本 → **0 条记录**（`binlog_rows_query_log_events=ON` 时每条 DML 前都有一条） | 无 | 无 | 无 |
+| **QUERY（DDL）** | `type=QUERY` + **`isDdl=true`**（`DROP DATABASE IF EXISTS …` 也走这个 type）→ 按 DDL 解析 | 同 canal | 无 | 无 |
+| **水位** | — | `TIDB_WATERMARK`（`op=m` 走 Debezium 格式时） | — | `op=m` → `TIDB_WATERMARK` |
+
+### 8.4 三条硬结论（改名场景）
+
+1. **rename 的前后表名一律取自 DDL SQL**：四种生产者的 `table` 字段对 rename 全都不可用
+   （新名 / 第一对的新名 / 逗号串 / null）。这是 `KafkaJsonDruidDdlParser.parseRenameTable` 与
+   `KafkaJsonDebeziumDdlParser` 都从语句取 pairs 的原因。
+2. **一条语句 = 一个事件**（能拿到时）：canal-server 一条消息携带全部 pairs，因而下游能看到
+   "名字成环"，才能用 Doris 的原子 `REPLACE WITH TABLE … swap=true` 表达对调。TiCDC 与 Debezium
+   把多对语句**拆开**，下游就只看到一串单对 rename——**依然正确**（按语句顺序逐条执行、临时名是真实
+   存在的表），但失去原子性：中途失败会停在临时名上。详见 [03-event-model.md](./03-event-model.md) §3。
+3. **无 DDL 的生产者（TiCDC debezium）**：建表/改表事件只能来自 JDBC 快照阶段，增量阶段没有 schema
+   变更可消费——部署时选 `canal-json` 而不是 `debezium`，否则流中的 DDL 不可见。

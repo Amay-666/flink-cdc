@@ -119,7 +119,7 @@ OkHttp **不为 PUT 跟重定向**，所以客户端自己做两步：先问 FE�
 | 事件 | writer 本地行为 |
 |---|---|
 | `CreateTableEvent` | 注册 schema + converter |
-| `RenameTableEvent` | **换 key**：remove 旧 tableId + put 新 tableId（后续数据带新 id）；缓冲队列一并迁移（rename DDL 前已 flush 过，队列应为空） |
+| `RenameTableEvent` | **逐对换 key**（后续数据带新 id）：先把**所有** old key 的 schema/converter/缓冲读出来，再统一写 new key——`a→b, b→a` 的对调里就地搬会让第二对读回第一对刚写进去的东西（rename DDL 前阻塞协议已 flush，缓冲通常为空） |
 | `DropTableEvent` | 丢弃该表缓冲 + schema + converter |
 | `TruncateTableEvent` / 两个 Comment 事件 | **不动**（阻塞协议已先 flush；comment 不影响行转换） |
 | 5 个标准 schema change | `SchemaUtils.applySchemaChangeEvent(current, event)` 演进 schema + 重建 converter |
@@ -155,6 +155,7 @@ applySchemaChange(event)
   （放行转换器产出的 JSON 文本）。
 - **ALTER**：`ADD/DROP/RENAME/MODIFY COLUMN`（多列事件产多条单语句 DDL）；`ALTER TABLE old RENAME TO new`；
   `ALTER TABLE ... COMMENT '...'`；`ALTER TABLE ... MODIFY COLUMN col <type> COMMENT '...'`。
+- **RENAME TABLE**：见 §4.4（不是一条 `RENAME` 就完事——名字成环时要换语句形态）。
 - **DROP**：`DROP TABLE IF EXISTS`（幂等）；**TRUNCATE**：`TRUNCATE TABLE`。
 
 ### 4.3 DDL 的重试策略（与 StreamLoad 不同）
@@ -163,8 +164,49 @@ applySchemaChange(event)
 executeSql：网络层失败按 max-retries 重试；应用层失败（HTTP code != 0）立即抛、不重试
 ```
 
-**为什么 DDL 不重试**：DDL 不是幂等的（比如 CREATE TABLE 只生效一次），盲目重试会把失败的 DDL 再执行一遍。
+**为什么 DDL 不重试**：DDL 不是幂等的（比如 CREATE TABLE 只生效一次，RENAME 重放会把表再挪一次）。
 所以只对网络层错误重试。
+
+### 4.4 表改名（RENAME）的 SQL 生成
+
+`RenameTableEvent` 携带**一条语句的全部 pairs**（有序，见 [03-event-model.md](./03-event-model.md) §3）。
+`DorisDdlBuilder.buildRenameTableSql` 先按**映射后的 Doris 库**把 pairs 分组（跨库的一对直接 fail-fast，
+理由见 03 文档 §3.5），再对每组循环产出语句，每一轮按优先级选一种：
+
+| 优先级 | 条件 | 产出 | 为什么 |
+|---|---|---|---|
+| 1 | 队列里存在**两表成环**（`a→b` 且 `b→a`） | `ALTER TABLE db.a REPLACE WITH TABLE b PROPERTIES('swap' = 'true')` | **一条原子语句**，交换两表的名字/schema/数据且两张都保留；没有"两张表都不在自己最终名字上"的窗口 |
+| 2 | 存在一对的**目标名没被其它待办改名占着** | `ALTER TABLE db.a RENAME b` | 直接改，Doris 只接受不带库名的第二个名字 |
+| 3 | 其余（≥3 表成环，或 2 表环走了更长的链） | 把其中一张移到临时名 `__cdc_tmp_<表名前32字节>_<hash>`，把它加回队尾待办 | 一条 `ALTER TABLE` 只能改一张表，`REPLACE` 只能换两张，环必须靠临时名解开 |
+
+每轮要么完成一次改名、要么腾空一个名字，队列严格变小（轮数上限 `2n+1` 只是防"推理写错了转死循环"）。
+
+**为什么临时名是确定性的**（表名 + hash 而非 uuid）：同一条语句重跑产生同一批 SQL；否则失败重启后
+会在库里堆一串不同的 `__cdc_tmp_*`。名字长度也压过（表名截 32 字节 + 计数器），仍在 Doris 的 64 字节
+表名限制内。
+
+**如实记录的两个代价**：
+- 优先级 3 的临时名路径**不原子**：这条语句与"把表移到最终名"的那条之间失败，表就停在临时名上，需要人工
+  收尾。这是 ≥3 表环唯一的表达方式（生产者把对调写成临时名链时，连接器在 source 侧已经折成净改名，见
+  03 文档 §3.3，所以正常对调走的是优先级 1 而非这里）。
+- DDL **不重试**（§4.3）意味着"部分执行"确实可能发生。把对调压成一条 `REPLACE` 正是为了消灭这个窗口。
+
+### 4.5 Step 0：Doris 交换语义实测结论
+
+跑在 `apache/doris:fe-2.1.8` / `be-2.1.8` 上，**同时经 FE MySQL 9030 与 HTTP
+`/api/query/default_cluster/{db}`**（后者是 `DorisMetadataApplier` 的真实通道）。脚本与完整结论留档
+`flink-cdc-pipeline-connector-jdbc-kafka-json/src/test/resources/doris/rename-swap-experiment.sql`：
+
+| 编号 | 验的是什么 | 结论 |
+|---|---|---|
+| E1/E2 | 结构、表模型（UNIQUE ↔ DUPLICATE）、主键完全不同的两表互换 | **可以**，不被拒 |
+| E3 | **不带 `PROPERTIES` 的** `REPLACE WITH TABLE` | 默认就是 `swap='true'`，两张表都保留 —— 但生成 SQL **永远显式带该属性**，不依赖默认值 |
+| E4 | 交换后 `SHOW CREATE TABLE` + `SELECT` | schema **与数据**都跟着名字走 |
+| E5 | 能否经 FE HTTP 通道执行 | 可以 |
+| E6 | 第二个表名带库名 | 必须**不带**（在第一个表的库里解析）→ 跨库改名不可表达 |
+| EA | `ALTER TABLE g1 RENAME g2`（g2 已存在） | 报 `Table name[g2] is already used` → 目标名必须先腾空，这正是优先级 2/3 存在的原因 |
+| EB | 自我改名（old == new） | 报 `Same table name` → 映射后同名的一对被**跳过并告警**（不生成 SQL），不会打到 Doris |
+| EC | 一条 `ALTER TABLE` 改多张表 | 语法错误，一次只改一张 |
 
 ---
 

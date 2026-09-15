@@ -65,16 +65,24 @@ KafkaJsonEventDeserializer.getProducedType() → new KafkaJsonEventTypeInfo()   
 - 自定义 `KafkaJsonSchemaChangeEventSerializer` 用**自己的 tag 枚举 `KafkaJsonSchemaChangeTag`**（6 值，含
   `RENAME_TABLE`），仍是 `instanceof` 分派 → 自定义类走自定义 tag。**新旧序列化器可以互读 5 种已知事件**
   （同一个 byte 格式），只有 RENAME_TABLE 是新增 tag。
-- `RenameTableEvent.getType()` 返回 `SchemaChangeEventType.CREATE_TABLE`（**占位值**）——released 枚举里没有
-  RENAME_TABLE。占位值只影响"按 getType 走 generic 逻辑"的代码；自定义序列化栈按 class 分派不受影响。
+- `RenameTableEvent.getType()` **抛 `UnsupportedOperationException`**（不是返回占位值）。released 的
+  `SchemaChangeEventType` 枚举里没有 RENAME_TABLE，与其返回一个错的值让"按 getType 走 generic 逻辑"
+  的代码默默走错分支，不如直接炸掉。自定义序列化栈按 class 分派，**不调用 `getType()`**，因此不受影响。
   **边界：别把 RenameTableEvent 喂给 released 的 `SchemaManager`/`SchemaDerivation`/`EventSerializer`**，
-  它们不认这个类（会 throw 或误判为 CREATE_TABLE）。本部署模型（自建序列化栈）不会经过它们。
+  它们不认这个类（会 throw）。本部署模型（自建序列化栈）不会经过它们。
 
 ---
 
 ## 3. RENAME_TABLE 全链路（Plan A 核心新增）
 
-整条链路上每类改动的文件名都标出，方便对照代码。
+### 3.1 一条原则：前后表名一律取自 DDL SQL
+
+生产者给的"表名"字段对 rename **全部不可用**：canal/TiCDC 的 `table` 是**改名后**的名字，Debezium 的
+`source.table` 是整条语句所有名字的逗号串（`"a,a_tmp,b"`），TiCDC 的 `debezium` 协议连 DDL 都不发。
+所以 `KafkaJsonDruidDdlParser` / `KafkaJsonDebeziumDdlParser` 都从 **SQL 语句本身**解析出 pairs，
+`message.getTable()` 只用来做兜底校验。实测矩阵见 [02-message-parsing.md](./02-message-parsing.md) §8。
+
+### 3.2 全链路
 
 ```
 MySQL:  RENAME TABLE `users` TO `vip_users`
@@ -86,44 +94,94 @@ KafkaJsonSchemaChangeHandler.handle                        [source/handler/Kafka
   │ ddlParser.parse(...)
   ▼
 KafkaJsonDruidDdlParser.parse                              [source/ddl/KafkaJsonDruidDdlParser.java]
-  │ 命中 MySqlRenameTableStatement / SQLAlterTableRename → parseRenameTable
-  │ （Debezium 版：KafkaJsonDebeziumDdlParser 在 parsed==null 时用 findRenamedTable 检测）
+  │ 命中 MySqlRenameTableStatement / SQLAlterTableRename
+  │   → parseRenameTable：遍历 items，**每一对**产出一个 RenamePair（不再截断成 items[0]）
+  │ （Debezium 版：KafkaJsonDebeziumDdlParser 同样从 SQL 解析；findRenamedTable 的
+  │   "旧名消失 + 新名出现" diff 降级为校验/兜底，因为多对时它不可靠）
   ▼
-KafkaJsonDdlParsedResult.renameTable(oldId, newId, oldTable, newTable)   type = RENAME_TABLE
+KafkaJsonDdlParsedResult.renameTable(pairs)               type = RENAME_TABLE
                                                   [source/ddl/KafkaJsonDdlParsedResult.java]
+  │ 每对含 oldTableId / newTableId / oldTable / newTable
   ▼
-KafkaJsonSchemaChangeHandler.applySchemaChange            ── RENAME_TABLE 分支 ──
-  │   KafkaJsonSchema.removeTable(oldTableId)                              【L1 状态改】
-  │   KafkaJsonSchema.registerTable(newTable)  （newTable 非空时）
+KafkaJsonSchemaChangeHandler.applyRename                    ── 组装"净改名" ──
+  │   按语句顺序逐对：tableFor(old) → removeTable(old) + registerTable(new)  【L1 状态改】
+  │   并把"经临时名中转"的对折叠进起始那一次改名（见 3.3）
+  │   tableFor(old) == null → **fail-fast**（见 3.4）
   ▼
 KafkaJsonSchemaChangeHandler.enqueueSchemaChange
-  │   tableChanges.create(newTable)                         // schema 以单个 CREATE change 携带
-  │   historyDocument.set(canalTableChangeType, "RENAME_TABLE")
-  │   historyDocument.set(canalNewTableId, "test.vip_users") // dbz TableId 字符串
+  │   tableChanges.create(每个 newTable 一个 CREATE change，与 pairs 同序)
+  │   historyDocument.set(tableChangeType, "RENAME_TABLE")
+  │   historyDocument.set(renamePairs, [{oldTableId, newTableId}, …])   // 有序
   │   → schema-change SourceRecord 入队
   ▼
 KafkaJsonEventDeserializer.deserializeSchemaChangeRecord     [pipeline source/KafkaJsonEventDeserializer.java]
   │ isRenameTableChange?(historyRecord)  → handleRenameTable
-  │   oldTableId  ← record.source.db/table                  // 旧名
-  │   newTableId  ← io.debezium.relational.TableId.parse(canalNewTableId)
-  │                     → KafkaJsonSchemaUtils.toCommonTableId
-  │   newTable    ← findCreatedTable(historyRecord)         // 取单个 CREATE change
-  │   tables.removeTable(old) + tables.overwriteTable(new)  【L2 状态改】
-  │   sql         ← historyRecord 的 DDL_STATEMENTS
-  │   schema      ← KafkaJsonSchemaUtils.toSchema(newTable)（null 时空 schema）
+  │   pairs ← historyRecord.renamePairs（**每个 id 都来自这里**）
+  │   schema ← 按序 zip tableChanges 里的 CREATE change      // 不再用 record.source.db/table 拼旧名
+  │   tables.removeTable(old…) + tables.overwriteTable(new…)  【L2 状态改】
+  │   sql ← historyRecord 的 DDL_STATEMENTS（原始整条语句）
   ▼
-RenameTableEvent(oldTableId, newTableId, schema, sql)      [pipeline event/RenameTableEvent.java]
+RenameTableEvent(pairs, sql)                               [pipeline event/RenameTableEvent.java]
+  │ getPairs() 有序；tableId()/getSchema() = pairs[0]（与单对路径完全一致）
   ▼
-下游算子：instanceof RenameTableEvent → 迁移自己的状态 old→new
+下游算子：instanceof RenameTableEvent → 逐对迁移自己的状态 old→new
         [pipeline example/KafkaJsonRenameStateOperator.java]    【L3 状态改，必须由下游做】
+  ▼
+Doris sink：pairs 成环（a→b, b→a）→ 一条原子 REPLACE WITH TABLE … swap=true
+          否则逐条 ALTER TABLE … RENAME（见 05-doris-sink.md §4）
 ```
 
 **自定义字段**（`KafkaJsonSchemaChangeHandler` 常量，被 deserializer 读取）：
 
 | 字段 | 值 | 含义 |
 |---|---|---|
-| `canalTableChangeType` | `"RENAME_TABLE"` / `"RENAME_COLUMN"` | 标记这是 Debezium TableChangeType 表达不了的 rename |
-| `canalNewTableId` | `"db.table"` 字符串 | RENAME_TABLE 新表 id（dbz TableId） |
+| `tableChangeType` | `"RENAME_TABLE"` / `"RENAME_COLUMN"` / `"TRUNCATE_TABLE"` / … | 标记这是 Debezium TableChangeType 表达不了的改动 |
+| `renamePairs` | `[{"oldTableId":"db.a","newTableId":"db.b"}, …]` | RENAME_TABLE 的**有序** pairs（`oldTableId`/`newTableId`），是 deserializer 唯一的前后名来源 |
+
+> 早期版本用单个 `canalNewTableId` 字段、旧名从 `record.source.table` 拼——那正是"canal 的 `table` 是新名"
+> 这个 bug 的载体（旧名拿到的是新名，`oldTableId == newTableId`，Doris 侧生成 `ALTER TABLE db.x RENAME x`
+> 自改名）。字段换成 pairs 数组后这条路径不存在了。**序列化格式随之变化 → 旧 checkpoint 不兼容**（同分支未发布）。
+
+### 3.3 净改名：多对语句里"经临时名中转"的对要折叠
+
+MySQL/TiDB **唯一**能写出两表对调的形式是临时名三步走（`RENAME TABLE a TO b, b TO a` 直接报
+`ERROR 1050 Table 'b' already exists`，已实测）：
+
+```sql
+RENAME TABLE a TO a_tmp, b TO a, a_tmp TO b
+```
+
+`a_tmp` 只在语句内部存在过。若把三对原样发给下游，Doris 会收到 `ALTER TABLE db.a_tmp RENAME b` ——
+一张它从未见过的表，执行失败并在库里留下野表 `a_tmp`。所以
+`KafkaJsonSchemaChangeHandler.applyRename` 按语句顺序扫描 pairs，用一张
+"名字 → 已报告 pair 的下标"表把中转折叠掉：某对的 old 名如果正是前面某对刚留下的名字，它就不是新的一次
+改名，而是**那一次改名的继续**——保留原 old 的 schema 与原 old id，只把目标名换成这一对的 new 名。
+
+上面那条语句的结果是**两对**：`a→b`（schema 用 a 的）、`b→a`（schema 用 b 的）。下游于是看到的就是
+"这两个名字对调了"，正好是 Doris 一条 `REPLACE WITH TABLE … PROPERTIES('swap'='true')` 能原子表达的语义。
+原始 SQL 仍原样保留在 history record 的 DDL 字段里，供排查。
+
+**代价（如实记录）**：生产者把多对语句拆开发（TiCDC、Debezium 一对一条），下游就只能看到一串单对
+rename——**依然正确**（按语句顺序逐条执行，中转名是真实存在过的表），但失去原子性：中途失败会停在
+`a_tmp` 上。canal-server 一条消息携带整条语句，因而能拿到原子性。这是生产者决定的，连接器无法弥补。
+
+### 3.4 旧表 schema 未知 → fail-fast
+
+`applyRename` 里 `tableFor(oldTableId) == null` 直接抛异常，而不是"注册一个空 schema 的表"。
+理由：rename 之前从未观测到该表的 CREATE（job 起点在 CREATE 之后、或 Kafka 起始位点太靠后），
+继续下去这张表会以 0 列注册，之后它的数据事件会被解析成 0 列的行**静默写坏数据**。
+异常信息里直接写清补救办法：把 job（或 Kafka 起始位点）调到能看到该表 CREATE 之前。
+
+### 3.5 跨库改名
+
+source 侧**如实解析**（`KafkaJsonRenameTableIds`：不带库名的一方继承语句的 default database），
+不去猜、不静默改写。表达不了这一限制落在 Doris sink：`DorisDdlBuilder.buildRenameTableSql` 对每一对
+比较 `mapDatabase(old)` 与 `mapDatabase(new)`，不同就抛 `UnsupportedOperationException` 并给出两条出路
+（把两个 id 映射到同一个 Doris 库，或在源端分两步经临时名改名）。
+
+注意判据是**映射后**的库名而非源库名：一个库映射可以把两个源库并进一个 Doris 库，也可以把一个源库拆到
+几个 Doris 库；Doris 的 `ALTER TABLE db.a RENAME b` 与 `REPLACE WITH TABLE b` 的第二个名字都只在第一个
+表的库里解析（实测）。
 
 **列改名（RENAME_COLUMN）**：`KafkaJsonDruidDdlParser` 认 `SQLAlterTableRenameColumn`；pipeline 侧
 `KafkaJsonEventDeserializer.diffTable` 还有**同位置同类型启发式**兜底（旧列消失 + 新列同名位置出现 →
@@ -174,7 +232,10 @@ L2 注册表**只被流中的 CREATE schema-change 记录填充**（快照阶段
 
 ## 5. 补充：canal flatMessage 样本（测试资源基准）
 
-测试资源固化在 `src/test/resources/canal/`。典型形状：
+测试资源固化在 `src/test/resources/kafkajson/`：
+`captured/` 下是**真实抓包**（逐字节原样、永不修改，抓取方法见其中的 `README.md`），其余是按 wire format
+手写的样本（是"假设"，不是事实；被抓包推翻时保留原样作为护栏）。目录说明与"生产者 × rename 行为"实测
+矩阵见 `src/test/resources/kafkajson/README.md`。典型形状：
 
 **INSERT**
 ```json
