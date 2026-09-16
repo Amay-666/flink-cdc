@@ -127,6 +127,24 @@ public class TiCDCServer {
         LOG.info("changefeed {} is normal; TiCDC writes {} as canal-json.", CHANGEFEED_ID, topic);
     }
 
+    /**
+     * Removes the changefeed, if one exists. A test class shares one TiCDC server across its test
+     * methods while the changefeed id is fixed, so a class with more than one test must release the
+     * previous test's changefeed before creating its own — TiCDC rejects a second changefeed with
+     * an id that is already in use. Removing a changefeed that is not there is not an error (the
+     * cli reports it), so the outcome is only logged.
+     */
+    public void removeChangefeed() throws Exception {
+        waitForServerReady();
+        ExecResult result =
+                runCli(
+                        "changefeed remove --server=http://127.0.0.1:"
+                                + SERVER_PORT
+                                + " --changefeed-id="
+                                + CHANGEFEED_ID);
+        LOG.info("changefeed remove exit={} stdout={}", result.getExitCode(), result.getStdout());
+    }
+
     private void waitForServerReady() throws Exception {
         long deadline = System.currentTimeMillis() + 60_000;
         while (System.currentTimeMillis() < deadline) {
