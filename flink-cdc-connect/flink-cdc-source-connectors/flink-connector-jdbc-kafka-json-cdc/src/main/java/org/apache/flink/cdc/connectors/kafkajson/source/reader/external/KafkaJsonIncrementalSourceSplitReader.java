@@ -149,13 +149,13 @@ public class KafkaJsonIncrementalSourceSplitReader<C extends SourceConfig>
         Iterator<SourceRecords> dataIt = null;
         if (currentFetcher == null) {
             // (1) Reads stream split firstly and then read snapshot split
-            if (!streamSplits.isEmpty()) {
+            if (streamSplits.size() > 0) {
                 // the stream split may come from:
                 // (a) the initial stream split
                 // (b) added back stream-split in newly added table process
                 StreamSplit nextSplit = streamSplits.poll();
                 submitStreamSplit(nextSplit);
-            } else if (!snapshotSplits.isEmpty()) {
+            } else if (snapshotSplits.size() > 0) {
                 submitSnapshotSplit(snapshotSplits.poll());
             } else {
                 LOG.info("No available split to read.");
@@ -276,8 +276,9 @@ public class KafkaJsonIncrementalSourceSplitReader<C extends SourceConfig>
 
     private KafkaJsonIncrementalSourceStreamFetcher getStreamFetcher() {
         if (reusedStreamFetcher == null) {
-            FetchTask.Context context = dataSourceDialect.createFetchTaskContext(sourceConfig);
-            reusedStreamFetcher = new KafkaJsonIncrementalSourceStreamFetcher(context, subtaskId);
+            reusedStreamFetcher =
+                    new KafkaJsonIncrementalSourceStreamFetcher(
+                            dataSourceDialect.createFetchTaskContext(sourceConfig), subtaskId);
         }
         return reusedStreamFetcher;
     }

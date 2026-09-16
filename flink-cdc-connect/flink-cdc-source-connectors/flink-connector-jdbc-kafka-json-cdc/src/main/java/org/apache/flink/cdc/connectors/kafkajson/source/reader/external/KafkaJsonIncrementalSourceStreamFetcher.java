@@ -233,9 +233,7 @@ public class KafkaJsonIncrementalSourceStreamFetcher
         if (finishedSplitsInfo.containsKey(tableId)) {
             for (FinishedSnapshotSplitInfo splitInfo : finishedSplitsInfo.get(tableId)) {
                 if (taskContext.isRecordBetween(
-                                sourceRecord,
-                                splitInfo.getSplitStart(),
-                                splitInfo.getSplitEnd())
+                                sourceRecord, splitInfo.getSplitStart(), splitInfo.getSplitEnd())
                         && position.isAfter(splitInfo.getHighWatermark())) {
                     return true;
                 }
