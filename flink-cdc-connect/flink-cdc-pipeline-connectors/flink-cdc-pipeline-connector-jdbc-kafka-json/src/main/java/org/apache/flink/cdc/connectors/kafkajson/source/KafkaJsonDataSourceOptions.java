@@ -150,7 +150,7 @@ public class KafkaJsonDataSourceOptions {
     /**
      * The message format of the Kafka messages. Declared as a string (not {@code enumType}) because
      * the values are kebab-case (e.g. {@code at-least-once}) which Flink's enum conversion does not
-     * accept; the {@link KafkaJsonSourceOptions.MessageFormat} enum is resolved in the factory.
+     * accept; the KafkaJsonSourceOptions.MessageFormat enum is resolved in the factory.
      */
     public static final ConfigOption<String> MESSAGE_FORMAT =
             ConfigOptions.key("scan.message.format")
@@ -161,8 +161,8 @@ public class KafkaJsonDataSourceOptions {
 
     /**
      * The database type of the source, used to select the JDBC/dialect layer. Declared as a string
-     * for the same kebab-case reason as {@link #MESSAGE_FORMAT}; the {@link
-     * KafkaJsonSourceOptions.DatabaseType} enum is resolved in the factory. Only 'mysql' and 'tidb'
+     * for the same kebab-case reason as {@link #MESSAGE_FORMAT}; the
+     * KafkaJsonSourceOptions.DatabaseType enum is resolved in the factory. Only 'mysql' and 'tidb'
      * are implemented in this version; 'tidb' reuses the MySQL-compatible JDBC/dialect path.
      */
     public static final ConfigOption<String> DATABASE_TYPE =

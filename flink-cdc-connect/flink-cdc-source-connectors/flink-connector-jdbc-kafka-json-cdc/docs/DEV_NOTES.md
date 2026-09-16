@@ -74,8 +74,11 @@ mvn -q -o -pl flink-cdc-connect/flink-cdc-pipeline-connectors/flink-cdc-pipeline
    （pipeline `serializer/` 包），用**自己的 tag 枚举**，不能往 released 加 case。
 2. **`RenameTableEvent.getType()` 占位值 CREATE_TABLE**：只影响 generic 代码；自定义序列化栈按 class 分派
    不受影响。**别把它喂给 released SchemaManager/SchemaDerivation/EventSerializer**（会 throw 或误判为 CREATE_TABLE）。
-3. **`include.schema.changes` 默认 false**：关闭时 DDL 只改源侧 `KafkaJsonSchema`，**不发 schema-change 记录**
-   （下游看不到 CreateTableEvent/RenameTableEvent）。你的 job 里开起来才能感知 rename。
+3. **`include.schema.changes` 默认 false**：关闭时 DDL 只改源侧 `KafkaJsonSchema`，
+   **下游看不到 CreateTableEvent/RenameTableEvent**。你的 job 里开起来才能感知 rename。
+   注意**记录本身仍然会入队**（`enqueueSchemaChange` 不再受该开关约束）：base emitter 要用它把被改的表
+   记进 stream split 的 `tableSchemas`（进 checkpoint 的那份状态），"是否发给下游"由 emitter 那一层决定
+   ——见 [deep-dive/03-event-model.md §3.6](./deep-dive/03-event-model.md)。
 4. **数据事件 tableId 来自 source 结构**，不来自 L1/L2 注册表——验证/单测时 source 的 db/table 字段要写对。
 5. **下游状态不自动迁移**：RenameTableEvent 只是通知，迁移必须由下游算子做。
 6. **`KafkaJsonSchema` 快照用途**：`KafkaJsonScanFetchTask` 把 `getDatabaseSchema()` 传给 `KafkaJsonSnapshotSplitReadTask`

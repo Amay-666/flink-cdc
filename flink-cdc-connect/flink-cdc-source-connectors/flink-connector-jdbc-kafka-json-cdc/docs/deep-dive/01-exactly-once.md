@@ -18,7 +18,8 @@ limitations under the License.
 # 全量→增量切换的 exactly-once 机制
 
 > 本文回答一个问题：**连接器从「全量读」切到「增量读」的那一瞬间，会不会把同一条数据发两遍，或者漏掉一条？**
-> 一句话答案：**正常情况下不会；边界上曾经有过两个真实的重复缺陷，都已修好并用测试锁死。**
+> 一句话答案：**正常情况下不会；边界上曾经有过两个真实的重复缺陷（都已修好并用测试锁死），
+> 另有一个由 `RENAME TABLE` 触发的漏发缺陷（§5.9、§5.10，同样已修）。**
 > 关联：[ARCHITECTURE.md](../ARCHITECTURE.md)（总览）、[ROADMAP.md](../ROADMAP.md)（P0 修复记录）。
 
 ---
@@ -201,6 +202,60 @@ consumer.offsetsForTimes({每个 partition → eventTime})
 - **一段没人用的死代码**：`KafkaJsonOffsetSupplier` / `getOffsetSupplier()` 无生产调用。留着下次清理。
 - **文档过时**：有两份文档写的窗口区间和实际代码对不上。不是 bug，已随本次文档整理订正。
 
+### 5.9 改名之后：水位规则匹配不上，改由 schema 判据接管
+
+前面两节（5.3–5.6）修的都是**多发**（重复）。但同一段代码还有**漏发**的一面，而它是被
+`RENAME TABLE` 触发的——这是实测踩到的 bug，不是理论推演。
+
+**现象**：一张表改名之后，它的数据一条都写不到下游（release 版 `shouldEmit` 把改名后的 data change
+event 判成"不该发"，直接丢掉）。
+
+**为什么**：第二道闸（§5.5）问的是"这条消息的主键属于哪一块、时间还在那一块的覆盖时刻之内吗"，
+而"哪一块"这份信息（`finishedSplitsInfo` / `maxSplitHighWatermarkMap`）是**快照阶段**记下来的，
+记的是**改名之前**的名字。改名之后消息里的表名是新的，于是：
+
+- 新名字在这份信息里**查不到** → 两道闸都不说话；
+- release 版的兜底是 `return false` → **所有记录被丢掉**。
+
+也就是说：改名把"水位规则"和"消息里的表名"之间的对应关系切断了，而旧代码把"无法判断"当成了"不要发"。
+
+**修法：判据从"水位"换成"schema store"**。`shouldEmit` 现在的规则是三层：
+
+| 情况 | 判据 | 结果 |
+|---|---|---|
+| 表已进入纯流式阶段（时间越过该表**最大** HIGH） | 水位 | 发（与 release 一致） |
+| 表的主键落在某个已完成分片范围内、且时间未越过该分片 HIGH | 水位（逐分片） | **丢弃**（回填已发过，与 release 一致） |
+| 其余（表不在任何分片信息里） | **schema store 里有这张表** | 发 |
+
+第三条就是修掉改名丢数的那一条。**为什么判据是 schema store 而不是"split 里的 `tableSchemas`"**：
+schema store 是**重启后能从 checkpoint 重建的那份状态**（见下一节），所以故障重启后同一个判断会得出同一个
+结论；而 `tableSchemas` 是 split 的组成部分、判据会更脆。
+
+**放宽的代价（如实记录）**：运行期新建（或改名后）的表，从它的 CREATE/改名事件起就发，不再等它的快照回填
+——同一行可能先由流式发一次、再由回填发一次。**这是有意换来的**：漏发是丢数据，多发只要求 sink 幂等
+（Doris sink 按主键 upsert，重复变更吸收掉）。反过来"等回填"在改名场景下根本不成立——回填永远不会来了。
+
+**表从 schema store 里消失时**（DROP，或改名后旧名）也要一并处理：水位判据需要表的主键列（split column）
+才能算"落在哪一块"，而这张表已经不在 schema store 里了 → `getSplitColumn(null)` NPE → 读失败 →
+重启后重建出**同样的状态** → 确定性失败循环。这类记录（**已经转成 SourceRecord 躺在队列里、而 DDL 刚刚
+对它生效**，因为 fetch task 是"边消费边应用 DDL"、reader 在它后面排空队列）现在直接放行：队列是 FIFO，
+它们必然排在那条 DDL 之前到达 sink，此时 sink 侧这张表还在。
+
+### 5.10 改名 + 故障重启：不丢数的三条腿
+
+改名过的作业故障重启时，要让"表名已变"这件事活过这次重启，靠的是三处配合（缺一不可）：
+
+1. **schema-change 记录无条件入队**。`KafkaJsonSchemaChangeHandler.handle` 不再用
+   `include.schema.changes` 把这条记录挡在队列外——base 的 `IncrementalSourceRecordEmitter` 要靠它把
+   被改的表写进 **stream split 的 `tableSchemas`**（会被 checkpoint 的那份状态），而它自己才是决定
+   "要不要发给下游"的那一层（`includeSchemaChanges` 只影响它是否 `emitElement`）。挡在源头 = 重启后
+   连接器不知道新表名 → 后续每个 data change 要么被丢、要么解析不出 schema。
+2. **重启时用 checkpoint 重建 schema store**。`KafkaJsonSourceFetchTaskContext.configure` 把 split 携带的
+   `tableSchemas` 重新注册进共享 schema，于是新表名在重启后立刻可用。
+3. **第 5.9 节的第三条判据**据此得出结论，把改名后表的记录继续发出去。
+
+这三条都不依赖"记住改名映射表"之类的额外状态：改名的事实存在 split state 里，重启后重新读出来即可。
+
 ---
 
 ## 6. exactly-once 论证总表
@@ -211,6 +266,8 @@ consumer.offsetsForTimes({每个 partition → eventTime})
 | 增量 offset 与 checkpoint 对齐 | `KafkaJsonDialect.notifyCheckpointComplete` → `KafkaJsonStreamFetchTask.commitCurrentOffset`，仅在 checkpoint 完成后提交 | `KafkaJsonDialect.java` |
 | 全量/增量重叠区一致 | 反填记录按主键覆盖快照记录（`rewriteOutputBuffer`） | base scan fetcher |
 | 重叠区去重 | 主 stream `shouldEmit` 按已完成分片 HIGH 过滤 | base stream fetcher |
+| 改名后（及运行期新表）不丢数 | `shouldEmit` 的 schema store 判据 + schema-change 记录无条件入队 + 重启时用 checkpoint 重建 schema store | §5.9、§5.10 |
+| 表被 DROP / 改名后旧名仍有在途记录 | 表不在 schema store 时不做水位判断（否则 NPE → 重启后确定性失败循环） | §5.9 |
 | 源可回放 | Kafka 消息保留 + `offsetsForTimes` 精确 seek | §4 |
 
 Flink checkpoint 语义下：每个记录恰好在一次 checkpoint 边界内被处理，重启后从已提交的 checkpoint
@@ -230,9 +287,10 @@ Flink checkpoint 语义下：每个记录恰好在一次 checkpoint 边界内被
 |---|---|---|
 | 边界消息恰好等于分界线 | **证伪（不会重复）** | 水位哨兵 `(es, MAX, MAX)` 的 `partition=MAX` 使真实消息同 es 时排在水位**之前** → `isAtOrAfter(HIGH)` 对 `es == HIGH` 为 false → 边界消息被 per-split 分支正常丢弃，单 split 单分区本就 exactly-once |
 | 整批超发（有界回填越界） | **确认，已修** | 有界回填旧实现消费整批后才判越界；修复为 ending 排他上界 + 每分区都越界才收尾（`KafkaJsonStreamFetchTask`） |
-| 快车道开关 + 跨队列乱序 | **确认，已修（两道闸）** | `IncrementalSourceStreamFetcher.shouldEmit`（L178-203）在 `hasEnterPureStreamPhase`（L205-225）触发后对该表**全部记录短路放行**；多分区 poll 乱序下已回填记录（`es ≤ 所属 HIGH`）在触发后被二次发出 |
+| 快车道开关 + 跨队列乱序 | **确认，已修（两道闸）** | `IncrementalSourceStreamFetcher.shouldEmit`（L207-253）在 `hasEnterPureStreamPhase`（L261-281）触发后对该表**全部记录短路放行**；多分区 poll 乱序下已回填记录（`es ≤ 所属 HIGH`）在触发后被二次发出 |
 | min 水位漏掉读库期间变更 | **确认，已修** | `queryCurrentOffset` 改 max + sentinel；有界读 `[LOW, HIGH]` 含端点 |
 | TiDB 用数据库时间戳做边界 | **确认免疫** | TiDB+es 边界为 TSO，无消息 `es == TSO`，流式 `isAfter(TSO)` 天然全过滤 |
+| **改名后整表漏发** | **确认，已修** | 水位信息记的是改名**前**的名字，改名后新名字一条都匹配不上，release 兜底 `return false` → 全部丢弃；判据改为 schema store（§5.9） |
 
 ### 7.2 修复与测试代码位置
 
@@ -242,6 +300,10 @@ Flink checkpoint 语义下：每个记录恰好在一次 checkpoint 边界内被
 | 第二道闸多块预过滤（`isCoveredByFinishedSnapshotSplit`） | `KafkaJsonStreamFetchTask.java` L287-299（调用）、L330-349（实现） |
 | 第二道闸数据源（finished split 信息装配） | `HybridSplitAssigner.createStreamSplit` L228-276、`IncrementalSourceReader.fillMetaDataForStreamSplit` L417-463 |
 | `isRecordBetween`（第二道闸复用） | 基座 `JdbcSourceFetchTaskContext` L72-76 |
+| schema 判据（schema store 兜底、表已消失时不做水位判断） | `KafkaJsonIncrementalSourceStreamFetcher.shouldEmit` L207-253、`schemaStore()` L255-259 |
+| schema-change 记录无条件入队 | `KafkaJsonSchemaChangeHandler.handle`（`enqueueSchemaChange` 不受 `include.schema.changes` 约束） |
+| 重启时用 checkpoint 重建 schema store | `KafkaJsonSourceFetchTaskContext.configure` L109-120 |
+| 上述规则的回归测试 | `KafkaJsonIncrementalSourceStreamFetcherTest`（同名/重启/水位丢弃/表已消失 四个用例） |
 | 快车道短路放行根因 | 基座 `IncrementalSourceStreamFetcher.shouldEmit` L178-203 / `hasEnterPureStreamPhase` L205-225 |
 | 哨兵排序 | `KafkaJsonOffset`（真实消息 `partition < MAX`） |
 | 边界消息不重复实证 | 真实 `KafkaJsonOffset` 的 OrderProbe：`(3000,0,0).isAtOrAfter((3000,MAX,MAX)) = false` |

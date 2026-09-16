@@ -339,12 +339,10 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
                     "{} is not set, which might cause data inconsistencies for time-related fields.",
                     KafkaJsonSourceOptions.SERVER_TIME_ZONE.key());
             final String sessionTimeZone = config.get(TableConfigOptions.LOCAL_TIME_ZONE);
-            final ZoneId zoneId =
-                    TableConfigOptions.LOCAL_TIME_ZONE.defaultValue().equals(sessionTimeZone)
-                            ? ZoneId.systemDefault()
-                            : ZoneId.of(sessionTimeZone);
 
-            return zoneId;
+            return TableConfigOptions.LOCAL_TIME_ZONE.defaultValue().equals(sessionTimeZone)
+                    ? ZoneId.systemDefault()
+                    : ZoneId.of(sessionTimeZone);
         }
     }
 }

@@ -180,6 +180,33 @@ TSO 的 H ≥ 快照所有已捕获 commit_ts、且 topic 空也为非零 → �
 详见 [deep-dive/02](./deep-dive/02-message-parsing.md) §8、[deep-dive/03](./deep-dive/03-event-model.md) §3、
 [deep-dive/05](./deep-dive/05-doris-sink.md) §4.4–4.5。
 
+### P3-4 改名后的表不再丢数，且改名过的作业故障重启不丢数不报错 ✅（2026-09-16）
+
+**问题**（P3-3 把 rename 事件做对之后实测暴露的下一环）：改名之后的 data change event 被
+`shouldEmit` 判成"不该发"而丢掉。根因是判据错位——"这条消息属于哪个快照分片"那份信息
+（`finishedSplitsInfo` / `maxSplitHighWatermarkMap`）记的是**改名之前**的名字，改名后消息里的新名字一条都
+匹配不上，而 release 的兜底是 `return false`（把"无法判断"当成"不要发"）→ **整表漏发**。
+
+**修复**（三处，缺一不可）：
+- `KafkaJsonIncrementalSourceStreamFetcher.shouldEmit`：判据由"水位"扩为"**schema store 里有没有这张表**"
+  ——表在 store 里但不在任何分片信息里（改名后的表、运行期新建的表）→ 发。判据选 schema store 而非
+  split 的 `tableSchemas`，因为前者正是**重启后能从 checkpoint 重建**的那份状态。
+- 同一方法：**表已不在 schema store 时不做水位判断**。水位判断要取该表主键列（split column），表被
+  DROP/改名后取不到 → `getSplitColumn(null)` NPE → 读失败；更糟的是重启后重建出**同一个状态** → 确定性
+  失败循环。这类"已在队列里、DDL 刚对它生效"的在途记录直接放行（队列 FIFO，它们必然排在那条 DDL 之前
+  到达 sink，sink 侧该表还在）。
+- `KafkaJsonSchemaChangeHandler.handle`：schema-change 记录**无条件入队**（不再由 `include.schema.changes`
+  在源头拦掉）。base emitter 要靠它把被改的表写进**进 checkpoint 的 split state**，开关只决定"是否发给
+  下游"。
+
+**代价（有意选的一侧）**：运行期新建 / 改名后的表从事件起就发，不等回填 → 同一行可能发两次。漏发是丢数据，
+多发只要求 sink 幂等（Doris 按主键 upsert 吸收，见 [deep-dive/05](./deep-dive/05-doris-sink.md) §6）。
+
+**测试**：`KafkaJsonIncrementalSourceStreamFetcherTest`（改名当次发 / 重启后发 / 分片内未越水位仍丢 /
+表已从 schema 消失不抛异常）四用例。
+
+详见 [deep-dive/01](./deep-dive/01-exactly-once.md) §5.9–5.10、[deep-dive/03](./deep-dive/03-event-model.md) §3.6。
+
 ---
 
 ## P4 — Debezium（原低优先，2026-08-26 上提执行）

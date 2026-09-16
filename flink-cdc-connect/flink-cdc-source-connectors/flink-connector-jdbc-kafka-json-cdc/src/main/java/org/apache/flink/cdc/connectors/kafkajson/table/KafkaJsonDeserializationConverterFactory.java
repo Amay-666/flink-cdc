@@ -29,6 +29,7 @@ import com.esri.core.geometry.ogc.OGCGeometry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
+import io.debezium.connector.mysql.MySqlValueConverters;
 import io.debezium.data.EnumSet;
 import io.debezium.data.geometry.Geometry;
 import io.debezium.data.geometry.Point;

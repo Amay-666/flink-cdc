@@ -138,8 +138,9 @@ public class DorisDdlBuilder implements Serializable {
                         .append(" (")
                         .append(columns)
                         .append(")");
-        if (schema.comment() != null && !schema.comment().isEmpty()) {
-            sql.append(" COMMENT '").append(escapeSql(schema.comment())).append("'");
+        String comment = schema.comment();
+        if (comment != null && !comment.isEmpty()) {
+            sql.append(" COMMENT '").append(escapeSql(comment)).append("'");
         }
         if (primaryKeys.isEmpty()) {
             String distributeKey = firstPhysicalColumn(schema);

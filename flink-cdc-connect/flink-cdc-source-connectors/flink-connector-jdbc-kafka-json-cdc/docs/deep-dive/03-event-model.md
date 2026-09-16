@@ -187,6 +187,23 @@ source 侧**如实解析**（`KafkaJsonRenameTableIds`：不带库名的一方�
 `KafkaJsonEventDeserializer.diffTable` 还有**同位置同类型启发式**兜底（旧列消失 + 新列同名位置出现 →
 `RenameColumnEvent`，common 原生支持，零公共 API 改动）。
 
+### 3.6 schema-change 记录无条件入队
+
+`KafkaJsonSchemaChangeHandler.handle` 结尾的 `enqueueSchemaChange(...)` **不再被 `include.schema.changes`
+约束**（早期版本写成 `if (includeSchemaChanges) { enqueue… }`）。原因是这条记录有两个消费者，而它们要的
+东西不同：
+
+| 消费者 | 要什么 | 受 `include.schema.changes` 影响？ |
+|---|---|---|
+| base `IncrementalSourceRecordEmitter` | 把被改的表写进 **stream split 的 `tableSchemas`**（进 checkpoint 的那份状态） | **不受**。stream split 状态下它对该记录**总是**调 `recordSchema(...)`（`IncrementalSourceRecordEmitter.processElement`），只用 `includeSchemaChanges` 兜住**下游发射**那一步 |
+| 下游（pipeline deserializer） | 看见 DDL（`CreateTableEvent`/`RenameTableEvent`/…） | 受。开关关 = 消费者看不到 DDL |
+
+所以在源头就把记录挡掉，等于把"连接器自己记账"和"要不要告诉下游"混成了一件事：`include.schema.changes=false`
+时改名过一次的作业一旦故障重启，重启后的连接器**不知道新表名**（split state 里没记），后续该表每个数据消息
+要么被丢、要么解析不出 schema。现在记录一律入队，开关只决定它是否离开算子——语义与 pipeline 侧
+`schema-change.enabled` 一致。**改名 + 重启不丢数的三条腿见
+[01-exactly-once.md](./01-exactly-once.md) §5.10。**
+
 ---
 
 ## 4. 状态归属（三层）与数据处理顺序

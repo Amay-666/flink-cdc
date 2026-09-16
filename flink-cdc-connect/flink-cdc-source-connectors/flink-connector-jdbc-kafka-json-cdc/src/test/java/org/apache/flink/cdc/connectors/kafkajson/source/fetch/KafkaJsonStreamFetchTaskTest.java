@@ -95,8 +95,8 @@ class KafkaJsonStreamFetchTaskTest {
         thread.setDaemon(true);
         thread.start();
         try {
-            List<SourceRecord> records = drain(context.getQueue(), 2);
-            assertEquals(2, records.size());
+            List<SourceRecord> records = drain(context.getQueue(), 3);
+            assertEquals(3, records.size());
 
             // INSERT -> op=c
             Struct first = (Struct) records.get(0).value();
@@ -106,13 +106,20 @@ class KafkaJsonStreamFetchTaskTest {
             assertEquals("t", records.get(0).topic());
             assertEquals(Integer.valueOf(0), records.get(0).kafkaPartition());
 
+            // The DDL in between produced no data record, but it does travel to the emitter as a
+            // schema-change record: that record is what the emitter records the ALTERed table from,
+            // and it is emitted here even though schema changes are disabled (the default), because
+            // the emitter — not the handler — is what keeps such a record from the consumer.
+            assertTrue(isSchemaChangeRecord(records.get(1)));
+
             // UPDATE -> op=u carrying before/after
-            Struct second = (Struct) records.get(1).value();
+            Struct second = (Struct) records.get(2).value();
             assertEquals("u", second.getString(Envelope.FieldName.OPERATION));
             assertEquals("Alice", second.getStruct(Envelope.FieldName.BEFORE).getString("name"));
             assertEquals("Bob", second.getStruct(Envelope.FieldName.AFTER).getString("name"));
 
-            // the DDL message in between produced no record; the offset tracks the last message
+            // the DDL message in between produced no data record; the offset tracks the last
+            // message
             assertEquals(new KafkaJsonOffset(3005, 0, 2), task.getCurrentOffset());
             assertEquals(3L, consumer.positionOf(PARTITION));
         } finally {
@@ -137,11 +144,13 @@ class KafkaJsonStreamFetchTaskTest {
         // phase and must not be duplicated here; the END watermark is dispatched instead
         task.execute(context);
 
-        List<SourceRecord> records = drain(context.getQueue(), 2);
-        assertEquals(2, records.size());
+        List<SourceRecord> records = drain(context.getQueue(), 3);
+        assertEquals(3, records.size());
         assertEquals(
                 "c", ((Struct) records.get(0).value()).getString(Envelope.FieldName.OPERATION));
-        assertTrue(WatermarkEvent.isEndWatermarkEvent(records.get(1)));
+        // the DDL inside the window is carried as a schema-change record (see the test above)
+        assertTrue(isSchemaChangeRecord(records.get(1)));
+        assertTrue(WatermarkEvent.isEndWatermarkEvent(records.get(2)));
         assertFalse(task.isRunning());
     }
 
@@ -496,8 +505,19 @@ class KafkaJsonStreamFetchTaskTest {
                 startingOffset,
                 endingOffset,
                 new ArrayList<>(),
-                new HashMap<>(),
+                discoveredTableSchemas(),
                 0);
+    }
+
+    /**
+     * The table schemas a stream split carries: the source reader discovers them from MySQL (JDBC)
+     * when it receives the split. A data record is only converted for a table registered this way,
+     * so a split without them could not emit anything.
+     */
+    private static Map<TableId, TableChange> discoveredTableSchemas() {
+        return new HashMap<>(
+                Collections.singletonMap(
+                        TABLE_ID, new TableChange(TableChangeType.CREATE, table())));
     }
 
     /**
@@ -513,7 +533,7 @@ class KafkaJsonStreamFetchTaskTest {
                 startingOffset,
                 endingOffset,
                 new ArrayList<>(),
-                new HashMap<>(),
+                discoveredTableSchemas(),
                 0);
     }
 
@@ -649,6 +669,16 @@ class KafkaJsonStreamFetchTaskTest {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    /**
+     * Returns whether the record is a schema-change record: one whose value carries the DDL on the
+     * {@code historyRecord} field rather than a row on the envelope's {@code op} field.
+     */
+    private static boolean isSchemaChangeRecord(SourceRecord record) {
+        Object value = record.value();
+        return value instanceof Struct
+                && ((Struct) value).schema().field(Envelope.FieldName.OPERATION) == null;
     }
 
     /** Polls the queue until {@code expected} records have been drained (or a timeout elapses). */

@@ -27,9 +27,9 @@ import org.apache.flink.cdc.connectors.base.source.meta.offset.OffsetFactory;
 import org.apache.flink.cdc.connectors.base.source.meta.split.SourceRecords;
 import org.apache.flink.cdc.connectors.base.source.metrics.SourceReaderMetrics;
 import org.apache.flink.cdc.connectors.base.source.reader.IncrementalSourceReaderContext;
-import org.apache.flink.cdc.connectors.base.source.reader.IncrementalSourceSplitReader;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.reader.KafkaJsonSourceReader;
+import org.apache.flink.cdc.connectors.kafkajson.source.reader.external.KafkaJsonIncrementalSourceSplitReader;
 import org.apache.flink.cdc.debezium.DebeziumDeserializationSchema;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
@@ -73,9 +73,9 @@ public class KafkaJsonSource<T> extends JdbcIncrementalSource<T> {
         sourceReaderMetrics.registerMetrics();
         IncrementalSourceReaderContext incrementalSourceReaderContext =
                 new IncrementalSourceReaderContext(readerContext);
-        Supplier<IncrementalSourceSplitReader<JdbcSourceConfig>> splitReaderSupplier =
+        Supplier<KafkaJsonIncrementalSourceSplitReader<JdbcSourceConfig>> splitReaderSupplier =
                 () ->
-                        new IncrementalSourceSplitReader<>(
+                        new KafkaJsonIncrementalSourceSplitReader<>(
                                 readerContext.getIndexOfSubtask(),
                                 dataSourceDialect,
                                 sourceConfig,

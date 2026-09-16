@@ -23,6 +23,8 @@ import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.runtime.operators.coordination.OperatorCoordinator;
 import org.apache.flink.util.FatalExitExceptionHandler;
 
+import javax.annotation.Nonnull;
+
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -88,7 +90,7 @@ public class KafkaJsonSchemaRegistryProvider implements OperatorCoordinator.Prov
         }
 
         @Override
-        public synchronized Thread newThread(Runnable r) {
+        public synchronized Thread newThread(@Nonnull Runnable r) {
             if (t != null) {
                 throw new Error(
                         "This indicates that a fatal error has happened and caused the "

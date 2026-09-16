@@ -31,6 +31,7 @@ import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffsetFa
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTableDiscoveryUtils;
 import org.apache.flink.cdc.connectors.kafkajson.utils.KafkaJsonSchemaUtils;
 import org.apache.flink.cdc.debezium.DebeziumDeserializationSchema;
+import org.apache.flink.connector.base.source.reader.RecordEmitter;
 
 import io.debezium.jdbc.JdbcConnection;
 import org.apache.kafka.connect.source.SourceRecord;

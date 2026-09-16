@@ -47,10 +47,10 @@ import java.io.Serializable;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Builds the Debezium-shaped {@link SourceRecord}s for the Canal source.
@@ -67,8 +67,12 @@ public class KafkaJsonRecordFactory implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
-    private final Map<TableId, TableSchema> tableSchemas = new HashMap<>();
-    private final Map<TableId, Table> tables = new HashMap<>();
+    // Both maps are written by the stream fetch task's executor thread (a DDL is applied as it is
+    // consumed) and read by the split reader's thread (the schema-store fallback of shouldEmit and
+    // the record converter), so they must be concurrent: a plain HashMap could hand a reader a
+    // missing entry (a dropped record) or throw while resizing.
+    private final Map<TableId, TableSchema> tableSchemas = new ConcurrentHashMap<>();
+    private final Map<TableId, Table> tables = new ConcurrentHashMap<>();
     private final TableSchemaBuilder schemaBuilder;
     private final KafkaJsonSourceInfoStructMaker sourceInfoStructMaker;
     private final Schema sourceInfoSchema;
@@ -106,7 +110,11 @@ public class KafkaJsonRecordFactory implements Serializable {
         return schemaBuilder;
     }
 
-    /** The set of tables whose schema has been registered so far. */
+    /**
+     * The set of tables whose schema has been registered so far. The returned set is a view of the
+     * live registry: it is safe to iterate (concurrently added tables may or may not be seen), but
+     * it must not be modified through the caller.
+     */
     public Set<TableId> tableIds() {
         return tables.keySet();
     }

@@ -22,10 +22,14 @@ import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceCo
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessageParser;
 
+import io.debezium.relational.Column;
+import io.debezium.relational.Table;
+import io.debezium.relational.TableId;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.jupiter.api.Test;
 
+import java.sql.Types;
 import java.util.List;
 import java.util.Map;
 
@@ -38,6 +42,39 @@ class KafkaJsonRecordConverterTest {
 
     private static final String MYSQL_TYPE =
             "\"mysqlType\":{\"id\":\"bigint(20)\",\"name\":\"varchar(255)\"}";
+
+    private static final TableId USERS_ID = new TableId("test", null, "users");
+
+    /**
+     * The schema of {@code test.users} as the snapshot phase discovers it: read from MySQL via
+     * JDBC, so the columns carry the length the message's {@code mysqlType} does not have. The
+     * converter only converts a message whose table is registered like this — it never builds a
+     * schema from the message itself — so every case below registers it first.
+     */
+    private static Table usersTable() {
+        return Table.editor()
+                .tableId(USERS_ID)
+                .addColumn(
+                        Column.editor()
+                                .name("id")
+                                .type("BIGINT")
+                                .jdbcType(Types.BIGINT)
+                                .length(20)
+                                .optional(false)
+                                .position(1)
+                                .create())
+                .addColumn(
+                        Column.editor()
+                                .name("name")
+                                .type("VARCHAR")
+                                .jdbcType(Types.VARCHAR)
+                                .length(255)
+                                .optional(true)
+                                .position(2)
+                                .create())
+                .setPrimaryKeyNames("id")
+                .create();
+    }
 
     private KafkaJsonRecordConverter converter(boolean tsMode) {
         KafkaJsonSourceConfigFactory factory =
@@ -54,7 +91,46 @@ class KafkaJsonRecordConverterTest {
             factory.eventTime(KafkaJsonSourceOptions.EventTime.TS);
         }
         KafkaJsonSourceConfig config = factory.create(0);
-        return new KafkaJsonRecordConverter(new KafkaJsonRecordFactory(config), config);
+        KafkaJsonRecordFactory recordFactory = new KafkaJsonRecordFactory(config);
+        recordFactory.registerTable(usersTable());
+        return new KafkaJsonRecordConverter(recordFactory, config);
+    }
+
+    @Test
+    void testUnregisteredTableDropsTheMessage() {
+        // a message whose table was never registered (its CREATE was not observed) has no schema to
+        // convert against; its rows are dropped rather than built from the message's mysqlType
+        KafkaJsonSourceConfigFactory factory =
+                new KafkaJsonSourceConfigFactory()
+                        .hostname("localhost")
+                        .username("root")
+                        .password("x")
+                        .databaseList("test")
+                        .tableList("test.users")
+                        .kafkaBootstrapServers("b")
+                        .kafkaTopics("t")
+                        .serverTimeZone("UTC");
+        KafkaJsonSourceConfig config = factory.create(0);
+        KafkaJsonRecordConverter converter =
+                new KafkaJsonRecordConverter(new KafkaJsonRecordFactory(config), config);
+
+        List<SourceRecord> records =
+                converter.convert(
+                        new CanalMessageParser()
+                                .parse(
+                                        "{"
+                                                + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
+                                                + "\"database\":\"test\",\"es\":1598752886000,"
+                                                + "\"id\":1,\"isDdl\":false,"
+                                                + MYSQL_TYPE
+                                                + ",\"old\":null,\"pkNames\":[\"id\"],"
+                                                + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
+                                                + "\"ts\":1598752887000,\"type\":\"INSERT\"}"),
+                        "test.users",
+                        0,
+                        100L);
+
+        assertTrue(records.isEmpty());
     }
 
     @Test

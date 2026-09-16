@@ -45,7 +45,8 @@ import java.util.Objects;
  * {@code ""}); the empty-string → {@code null} normalization is a {@code DebeziumMessage} concern,
  * whose {@code source} object may be absent entirely.
  *
- * <p>See https://github.com/alibaba/canal/wiki/ClientExample for the canonical JSON layout.
+ * <p>See <a href="https://github.com/alibaba/canal/wiki/ClientExample">Canal Wiki</a> for the
+ * canonical JSON layout.
  */
 public class CanalMessage extends KafkaJsonMessage {
 

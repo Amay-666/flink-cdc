@@ -64,8 +64,14 @@ import java.util.Map;
 /**
  * Handles the DDL messages of the canal stream: applies the schema change to the shared {@code
  * KafkaJsonSchema} — so that subsequent data records of the affected table are decoded with the new
- * schema — and, when {@code include.schema.changes} is enabled, enqueues the Debezium-shaped
- * schema-change {@link SourceRecord} into the shared queue.
+ * schema — and enqueues the Debezium-shaped schema-change {@link SourceRecord} into the shared
+ * queue.
+ *
+ * <p>The record is enqueued whether or not {@code include.schema.changes} is enabled, because the
+ * base emitter reads it for the stream split's schema bookkeeping and only forwards it downstream
+ * when schema changes are enabled (see {@code handle}). It is the only thing that carries a table
+ * change into the checkpointed split state, so withholding it would make a job that fails after a
+ * DDL restart without knowing the changed table.
  *
  * <p>The schema-change record is built here directly instead of going through {@code
  * JdbcSourceEventDispatcher.dispatchSchemaChangeEvent}: the dispatcher's {@code
@@ -179,6 +185,12 @@ public class KafkaJsonSchemaChangeHandler {
                         : context.getDatabaseSchema().tableFor(announcedTableId);
         KafkaJsonDdlParsedResult result =
                 ddlParser.parse(message.getDatabase(), announcedTableId, currentTable, sql);
+        LOG.debug(
+                "handle DDL: sql={}, announcedTableId={}, currentTable={}, resultType={}",
+                sql,
+                announcedTableId,
+                currentTable != null ? currentTable.id() : "null",
+                result != null ? result.getType() : "N/A");
         if (result == null) {
             LOG.debug("Skipping DDL that does not change the table schema: {}", sql);
             return;
@@ -192,9 +204,16 @@ public class KafkaJsonSchemaChangeHandler {
             return;
         }
         List<KafkaJsonRenamePair> renamePairs = applySchemaChange(context, result);
-        if (context.getSourceConfig().isIncludeSchemaChanges()) {
-            enqueueSchemaChange(context, message, offset, result, renamePairs);
-        }
+        // Enqueue unconditionally, even when {@code include.schema.changes} is false: the
+        // schema-change record is what the base {@code IncrementalSourceRecordEmitter} reads to
+        // record the changed table into the stream split's {@code tableSchemas} — the map that is
+        // checkpointed and that a restarted job rebuilds its schema registry from. The emitter
+        // forwards the record downstream only when schema changes are enabled (it gates the
+        // emission on the same flag), so keeping the record internal costs the consumer nothing. If
+        // the record were withheld, a failure after a DDL would restart the job without the changed
+        // table: the new name of a renamed table would be unknown, and every one of its following
+        // data records would either be dropped by the stream fetcher or fail to resolve a schema.
+        enqueueSchemaChange(context, message, offset, result, renamePairs);
     }
 
     /**
@@ -214,6 +233,17 @@ public class KafkaJsonSchemaChangeHandler {
         if (result.getNewTable() != null) {
             // CREATE / ALTER / RENAME_COLUMN all leave the affected table under the same id
             context.getDatabaseSchema().registerTable(result.getNewTable());
+            LOG.debug(
+                    "applySchemaChange: registered tableId={}, columns={}",
+                    result.getNewTable().id(),
+                    result.getNewTable().columns() != null
+                            ? result.getNewTable().columns().size()
+                            : 0);
+        } else {
+            LOG.warn(
+                    "applySchemaChange: type={}, tableId={}, newTable is null — table NOT registered",
+                    type,
+                    result.getTableId());
         }
         return Collections.emptyList();
     }
@@ -278,6 +308,17 @@ public class KafkaJsonSchemaChangeHandler {
                             : oldTable.edit().tableId(pair.getNewTableId()).create();
             context.getDatabaseSchema().removeTable(pair.getOldTableId());
             context.getDatabaseSchema().registerTable(newTable);
+            // Nothing else has to be told about the rename: the fetcher's watermark maps keep the
+            // pre-rename names, and a data record of the renamed table is emitted through the
+            // schema-store fallback in {@code KafkaJsonIncrementalSourceStreamFetcher.shouldEmit};
+            // the schema-change record below carries the new name into the checkpointed split
+            // state.
+            LOG.info(
+                    "applyRename: removed oldTableId={}, registered newTableId={}, "
+                            + "newTable.id()={}",
+                    pair.getOldTableId(),
+                    pair.getNewTableId(),
+                    newTable.id());
             Integer chainedFrom = chainPosition.remove(pair.getOldTableId().toString());
             if (chainedFrom == null) {
                 chainPosition.put(pair.getNewTableId().toString(), resolved.size());

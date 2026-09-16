@@ -21,6 +21,8 @@ import org.apache.flink.cdc.connectors.base.source.meta.offset.Offset;
 
 import org.apache.kafka.connect.source.SourceRecord;
 
+import javax.annotation.Nonnull;
+
 import java.util.HashMap;
 import java.util.Map;
 
@@ -92,7 +94,7 @@ public class KafkaJsonOffset extends Offset {
     }
 
     @Override
-    public int compareTo(Offset o) {
+    public int compareTo(@Nonnull Offset o) {
         KafkaJsonOffset rhs = (KafkaJsonOffset) o;
         int cmp = Long.compare(getEventTime(), rhs.getEventTime());
         if (cmp != 0) {

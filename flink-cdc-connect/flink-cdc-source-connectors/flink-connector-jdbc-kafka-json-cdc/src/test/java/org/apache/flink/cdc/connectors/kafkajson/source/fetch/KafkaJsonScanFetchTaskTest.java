@@ -24,6 +24,7 @@ import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceCo
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
 import org.apache.flink.cdc.connectors.kafkajson.source.dialect.KafkaJsonDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.dialect.KafkaJsonTiDBDialect;
+import org.apache.flink.cdc.connectors.kafkajson.source.handler.KafkaJsonSchemaChangeHandler;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.FakeKafkaConsumer;
 import org.apache.flink.table.types.logical.BigIntType;
@@ -37,6 +38,7 @@ import io.debezium.pipeline.DataChangeEvent;
 import io.debezium.relational.Column;
 import io.debezium.relational.Table;
 import io.debezium.relational.TableId;
+import io.debezium.relational.history.HistoryRecord;
 import io.debezium.relational.history.TableChanges.TableChange;
 import io.debezium.relational.history.TableChanges.TableChangeType;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -65,7 +67,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Unit test for {@link KafkaJsonScanFetchTask}: the snapshot read task (JDBC rows -&gt; READ
  * records) and the full incremental-snapshot pipeline (LOW -&gt; snapshot -&gt; HIGH -&gt; backfill
- * -&gt; END) driven by the base framework.
+ * -&gt; END) driven by the base framework. The DDL message the change log carries between the
+ * watermarks is part of the pipeline too: it reaches the queue as a schema-change record and the
+ * base emitter reads it from there for its split-state bookkeeping (see {@link
+ * KafkaJsonSchemaChangeHandler}).
  *
  * <p>The JDBC result is faked with {@link java.lang.reflect.Proxy} handlers (the {@link
  * Connection}/ {@link PreparedStatement}/{@link ResultSet} interfaces are too large to implement by
@@ -78,6 +83,11 @@ class KafkaJsonScanFetchTaskTest {
     private static final TableId TABLE_ID = new TableId("test", null, "users");
     private static final RowType SPLIT_KEY_TYPE =
             new RowType(Collections.singletonList(new RowType.RowField("id", new BigIntType())));
+
+    /**
+     * The value field carrying the Debezium history record (as named by the schema-change handler).
+     */
+    private static final String HISTORY_RECORD_FIELD = "historyRecord";
 
     @Test
     void testExecuteRunsFullIncrementalSnapshotPipeline() throws Exception {
@@ -117,8 +127,8 @@ class KafkaJsonScanFetchTaskTest {
 
         new KafkaJsonScanFetchTask(split).execute(context);
 
-        List<SourceRecord> records = drain(context.getQueue(), 6);
-        assertEquals(6, records.size());
+        List<SourceRecord> records = drain(context.getQueue(), 7);
+        assertEquals(7, records.size());
 
         // 1. low watermark: the stream position captured before the snapshot read
         assertTrue(WatermarkEvent.isLowWatermarkEvent(records.get(0)));
@@ -141,9 +151,16 @@ class KafkaJsonScanFetchTaskTest {
         // ordered
         // AFTER it (partition 0 > -1) and dropped by the bounded read — the stream phase emits it
 
-        // 6. the end watermark finalizes the split
-        assertTrue(WatermarkEvent.isEndWatermarkEvent(records.get(5)));
-        assertEquals(new KafkaJsonOffset(3000, -1, -1).getOffset(), records.get(5).sourceOffset());
+        // 6. the DDL message of the change log (es == 2000, between the watermarks) as the
+        // schema-change record of the ALTER: the handler enqueues it whether or not
+        // `include.schema.changes` is on, because the base emitter reads it to record the changed
+        // table into the split state — this config has the switch off, so it is enqueued and not
+        // forwarded downstream
+        assertSchemaChangeRecord(records.get(5));
+
+        // 7. the end watermark finalizes the split
+        assertTrue(WatermarkEvent.isEndWatermarkEvent(records.get(6)));
+        assertEquals(new KafkaJsonOffset(3000, -1, -1).getOffset(), records.get(6).sourceOffset());
 
         assertEquals(2, watermarkCalls.get());
     }
@@ -215,6 +232,19 @@ class KafkaJsonScanFetchTaskTest {
         assertEquals("c", value.getString(Envelope.FieldName.OPERATION));
         assertEquals(Long.valueOf(id), ((Struct) record.key()).getInt64("id"));
         assertEquals(name, value.getStruct(Envelope.FieldName.AFTER).getString("name"));
+    }
+
+    /**
+     * Asserts {@code record} is the schema-change record of the test's {@code ALTER TABLE ... ADD
+     * COLUMN `age`}: the key names the database and the value carries the Debezium history record
+     * of the DDL — the shape the base emitter consumes for its split-state bookkeeping.
+     */
+    private static void assertSchemaChangeRecord(SourceRecord record) {
+        assertEquals("test", ((Struct) record.key()).getString(HistoryRecord.Fields.DATABASE_NAME));
+        Struct value = (Struct) record.value();
+        assertTrue(
+                value.getString(HISTORY_RECORD_FIELD)
+                        .contains("ALTER TABLE `test`.`users` ADD COLUMN `age` int"));
     }
 
     private static KafkaJsonSourceFetchTaskContext context() {

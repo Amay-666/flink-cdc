@@ -53,15 +53,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit test for {@link KafkaJsonSchemaChangeHandler}: the canal DDL message updates the shared
- * schema and, when {@code include.schema.changes} is enabled, produces the Debezium-shaped
- * schema-change {@link SourceRecord} that the base {@code IncrementalSourceRecordEmitter} consumes.
+ * schema and produces the Debezium-shaped schema-change {@link SourceRecord} that the base {@code
+ * IncrementalSourceRecordEmitter} consumes.
+ *
+ * <p>The record is enqueued whether or not {@code include.schema.changes} is enabled — the emitter
+ * needs it to record the changed table into the checkpointed stream-split state, and it is the
+ * emitter that withholds it from the downstream when the flag is off (see {@link
+ * KafkaJsonSchemaChangeHandler#handle}).
  */
 class KafkaJsonSchemaChangeHandlerTest {
 
     private static final TableId TABLE_ID = new TableId("test", null, "users");
 
     @Test
-    void testDdlAppliesSchemaChangeWithoutRecord() throws Exception {
+    void testDdlWithSchemaChangesDisabledStillEnqueuesTheRecord() throws Exception {
         KafkaJsonSourceFetchTaskContext context = context(false);
 
         handle(context, "ALTER TABLE `test`.`users` ADD COLUMN `age` int", 2000);
@@ -70,8 +75,13 @@ class KafkaJsonSchemaChangeHandlerTest {
         Table updated = context.getDatabaseSchema().tableFor(TABLE_ID);
         assertEquals(3, updated.columns().size());
         assertEquals("age", updated.columnWithName("age").name());
-        // include.schema.changes is off: no schema-change record is enqueued
-        assertTrue(drain(context.getQueue(), 1).isEmpty());
+        // include.schema.changes is off, so the record never reaches the consumer — but it *is*
+        // enqueued: the base emitter records the table change from it (into the split state that is
+        // checkpointed) and is what withholds it from the downstream. Withholding the record here
+        // instead would leave a restarted job without the table the DDL changed.
+        List<SourceRecord> records = drain(context.getQueue(), 1);
+        assertEquals(1, records.size());
+        assertTrue(SourceRecordUtils.isSchemaChangeEvent(records.get(0)));
     }
 
     @Test

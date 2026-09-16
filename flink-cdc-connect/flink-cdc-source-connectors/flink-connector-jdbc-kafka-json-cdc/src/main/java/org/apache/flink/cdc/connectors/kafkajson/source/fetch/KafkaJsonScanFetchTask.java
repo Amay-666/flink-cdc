@@ -200,8 +200,7 @@ public class KafkaJsonScanFetchTask extends AbstractScanFetchTask {
                 while (context.isRunning() && rs.next()) {
                     rows++;
                     final Object[] row = new Object[columns.size()];
-                    for (int i = 0; i < columns.size(); i++) {
-                        Column column = columns.get(i);
+                    for (Column column : columns) {
                         row[column.position() - 1] = rs.getObject(column.position());
                     }
                     SourceRecord record =

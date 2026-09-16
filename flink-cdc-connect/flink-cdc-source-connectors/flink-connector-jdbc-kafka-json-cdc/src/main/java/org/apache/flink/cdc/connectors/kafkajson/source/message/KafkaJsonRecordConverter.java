@@ -22,7 +22,6 @@ import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOp
 import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.schema.KafkaJsonSourceInfo;
-import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTableUtils;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.debezium.connector.SnapshotRecord;
@@ -308,7 +307,16 @@ public class KafkaJsonRecordConverter {
         return complete;
     }
 
-    /** Returns the registered (JDBC) schema, or rebuilds one from the message {@code mysqlType}. */
+    /**
+     * Returns the registered schema of the table a canal message belongs to, or {@code null} when
+     * the table was never registered (the caller drops the message).
+     *
+     * <p>A table is registered by the schema the snapshot phase discovered for it, by its {@code
+     * CREATE} DDL, or by a rename of it. The message's own {@code mysqlType} is deliberately not
+     * used to build a schema on the fly: it carries MySQL type names only, without the length or
+     * scale a Debezium {@code Column} needs (and Debezium's own MySQL connector does not derive a
+     * schema from it either), so a schema built from it would silently describe the wrong columns.
+     */
     private Table resolveTable(CanalMessage message) {
         TableId tableId =
                 new TableId(
@@ -317,19 +325,25 @@ public class KafkaJsonRecordConverter {
                         message.getTable());
         Table table = factory.tableFor(tableId);
         if (table == null) {
-            table = KafkaJsonTableUtils.buildTable(message);
-            if (table == null) {
-                return null;
-            }
-            factory.registerTable(table);
+            // Being here means a data record was consumed for a table whose schema this connector
+            // never saw — the rows cannot be converted, so they are dropped. The message names the
+            // table and the registry shows what was seen instead, so the cause (a Kafka start
+            // offset after the table's CREATE, or a table outside the configured filter) is
+            // diagnosable from this line.
+            LOG.warn(
+                    "No registered schema for canal DML on {}.{}, dropping the message; "
+                            + "registered tables: {}",
+                    message.getDatabase(),
+                    message.getTable(),
+                    factory.tableIds());
         }
         return table;
     }
 
     /**
-     * Returns the registered (JDBC) schema of a Debezium message's table. A Debezium message
-     * carries no {@code mysqlType}/{@code sqlType}, so there is no fallback build: the table must
-     * have been registered by the snapshot phase.
+     * Returns the registered schema of a Debezium message's table. A Debezium message carries no
+     * table metadata at all, so a table must have been registered before its messages can be
+     * converted.
      */
     private Table resolveTable(DebeziumMessage message) {
         TableId tableId =

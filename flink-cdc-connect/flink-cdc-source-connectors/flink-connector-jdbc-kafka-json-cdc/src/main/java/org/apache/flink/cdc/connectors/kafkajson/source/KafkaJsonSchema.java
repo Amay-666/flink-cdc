@@ -24,6 +24,7 @@ import org.apache.flink.util.FlinkRuntimeException;
 import io.debezium.connector.mysql.MySqlConnectorConfig;
 import io.debezium.connector.mysql.MySqlTopicSelector;
 import io.debezium.jdbc.JdbcConnection;
+import io.debezium.relational.RelationalDatabaseSchema;
 import io.debezium.relational.Table;
 import io.debezium.relational.TableId;
 import io.debezium.relational.TableSchema;
@@ -53,9 +54,11 @@ import java.util.Set;
  * {@link KafkaJsonRecordFactory} so that the snapshot rows and the streaming (canal) messages build
  * byte-identical {@code SourceRecord}s.
  *
- * <p>The table metadata is sourced from the canal flatMessage {@code mysqlType} (streaming) or from
- * MySQL via JDBC (snapshot); this class caches the JDBC-derived {@link TableChange} used by the
- * snapshot splitter.
+ * <p>Table metadata is always sourced from MySQL via JDBC — by the snapshot splitter for the tables
+ * it splits, and by the streaming reader when a DDL names a table it has not seen. A canal
+ * flatMessage's own {@code mysqlType} is never used: it describes MySQL type names without the
+ * length or scale a Debezium {@link Table} needs. This class caches the JDBC-derived {@link
+ * TableChange} used by the snapshot splitter.
  */
 public class KafkaJsonSchema extends io.debezium.relational.RelationalDatabaseSchema {
 
