@@ -68,12 +68,10 @@ import static org.apache.flink.cdc.common.types.DataTypeChecks.getScale;
  * and is therefore not emitted).
  *
  * <p>Each event maps to a list of single-statement DDL strings (a multi-column event produces one
- * {@code ALTER TABLE} per column), which the {@link
- * org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisMetadataApplier} executes in
- * order. Type mapping mirrors the released pipeline-doris {@code DorisMetadataApplier}: all
- * timestamp kinds become {@code DATETIMEV2} with precision clamped to {@code [0, 6]}, and the
- * complex types (ARRAY/MAP/ROW) become {@code STRING} holding the JSON text produced by the row
- * converter.
+ * {@code ALTER TABLE} per column), which the {@link DorisMetadataApplier} executes in order. Type
+ * mapping mirrors the released pipeline-doris {@code DorisMetadataApplier}: all timestamp kinds
+ * become {@code DATETIMEV2} with precision clamped to {@code [0, 6]}, and the complex types
+ * (ARRAY/MAP/ROW) become {@code STRING} holding the JSON text produced by the row converter.
  *
  * <p>{@code VARCHAR} lengths are mapped from characters (the unit of a MySQL/TiDB {@code VARCHAR})
  * to bytes (the unit Doris measures them in): a source {@code VARCHAR(n)} becomes {@code

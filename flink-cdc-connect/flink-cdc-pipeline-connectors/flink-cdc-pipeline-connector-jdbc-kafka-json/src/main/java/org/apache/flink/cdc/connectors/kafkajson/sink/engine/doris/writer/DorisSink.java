@@ -15,11 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris;
+package org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.writer;
 
 import org.apache.flink.api.connector.sink2.Sink;
 import org.apache.flink.api.connector.sink2.SinkWriter;
 import org.apache.flink.cdc.common.event.Event;
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions;
 
 import java.time.ZoneId;
 

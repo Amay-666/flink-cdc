@@ -17,6 +17,7 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris;
 
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.writer.DorisSinkWriter;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.MetricGroup;
 

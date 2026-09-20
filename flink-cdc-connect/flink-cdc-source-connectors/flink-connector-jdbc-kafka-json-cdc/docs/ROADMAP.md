@@ -200,12 +200,49 @@ TSO 的 H ≥ 快照所有已捕获 commit_ts、且 topic 空也为非零 → �
   下游"。
 
 **代价（有意选的一侧）**：运行期新建 / 改名后的表从事件起就发，不等回填 → 同一行可能发两次。漏发是丢数据，
-多发只要求 sink 幂等（Doris 按主键 upsert 吸收，见 [deep-dive/05](./deep-dive/05-doris-sink.md) §6）。
+多发只要求 sink 幂等（Doris 按主键 upsert 吸收，见 [deep-dive/05](./deep-dive/05-doris-sink.md) §7）。
 
 **测试**：`KafkaJsonIncrementalSourceStreamFetcherTest`（改名当次发 / 重启后发 / 分片内未越水位仍丢 /
 表已从 schema 消失不抛异常）四用例。
 
 详见 [deep-dive/01](./deep-dive/01-exactly-once.md) §5.9–5.10、[deep-dive/03](./deep-dive/03-event-model.md) §3.6。
+
+### P3-5 Doris sink 三档写入：状态 + 可选两阶段提交 ✅（2026-09-20）
+
+**起因**：审计 sink 在重启/failover 下的正确性，提出「改 `StatefulSink`/`StatefulSinkWriter`，把
+sequenceCounter 与待 StreamLoad 的元数据（表名、label）写进状态；2PC 作为可选项」。
+
+**审计先更正了一个前提**：此前记的"legacy 无状态 ⇒ 被 checkpoint 覆盖的缓冲行会丢"是**错的**。
+Flink 1.18.1 的 `SinkWriterOperator.prepareSnapshotPreBarrier` 在**每个 checkpoint barrier 前无条件**调
+`sinkWriter.flush(false)`，而 `flush(boolean)` 就是同步 PUT——被某个已完成 checkpoint 覆盖的每一行，在它完成
+之前就已在 Doris 里。**legacy 的 1PC 路径没有丢数洞**，2PC 换来的是**可见性边界**，不是补一个洞。
+
+**落地**（`sink.writer` 三档，默认 `legacy`，老 `DorisSink`/`DorisSinkWriter` 一行不改）：
+
+| 档 | 类 | 语义 |
+|---|---|---|
+| `legacy` | `DorisSink`/`DorisSinkWriter` | 原样：一次 PUT 即一次提交（at-least-once + label 幂等） |
+| `stateful` | `StatefulDorisSink`/`StatefulDorisSinkWriter` | 写路径同 legacy + 可 checkpoint 的 `sequenceCounter` |
+| `stateful-2pc` | `TwoPhaseDorisSink`/`TwoPhaseDorisSinkWriter` + `DorisCommitter` | 预提交 + checkpoint 完成后提交 → **行在覆盖它的 checkpoint 完成前不可见** |
+
+- **label 可推导**：`{前缀}_{db}_{table}_{subtask}_{epoch}_{rung}`，epoch = 该批所属 checkpoint id（严格递增）。
+- **恢复不用问 Doris**：重启直接写回上次用过的 label，Doris 报出占着它的 txn → abort → 同 label 重载
+  （F12 实测：abort 会释放 label）；撞上已 commit 的 label（FINISHED）则**响亮失败**并点名 `sink.label-prefix`。
+- **状态里只有两项**：`sequenceCounter`（恢复取 `max(状态+1, 墙钟)`）与 `labelPrefix`（自描述）。
+  **不记 in-flight 事务**：要恢复的那个 checkpoint 里开着的事务正是 committer 马上要提交的那批，writer 若在
+  恢复时 abort 它们，重启后的 committer 会撞 "already aborted" 而永远起不来；**也不记缓冲行**（取状态时缓冲必空）。
+- **协议细节实测定死**（doris-2.1.8，F1–F14，留档 `two-phase-commit-experiment.sql`）：`two_phase_commit` 头**两腿
+  都要带**（FE 的 307 不是代理）、`_stream_load_2pc` 控制调用、四种幂等/失败措辞、2PC **不新增权限**。
+- **已知边界**：2PC **必须开 checkpointing**（否则行永远不可见，ITCase 固化为断言）；预提交事务闲置
+  3600s 会被 Doris 回收 → 长 checkpoint 间隔/背压会撞 commit 失败并重放。
+
+**测试**：`mvn test`（本仓库的 `test` 阶段只跑 `*Test`）195 例全绿，其中本特性新增单测 38 例
+（`DorisHttpClientTwoPhaseCommitTest` 12、`TwoPhaseDorisSinkWriterTest` 11、`StatefulDorisSinkWriterTest` 9、
+`DorisCommitterTest` 6）；另有 `DorisTwoPhaseCommitITCase` 4 例（MiniCluster + 真实 sink 链，属 `integration-test`
+阶段，本次单独 `-Dtest=DorisTwoPhaseCommitITCase` 跑通，重复三轮无 flaky）：1PC 不碰 2PC 端点 / 无 checkpoint
+时行不可见 / 有 checkpoint 时恰好提交一次 / **故障重启清掉死掉那次尝试的事务**。
+
+详见 [deep-dive/05](./deep-dive/05-doris-sink.md) §4、[deep-dive/01](./deep-dive/01-exactly-once.md) §6.1。
 
 ---
 

@@ -64,6 +64,65 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
         }
     }
 
+    /**
+     * Which writer implementation the Doris sink builds.
+     *
+     * <p>The three modes coexist so a job can move to the new behaviour on its own schedule:
+     *
+     * <ul>
+     *   <li>{@code LEGACY} (default) — the original stateless {@code DorisSinkWriter}. Every flush
+     *       is an independent Stream Load under a fresh UUID label, the buffer lives only in
+     *       memory, and a restart replays from the source. Behaviourally identical to previous
+     *       releases.
+     *   <li>{@code STATEFUL} — the same single-phase Stream Load protocol, but the writer keeps its
+     *       sequence counter in Flink state, so it stays strictly monotonic across restarts instead
+     *       of leaning on the wall clock. Rows are still visible as soon as a flush returns.
+     *   <li>{@code STATEFUL_2PC} — additionally runs each checkpoint's loads through Doris's
+     *       two-phase Stream Load, so a checkpoint's rows become visible only once that checkpoint
+     *       is complete, and a failed checkpoint's rows are aborted. Requires Doris 2.1+ and cannot
+     *       be combined with Group Commit ({@link #GROUP_COMMIT_MODE}).
+     * </ul>
+     */
+    public enum WriterMode {
+        LEGACY,
+        STATEFUL,
+        STATEFUL_2PC
+    }
+
+    /**
+     * Writer implementation to build: {@code legacy}, {@code stateful} or {@code stateful-2pc}
+     * ({@code stateful_2pc} is accepted as well). Defaults to {@code legacy}, so an existing job
+     * keeps the behaviour it has today unless it opts in.
+     *
+     * <p>Deliberately a string rather than an {@code enumType} option: Flink converts an enum by
+     * upper-casing the configured value and looking the constant up by name, so the natural
+     * spelling {@code stateful-2pc} would be looked up as {@code STATEFUL-2PC} — not a legal Java
+     * identifier, and never a hit. Parsing it here keeps the readable spelling and lets an unknown
+     * value fail with the list of valid ones.
+     */
+    public static final ConfigOption<String> WRITER_MODE =
+            ConfigOptions.key("sink.writer").stringType().defaultValue("legacy");
+
+    /**
+     * Prefix of the Stream Load labels the writer generates, so two jobs writing into one Doris
+     * cluster (or a job restarted from a different savepoint) can be told apart.
+     *
+     * <p>Read where a label is actually built from it (see {@code usesLabelPrefix}): the stateful
+     * writer labels a load {@code {prefix}_{database}_{table}_{subtask}_{uuid}}, and {@link
+     * WriterMode#STATEFUL_2PC} labels it {@code {prefix}_{database}_{table}_{subtask}_{epoch}_{n}},
+     * where the epoch is the checkpoint the load belongs to. The legacy writer builds its labels
+     * from its own built-in prefix instead, and a Group Commit load carries no label at all, so in
+     * those configurations this value is inert. Database and table names are sanitized before they
+     * are spliced in.
+     *
+     * <p>Restoring state written under a different prefix is reported but not refused: the labels
+     * of a checkpoint that is still open are found through the label this writer is about to reuse,
+     * so the restore itself is unaffected. The report is for the one case where writes can collide
+     * — a prefix shared with another job.
+     */
+    public static final ConfigOption<String> LABEL_PREFIX =
+            ConfigOptions.key("sink.label-prefix").stringType().defaultValue("cdc");
+
     /** Comma-separated list of Doris FE/coordinator endpoints ({@code host:port,...}). */
     public static final ConfigOption<String> FENODES =
             ConfigOptions.key("fenodes").stringType().noDefaultValue();
@@ -201,6 +260,57 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
 
     public DorisDataSinkOptions(Configuration config) {
         super(config);
+        WriterMode mode = getWriterMode();
+        GroupCommitMode groupCommit = config.get(GROUP_COMMIT_MODE);
+        rejectTwoPhaseCommitWithGroupCommit(mode, groupCommit);
+        if (usesLabelPrefix(mode, groupCommit)) {
+            rejectBlankLabelPrefix(config.get(LABEL_PREFIX));
+        }
+    }
+
+    /**
+     * Whether this configuration ever builds a Stream Load label out of {@link #LABEL_PREFIX}.
+     *
+     * <p>Only two combinations do: the two-phase writer, and the stateful writer with Group Commit
+     * off. The legacy writer keeps its own built-in prefix, and a Group Commit load carries no
+     * label at all (a label degrades it to a non-Group-Commit load) — so in those configurations
+     * the option is inert and a blank value breaks nothing.
+     */
+    private static boolean usesLabelPrefix(WriterMode mode, GroupCommitMode groupCommit) {
+        return mode == WriterMode.STATEFUL_2PC
+                || (mode == WriterMode.STATEFUL && groupCommit == GroupCommitMode.OFF);
+    }
+
+    /**
+     * Two-phase commit and Group Commit are two answers to the same question — when a batch becomes
+     * visible — and they cannot be layered: Group Commit decides the commit moment itself, and
+     * specifying a label (which the 2PC epoch scheme is built on) is exactly what degrades a load
+     * to non-Group-Commit. Failing at construction names both options instead of letting the job
+     * discover it as a Doris-side rejection.
+     */
+    private static void rejectTwoPhaseCommitWithGroupCommit(
+            WriterMode mode, GroupCommitMode groupCommit) {
+        if (mode == WriterMode.STATEFUL_2PC && groupCommit != GroupCommitMode.OFF) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Options %s=stateful-2pc and %s=%s cannot be combined: two-phase commit"
+                                    + " decides when a batch becomes visible by committing the"
+                                    + " checkpoint's transactions, while Group Commit decides that"
+                                    + " on its own and treats a user-supplied label as opting out"
+                                    + " of it.",
+                            WRITER_MODE.key(), GROUP_COMMIT_MODE.key(), groupCommit));
+        }
+    }
+
+    /**
+     * Called only for the configurations {@link #usesLabelPrefix} selects. A blank prefix costs the
+     * label the only part of it that identifies the job, which is what the option is for.
+     */
+    private static void rejectBlankLabelPrefix(String prefix) {
+        if (prefix == null || prefix.trim().isEmpty()) {
+            throw new IllegalArgumentException(
+                    String.format("Option %s must not be blank", LABEL_PREFIX.key()));
+        }
     }
 
     @Override
@@ -213,6 +323,44 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
     public DorisDataSinkOptions withTableMapping(TableIdMapping mapping) {
         super.withTableMapping(mapping);
         return this;
+    }
+
+    /**
+     * Parses {@link #WRITER_MODE}. Both spellings people reach for are accepted — {@code
+     * stateful-2pc} and {@code stateful_2pc} — and an unknown value names itself and the valid ones
+     * instead of falling back to the default.
+     */
+    public WriterMode getWriterMode() {
+        String configured = getConfig().get(WRITER_MODE);
+        String value = configured == null ? "" : configured.trim().toLowerCase().replace('_', '-');
+        switch (value) {
+            case "legacy":
+                return WriterMode.LEGACY;
+            case "stateful":
+                return WriterMode.STATEFUL;
+            case "stateful-2pc":
+                return WriterMode.STATEFUL_2PC;
+            default:
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Unsupported %s: '%s'. Supported values are: legacy, stateful,"
+                                        + " stateful-2pc",
+                                WRITER_MODE.key(), configured));
+        }
+    }
+
+    /** Whether the writer keeps its state, i.e. any mode but {@link WriterMode#LEGACY}. */
+    public boolean isStatefulWriter() {
+        return getWriterMode() != WriterMode.LEGACY;
+    }
+
+    /** Whether the writer commits each checkpoint's Stream Loads through Doris 2PC. */
+    public boolean isTwoPhaseCommit() {
+        return getWriterMode() == WriterMode.STATEFUL_2PC;
+    }
+
+    public String getLabelPrefix() {
+        return getConfig().get(LABEL_PREFIX);
     }
 
     public String getFenodes() {

@@ -119,11 +119,12 @@ public class DorisSinkExample {
 
     /**
      * Builds the sink topology for a Doris target: schema operator + partitioning chain + the
-     * writer operator driving {@code DorisSink}. The whole chain runs at the parallelism of {@code
-     * source}. Returns the writer operator's (empty) commit output stream; callers that only run
-     * the job can ignore it.
+     * writer operator driving the dialect's sink, plus the committer when that sink commits in two
+     * phases. The whole chain runs at the parallelism of {@code source}. Returns the writer
+     * operator's commit output stream — empty for the single-phase modes, the sink's committable
+     * for {@code stateful-2pc}; callers that only run the job can ignore it.
      */
-    public static DataStream<CommittableMessage<Void>> buildSink(
+    public static <CommT> DataStream<CommittableMessage<CommT>> buildSink(
             DataStream<Event> source,
             DorisDataSinkOptions sinkOptions,
             Duration rpcTimeout,

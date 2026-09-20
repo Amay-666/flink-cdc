@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris;
+package org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.writer;
 
 import org.apache.flink.api.common.operators.ProcessingTimeService;
 import org.apache.flink.api.connector.sink2.Sink;
@@ -34,6 +34,9 @@ import org.apache.flink.cdc.connectors.kafkajson.event.AlterTableCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions;
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisRowConverter;
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisWriteMetrics;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.http.DorisHttpClient;
 
 import org.slf4j.Logger;

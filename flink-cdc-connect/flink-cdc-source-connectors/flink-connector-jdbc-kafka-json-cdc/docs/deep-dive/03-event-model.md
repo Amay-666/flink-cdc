@@ -128,7 +128,7 @@ RenameTableEvent(pairs, sql)                               [pipeline event/Renam
         [pipeline example/KafkaJsonRenameStateOperator.java]    【L3 状态改，必须由下游做】
   ▼
 Doris sink：pairs 成环（a→b, b→a）→ 一条原子 REPLACE WITH TABLE … swap=true
-          否则逐条 ALTER TABLE … RENAME（见 05-doris-sink.md §4）
+          否则逐条 ALTER TABLE … RENAME（见 05-doris-sink.md §5.4）
 ```
 
 **自定义字段**（`KafkaJsonSchemaChangeHandler` 常量，被 deserializer 读取）：

@@ -113,8 +113,8 @@ sink 链（本连接器自建 DataStream，见 3.4 放大）
     PrePartition 分区（KafkaJsonPrePartitionOperator + 复用 released 分区类）
         · SchemaChange / Flush 广播到每个并行度；DataChange 按「表 + 主键」hash
     ▼
-    DataSinkWriterOperator（复用 released）→ DorisSinkWriter → DorisHttpClient
-        · StreamLoad PUT 写数据 / HTTP 执行 DDL（全 HTTP、非 2PC）
+    DataSinkWriterOperator（复用 released）→ 三档 sink/writer（由 sink.writer 选）→ DorisHttpClient
+        · StreamLoad PUT 写数据（1PC 档）/ 预提交 + committer 提交（2PC 档）/ HTTP 执行 DDL
 ```
 
 ### 3.2 快照 / 增量两条路径怎么汇合
@@ -158,8 +158,10 @@ released 发行版（零改动，硬约束；事件类型无关，直接复用�
 │      SchemaManager / SchemaDerivation / RegistryProvider
 │    · 自写分区崩点：KafkaJsonPrePartitionOperator /
 │      KafkaJsonPartitioningEventTypeInfo + KafkaJsonPartitioningEventSerializer
-│    · Doris sink（全 HTTP）：DorisSink（非 2PC）/ DorisSinkWriter / DorisMetadataApplier /
-│      DorisDdlBuilder / DorisHttpClient / DorisRowConverter / DorisDataSinkOptions
+│    · Doris sink（全 HTTP）：按域分了子目录 —— writer/（三档：DorisSink ｜ StatefulDorisSink
+│      ｜ TwoPhaseDorisSink，由 sink.writer 选档）、state/、commit/、ddl/、http/，
+│      包根留 4 个共享件（DorisDataSinkDialect / DorisDataSinkOptions / DorisRowConverter /
+│      DorisWriteMetrics）（详见 05-doris-sink.md §6）
 ```
 
 ### 3.4 sink 链：DDL 阻塞协调放大

@@ -23,6 +23,10 @@ import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.common.sink.MetadataApplier;
 import org.apache.flink.cdc.connectors.kafkajson.sink.converter.KafkaJsonRowConverter;
 import org.apache.flink.cdc.connectors.kafkajson.sink.dialect.KafkaJsonDataSinkDialect;
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.ddl.DorisMetadataApplier;
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.writer.DorisSink;
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.writer.StatefulDorisSink;
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.writer.TwoPhaseDorisSink;
 
 import java.time.ZoneId;
 
@@ -54,9 +58,24 @@ public class DorisDataSinkDialect extends KafkaJsonDataSinkDialect {
         return (DorisDataSinkOptions) super.getOptions();
     }
 
+    /**
+     * Builds the sink the configured {@code sink.writer} mode asks for.
+     *
+     * <p>The two-phase sink is returned as a plain {@link Sink} like the others; that it also
+     * implements {@code TwoPhaseCommittingSink} is discovered downstream, by the sink builder,
+     * which is where the committer operator has to be attached to a stream to exist at all.
+     */
     @Override
     public Sink<Event> createSink() {
-        return new DorisSink(getOptions(), pipelineZoneId);
+        switch (getOptions().getWriterMode()) {
+            case STATEFUL:
+                return new StatefulDorisSink(getOptions(), pipelineZoneId);
+            case STATEFUL_2PC:
+                return new TwoPhaseDorisSink(getOptions(), pipelineZoneId);
+            case LEGACY:
+            default:
+                return new DorisSink(getOptions(), pipelineZoneId);
+        }
     }
 
     @Override

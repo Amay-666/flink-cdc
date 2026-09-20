@@ -1,0 +1,216 @@
+-- Licensed to the Apache Software Foundation (ASF) under one or more
+-- contributor license agreements.  See the NOTICE file distributed with
+-- this work for additional information regarding copyright ownership.
+-- The ASF licenses this file to You under the Apache License, Version 2.0
+-- (the "License"); you may not use this file except in compliance with
+-- the License.  You may obtain a copy of the License at
+--
+--     http://www.apache.org/licenses/LICENSE-2.0
+--
+-- Unless required by applicable law or agreed to in writing, software
+-- distributed under the License is distributed on an "AS IS" BASIS,
+-- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-- See the License for the specific language governing permissions and
+-- limitations under the License.
+
+-- ============================================================================
+-- Doris Stream Load 两阶段提交（2PC）实验矩阵
+-- ----------------------------------------------------------------------------
+-- 目的：在写任何实现之前，把 2PC 的 HTTP 细节定死 —— 预提交怎么发、事务怎么
+--       commit/abort、作业崩溃后怎么找回悬挂事务、需要什么权限。
+-- 环境：apache/doris:fe-2.1.8 + be-2.1.8（单 BE，见下方 replication 属性）
+-- 执行：SQL 经 FE 的 HTTP SQL 通道（与 DorisMetadataApplier 同一条），
+--       Stream Load 经 curl 走 FE 或直连 BE（见每条记录）。
+--
+-- 实测结论（2026-09-20，全部在本文件记录的请求上跑通）：
+--   F1 ✅ `two_phase_commit: true` 必须是**请求头**：放 URL 查询串会被忽略，
+--         响应里的 "TwoPhaseCommit" 回落成 "false"，行立即可见（不是预提交）。
+--   F2 ✅ 预提交成功：{"Status":"Success","TxnId":3008,"TwoPhaseCommit":"true",
+--         "NumberLoadedRows":2}；**行不可见**（count 0）直到 commit。
+--   F3 ❌ 这个头**必须在转向 BE 的第二次请求上重发**：FE 的 307 不是代理，
+--         只带一次头会让 BE 当普通导入立刻提交（这就是 F1 那个假成功）。
+--   F4 ✅ commit/abort 端点是 `PUT /api/{database}/_stream_load_2pc`（**路径里
+--         没有表名**）+ 头 `txn_operation: commit|abort` + `txn_id`。
+--         commit → 行可见（count 2）；abort → 行被丢弃（仍是 2，id 只剩 1,2）。
+--   F5 ✅ `_stream_load_2pc` 经 FE 同样 307 到 BE，Location 形如
+--         http://root:123456@172.20.0.11:8040/api/two_pc_exp/_stream_load_2pc?
+--         —— 带 userinfo 且带尾随 `?`，与预提交的 Location 同形 →
+--         现有 stripUserInfo + 两步走可复用。
+--   F6 ✅ 幂等语义（决定 DorisCommitter 怎么写）：
+--         · 重复 commit → "transaction [N] is already visible, not pre-committed."
+--           → 当成功（作业重放必然会撞到）
+--         · abort 不存在的事务 → "transaction [N] not found" → 当成功（无可 abort）
+--         · ⚠️ commit 一个已 abort 的事务 → "transaction [N] is already aborted.
+--           abort reason: User Abort" → **必须响亮失败**：数据已被丢弃，
+--           吞掉它就等于静默丢数。
+--   F7 ✅ 按 label 找回悬挂事务**不需要 SQL、不需要 admin**：对同一 label 发
+--         **空 body** 的 2PC 预提交，得到
+--           Status            = "Label Already Exists"
+--           ExistingJobStatus = "PRECOMMITTED"
+--           Message           = "Label [p3] has already been used, relate to
+--                                txn [3010], status [PRECOMMITTED]."
+--         参考实现（doris-flink-connector 25.1.0）的
+--           "Label \\[(.*)\\] has already been used, relate to txn \\[(\\d+)\\]"
+--         在真实报文上验证成立，group(2) 即 txn id。
+--   F8 ⚠️ 探测一个**全新** label 会**真的创建一个事务**（返回新 TxnId），
+--         必须立刻 abort 掉，否则留一个悬挂事务 —— 参考实现正是如此（探测到
+--         新 label 就 abort 自己的探测事务再退出）。
+--   F9 ✅ 权限：2PC **不新增任何权限要求**。建一个只授
+--           GRANT LOAD_PRIV ON two_pc_priv.* TO 'loader'
+--         的账号，预提交（TxnId=3013）、commit、abort、label 探测**全部成功**。
+--         **一条 SQL 都不发**（预提交 = 同一个 stream load 请求多一个头；
+--         commit/abort = `_stream_load_2pc`）。今天能 stream load 的账号
+--         今天就能 commit/abort。
+--         ⚠️ 同账号 `ALTER TABLE` 被拒：
+--           ALTER TABLE command denied to user 'loader'@'127.0.0.1' for table
+--           'two_pc_priv: t2'
+--         —— 这是**既有** DDL 路径（DorisMetadataApplier）的前提，与 2PC 无关。
+--         （`SHOW ALTER TABLE COLUMN` 对 load-only 账号反而放行。）
+--   F10 ✅ 非 2PC 路径不受影响：同一 BE 上的普通 Stream Load 响应
+--         "TwoPhaseCommit":"false"，行立即可见。
+--   F11 ⓘ 事务/标签存活时间**读自 FE 配置，不是等一小时观测到的**，照实标注：
+--         stream_load_default_precommit_timeout_second = 3600
+--         stream_load_default_timeout_second          = 259200
+--         max_stream_load_timeout_second              = 259200
+--         label_keep_max_second                       = 259200
+--         streaming_label_keep_max_second             = 43200
+--         （即：预提交事务最长闲置 3600s；实现里的 checkpoint 间隔若长于此，
+--          epoch 内的事务会在 commit 前被 Doris 回收 → 见文档风险一节。）
+--
+-- 恢复路径专项（同一套 fe/be-2.1.8 容器，2026-09-20 第二轮实测；这三条是
+-- 「重启复用死掉那次尝试的 label」这条设计的地基）：
+--   F12 ✅ **abort 会释放 label**：预提交 label=reuse1 → TxnId=3028（行不可见）
+--         → abort 3028 → **同一个 label 再次预提交成功**，拿到**新的** TxnId=3029
+--         → commit 3029 → 行（id=9）可见。
+--         所以重启的作业不必"绕开"上一次尝试留下的 label，而是按 Doris 报出的
+--         txn id 清掉它、再用**同一个 label** 重载；状态里也因此不必记
+--         in-flight 事务（见 DorisWriterState 的 javadoc）。
+--   F13 ✅ label 一旦 **commit 就不再释放**：对一个已 commit 的 label 再预提交 →
+--         Status="Label Already Exists"、ExistingJobStatus="FINISHED"，
+--         Message 里的状态写的是 `[VISIBLE]`（**字段与消息用词不同**，客户端按
+--         ExistingJobStatus 判 FINISHED）。
+--         → 这就是 epoch 必须严格递增、且撞上 FINISHED 要响亮失败的原因：
+--           它意味着这批 label 已被**别的东西**用掉（共用前缀的另一个作业、
+--           或比 label 更早的 savepoint），重试一万次也不会变好。
+--   F14 ✅ abort 一个**已 commit** 的事务：
+--         "transaction [3029] is already VISIBLE, could not abort."
+--         注意大小写与措辞：commit 侧是 "already visible, not pre-committed."，
+--         abort 侧是 "already VISIBLE, could not abort."；客户端两条都覆盖
+--         （`already visible` 用 CASE_INSENSITIVE 匹配），都当"已完成"处理。
+--
+-- 环境坑（踩过，记下来省下次的时间）：
+--   · HTTP 通道的路径段是语句的**默认库**：`CREATE DATABASE two_pc_exp` 不能用
+--     two_pc_exp 自己当上下文（Unknown database），要打 information_schema 并
+--     用全限定名建表。
+--   · Stream Load 必须带 `Expect: 100-continue`：不带时 FE 回 **HTTP 200** +
+--     {"status":"FAILED","msg":"There is no 100-continue header"} —— 200 配
+--     错误体，只看状态码会误判成成功。
+--   · curl 的 header dump 里 `Expect: 100-continue` 会带出一条中间的
+--     `HTTP/1.1 100 Continue`，取状态码要取**最后**一条 `HTTP/`。
+-- ============================================================================
+
+-- ---------------------------------------------------------------------------
+-- 准备（F1..F8、F10）：库/表/账号都是**实验脚手架**，sink 不做这些事
+-- ---------------------------------------------------------------------------
+-- 经 HTTP SQL 通道、以 information_schema 为默认库执行：
+--   DROP DATABASE IF EXISTS two_pc_exp;
+--   CREATE DATABASE two_pc_exp;
+--   CREATE TABLE two_pc_exp.t1 (id BIGINT NOT NULL, name VARCHAR(64) NULL)
+--       UNIQUE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1
+--       PROPERTIES('replication_num' = '1');
+
+-- ---------------------------------------------------------------------------
+-- F1/F2/F3：预提交（FE → 307 → BE，头要重发）
+-- ---------------------------------------------------------------------------
+-- 打 FE（8030）：
+--   curl -X PUT "http://<fe>:8030/api/two_pc_exp/t1/_stream_load" \
+--     -H "label: p1" -H "format: json" -H "strip_outer_array: true" \
+--     -H "Expect: 100-continue" \
+--     -H "two_phase_commit: true" -H "Authorization: Basic <root>" \
+--     --data-binary '[{"id":1,"name":"a"},{"id":2,"name":"b"}]'
+--     → HTTP/1.1 307，Location: http://root:123456@172.20.0.11:8040/api/two_pc_exp/t1/_stream_load
+-- 转向 BE（8040）并**重发 two_phase_commit**：
+--     → {"Status":"Success","TxnId":3008,"TwoPhaseCommit":"true","NumberLoadedRows":2}
+-- 此时 SELECT count(*) FROM two_pc_exp.t1 → 0（行不可见）
+
+-- ---------------------------------------------------------------------------
+-- F4/F6：commit / abort / 幂等
+-- ---------------------------------------------------------------------------
+-- commit（打 BE；经 FE 会先 307，见 F5）：
+--   curl -X PUT "http://<be>:8040/api/two_pc_exp/_stream_load_2pc" \
+--     -H "txn_operation: commit" -H "txn_id: 3008" -H "Authorization: Basic <root>"
+--     → {"status":"Success","msg":"transaction [3008] commit successfully."}
+--     → SELECT count(*) → 2（可见）
+-- 重复 commit：
+--     → {"status":"ANALYSIS_ERROR","msg":"TStatus: errCode = 2, detailMessage =
+--        transaction [3008] is already visible, not pre-committed."}
+-- abort：
+--   ... -H "txn_operation: abort" -H "txn_id: 3009"
+--     → "transaction [3009] abort successfully." → count 仍 2，id 只剩 1,2
+-- abort 不存在的事务：
+--   ... -H "txn_operation: abort" -H "txn_id: 999999"
+--     → "... detailMessage = transaction [999999] not found"
+-- commit 一个已 abort 的事务：
+--   ... -H "txn_operation: commit" -H "txn_id: 3010"
+--     → "... detailMessage = transaction [3010] is already aborted.
+--        abort reason: User Abort"   ← 这个必须抛错，不能当成功
+
+-- ---------------------------------------------------------------------------
+-- F7/F8：按 label 找回悬挂事务（恢复时的兜底路径）
+-- ---------------------------------------------------------------------------
+-- 先留一个悬挂事务：预提交 label=p3（只带 1 行），**不 commit** → TxnId=3010
+-- 空 body 探测同一 label（与预提交同一个请求，只是 --data-binary ''）：
+--     → {"Status":"Label Already Exists",
+--        "ExistingJobStatus":"PRECOMMITTED",
+--        "Message":"[LABEL_ALREADY_EXISTS]TStatus: errCode = 2, detailMessage =
+--                   Label [p3] has already been used, relate to txn [3010],
+--                   status [PRECOMMITTED].",
+--        "TxnId":-1,"TwoPhaseCommit":"true"}
+--     注意 TxnId 是 -1：**事务号只能从 Message 里抠**，这正是不用 SQL 的代价。
+-- 探测全新 label=p9：
+--     → {"Status":"Success","Message":"OK","TxnId":3011,...}  ← 真创建了事务，
+--       必须紧接着 abort 3011，否则留下悬挂事务
+
+-- ---------------------------------------------------------------------------
+-- F9：权限（load-only 账号）
+-- ---------------------------------------------------------------------------
+--   DROP USER IF EXISTS 'loader';
+--   CREATE USER 'loader' IDENTIFIED BY 'loaderpw';
+--   GRANT LOAD_PRIV ON two_pc_priv.* TO 'loader';
+-- 以 loader 复用上面的预提交/commit/abort/探测请求 → 全部成功
+--   （预提交 {"Status":"Success","TxnId":3013,"Message":"OK"}）
+-- 同账号 DDL（DorisMetadataApplier 的真实语句）被拒：
+--   POST /api/query/default_cluster/two_pc_priv {"stmt":"ALTER TABLE
+--     two_pc_priv.t2 ADD COLUMN extra INT NULL"}
+--     → {"msg":"Error","code":1,"data":"Failed to execute sql:
+--        java.sql.SQLSyntaxErrorException: (conn=176) errCode = 2,
+--        detailMessage = ALTER TABLE command denied to user
+--        'loader'@'127.0.0.1' for table 'two_pc_priv: t2'"}
+-- SHOW ALTER TABLE COLUMN（DorisSchemaChangeMonitor 的真实语句）→ msg=success
+
+-- ---------------------------------------------------------------------------
+-- F10 对照：非 2PC 路径
+-- ---------------------------------------------------------------------------
+--   curl -X PUT "http://<be>:8040/api/two_pc_exp/t1/_stream_load" -H "label: n1" ...
+--     → {"Status":"Success","TxnId":3012,"TwoPhaseCommit":"false"} → 立即可见
+
+-- ---------------------------------------------------------------------------
+-- F12/F13/F14：label 的生死（恢复路径）
+-- ---------------------------------------------------------------------------
+-- 直连 BE（8040），每一步之间用 FE HTTP SQL 通道查 SELECT count(*) WHERE id = 9：
+--   1) 预提交 label=reuse1（一行 id=9）
+--        → {"Status":"Success","TxnId":3028,"TwoPhaseCommit":"true"} → count=0
+--   2) abort 3028
+--        → {"status":"Success","msg":"transaction [3028] abort successfully."} → 仍 count=0
+--   3) **同一个 label** 再预提交（同一行）
+--        → {"Status":"Success","TxnId":3029,...}   ← label 已被释放，可再次使用
+--   4) commit 3029
+--        → {"status":"Success","msg":"transaction [3029] commit successfully."}
+--        → SELECT id → [1,2,7,9,12,101]（id=9 出现）
+--   5) 对已 commit 的 reuse1 再预提交（F13）
+--        → {"Status":"Label Already Exists","ExistingJobStatus":"FINISHED",
+--           "TxnId":-1,"Message":"...Label [reuse1] has already been used,
+--           relate to txn [3029], status [VISIBLE]."}
+--   6) abort 已 commit 的 3029（F14）
+--        → {"status":"ANALYSIS_ERROR","msg":"...transaction [3029] is already
+--           VISIBLE, could not abort."}

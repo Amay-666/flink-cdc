@@ -277,6 +277,28 @@ Flink checkpoint 语义下：每个记录恰好在一次 checkpoint 边界内被
 **语义边界**：上述 exactly-once 是「source → Flink 管线内部」的保证。端到端 exactly-once 仍需下游 sink
 具备幂等性或两阶段提交。
 
+### 6.1 下游定下来之后：Doris sink 的三档语义
+
+Doris 写入侧现在有三档（`sink.writer`，见 [05-doris-sink.md §4](./05-doris-sink.md)），端到端语义随之分三档：
+
+| 档 | 端到端语义 | 机制 |
+|---|---|---|
+| `legacy`（默认） | **至少一次 + 幂等收敛** | 一次 PUT 即一次提交；重放产生的重复由 Doris 侧 UNIQUE KEY(pk) 的 upsert 吸收 |
+| `stateful` | 同 legacy，另加**跨重启单调的 sequenceCounter** | 写入路径与 legacy 相同（barrier 前全量 flush），只是计数器进了状态 |
+| `stateful-2pc` | **精确一次的可见性边界**：行在覆盖它的 checkpoint 完成之前不可见 | 预提交 + checkpoint 完成后由 committer 提交；label 由 `{前缀}_{db}_{table}_{subtask}_{epoch}_{rung}` 推导，重启复用同一 label 并清掉死掉那次尝试的事务 |
+
+两处必须说清楚的边界：
+
+- **2PC 依赖 checkpointing**：没有 checkpoint 就没有提交，"精确一次"退化成"永不落库"（不是"退化成至少一次"）。
+- **精确一次的是可见性边界，不是"行只写一次"**：重放仍会让同一行被写两次（两次预提交、两次 commit 的是**不同事务**），
+  只是未完成 checkpoint 的那一次永远不可见。所以无主键（DUPLICATE KEY）表在 2PC 档下也不会有重复行——重复的那一份
+  从没成为可见版本。
+
+> **更正（2026-09-20）**：本文此前把"无状态 ⇒ 被 checkpoint 覆盖的缓冲行会丢"当作 1PC 路径的漏洞。这是**错的**：
+> Flink 1.18.1 在每个 checkpoint barrier 之前无条件调 `sinkWriter.flush(false)`，即"被 checkpoint 覆盖"与"已写入
+> Doris"是同一件事。**legacy 路径没有丢数洞**，2PC 换来的是可见性边界，不是"补上一个丢数洞"（详见
+> [05-doris-sink.md §3.1](./05-doris-sink.md)）。
+
 ---
 
 ## 7. 给懂行的人（结论 + 代码位置）

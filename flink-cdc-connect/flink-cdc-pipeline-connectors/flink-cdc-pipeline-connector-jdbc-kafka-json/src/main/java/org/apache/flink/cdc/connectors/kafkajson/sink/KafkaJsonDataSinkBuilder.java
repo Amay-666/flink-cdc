@@ -17,7 +17,9 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.sink;
 
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.connector.sink2.Sink;
+import org.apache.flink.api.connector.sink2.TwoPhaseCommittingSink;
 import org.apache.flink.cdc.common.event.Event;
 import org.apache.flink.cdc.common.pipeline.SchemaChangeBehavior;
 import org.apache.flink.cdc.common.sink.MetadataApplier;
@@ -34,12 +36,14 @@ import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.streaming.api.connector.sink2.CommittableMessage;
 import org.apache.flink.streaming.api.connector.sink2.CommittableMessageTypeInfo;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.operators.OneInputStreamOperatorFactory;
 
 import org.apache.flink.shaded.guava31.com.google.common.hash.Hashing;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.Constructor;
 import java.time.Duration;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -66,6 +70,9 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *   └─ transform("kafka-json-sink-writer", CommittableMessageTypeInfo.noOutput(),
  *                DataSinkWriterOperatorFactory)             // released writer operator drives the dialect Sink
  *        .setParallelism(p)
+ *   └─ transform("kafka-json-sink-committer",               // only for a two-phase sink, and a
+ *                CommitterOperatorFactory)                  // dangling branch: nothing consumes it
+ *        .setParallelism(p)
  * }</pre>
  *
  * <p>Every stage runs at the parallelism of the source stream it is given, so the chain stays
@@ -91,6 +98,7 @@ public class KafkaJsonDataSinkBuilder {
     public static final String PRE_PARTITION_NAME = "PrePartition";
     public static final String POST_PARTITION_NAME = "PostPartition";
     public static final String SINK_WRITER_NAME = "kafka-json-sink-writer";
+    public static final String SINK_COMMITTER_NAME = "kafka-json-sink-committer";
 
     private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonDataSinkBuilder.class);
 
@@ -101,16 +109,22 @@ public class KafkaJsonDataSinkBuilder {
     }
 
     /**
-     * Builds the full sink topology: schema operator, partitioning chain and the writer. Every
-     * stage runs at the parallelism of {@code source}, so the whole chain is forward-connected. The
-     * returned stream carries the writer operator's (empty) {@link CommittableMessage} output and
-     * is normally ignored; it is returned so tests can attach collectors to it.
+     * Builds the full sink topology: schema operator, partitioning chain, the writer and — for a
+     * two-phase sink — the committer. Every stage runs at the parallelism of {@code source}, so the
+     * whole chain is forward-connected. The returned stream carries the writer operator's {@link
+     * CommittableMessage} output and is normally ignored; it is returned so tests can attach
+     * collectors to it.
+     *
+     * <p>The element type of the returned stream depends on the dialect's {@code sink.writer} mode:
+     * {@code Void} for the single-phase modes, whose writer emits no committable, and the sink's
+     * committable for {@code stateful-2pc}. Callers that ignore the stream — all of them outside
+     * tests — do not have to care, which is why one method serves both.
      *
      * @param source the event stream to consume. Its parallelism is the job's parallelism: give it
      *     {@code env.setParallelism(p)} (or {@code source.setParallelism(p)}) to run the sink with
      *     {@code p} subtasks.
      */
-    public DataStream<CommittableMessage<Void>> build(
+    public <CommT> DataStream<CommittableMessage<CommT>> build(
             DataStream<Event> source,
             Duration rpcTimeout,
             SchemaChangeBehavior schemaChangeBehavior,
@@ -177,16 +191,99 @@ public class KafkaJsonDataSinkBuilder {
 
     /**
      * Adds the writer operator of the released {@code DataSinkWriterOperatorFactory} driving the
-     * dialect's {@link Sink}. The output is a non-2PC commit stream, so the chain terminates here
-     * (the {@code CommittableMessage} output is {@code noOutput()}).
+     * dialect's {@link Sink}, and — when that sink commits in two phases — the committer operator
+     * that makes its pre-committed transactions visible once their checkpoint completes.
+     *
+     * <p>The committer branch is built and then dropped, because that is what a sink looks like in
+     * the DataStream API: an operator nothing consumes. {@code DataStream#transform} registers it
+     * with the environment, so dropping the reference loses nothing (the released composer leaves
+     * its committer dangling the same way), and the returned stream stays the writer's, which is
+     * what a test wants to collect from.
+     *
+     * <p>Both operators are given the input's parallelism on purpose. With equal parallelism Flink
+     * connects a pair of operators forward, subtask for subtask, which is what the committer's
+     * collector requires: it accounts for the committables of a writer subtask under a summary that
+     * that same writer subtask emits, and rejects a committable whose summary it never saw. A
+     * parallelism mismatch would replace the forward connection with a rebalance, spreading one
+     * writer subtask's summary and committables over different committer subtasks.
      */
-    public DataStream<CommittableMessage<Void>> buildSinkWriter(
+    public <CommT> DataStream<CommittableMessage<CommT>> buildSinkWriter(
             DataStream<Event> input, OperatorID schemaOperatorID) {
-        return input.transform(
-                        SINK_WRITER_NAME,
-                        CommittableMessageTypeInfo.noOutput(),
-                        new DataSinkWriterOperatorFactory<>(dialect.createSink(), schemaOperatorID))
-                .setParallelism(input.getParallelism());
+        Sink<Event> sink = dialect.createSink();
+        int parallelism = input.getParallelism();
+        if (!(sink instanceof TwoPhaseCommittingSink)) {
+            // A single-phase writer emits no committable, so noOutput() is the honest type for its
+            // output and there is no committer to attach. Nothing is ever emitted on this stream,
+            // which is why the cast — the price of one method for both modes — cannot be wrong.
+            return castToCommittable(
+                    input.transform(
+                                    SINK_WRITER_NAME,
+                                    CommittableMessageTypeInfo.noOutput(),
+                                    new DataSinkWriterOperatorFactory<>(sink, schemaOperatorID))
+                            .setParallelism(parallelism));
+        }
+
+        TwoPhaseCommittingSink<Event, CommT> committingSink =
+                (TwoPhaseCommittingSink<Event, CommT>) sink;
+        TypeInformation<CommittableMessage<CommT>> committables =
+                CommittableMessageTypeInfo.of(committingSink::getCommittableSerializer);
+        DataStream<CommittableMessage<CommT>> written =
+                input.transform(
+                                SINK_WRITER_NAME,
+                                committables,
+                                new DataSinkWriterOperatorFactory<>(sink, schemaOperatorID))
+                        .setParallelism(parallelism);
+        written.transform(
+                        SINK_COMMITTER_NAME,
+                        committables,
+                        createCommitterOperatorFactory(sink, false, true))
+                .setParallelism(parallelism);
+        return written;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <CommT> DataStream<CommittableMessage<CommT>> castToCommittable(
+            DataStream<CommittableMessage<Void>> stream) {
+        return (DataStream<CommittableMessage<CommT>>) (DataStream<?>) stream;
+    }
+
+    /**
+     * Creates the committer operator factory of the Flink version the job runs on.
+     *
+     * <p>Reflected rather than constructed for the reason the released composer reflects it: {@code
+     * CommitterOperatorFactory} is an internal class whose constructor takes {@code
+     * TwoPhaseCommittingSink} on Flink 1.18 and the {@code CommittingSink} that interface was split
+     * into on 1.19, so a compiled call would pin this connector to the version it was built
+     * against. The constructor is picked by signature, not by declaration order, so an added
+     * overload cannot silently redirect it.
+     */
+    @SuppressWarnings("unchecked")
+    private static <CommT>
+            OneInputStreamOperatorFactory<CommittableMessage<CommT>, CommittableMessage<CommT>>
+                    createCommitterOperatorFactory(
+                            Sink<Event> sink, boolean isBatchMode, boolean isCheckpointingEnabled) {
+        try {
+            Class<?> factoryClass =
+                    Class.forName(
+                            "org.apache.flink.streaming.runtime.operators.sink"
+                                    + ".CommitterOperatorFactory");
+            for (Constructor<?> constructor : factoryClass.getDeclaredConstructors()) {
+                Class<?>[] parameters = constructor.getParameterTypes();
+                if (parameters.length == 3
+                        && parameters[1] == boolean.class
+                        && parameters[2] == boolean.class) {
+                    return (OneInputStreamOperatorFactory<
+                                    CommittableMessage<CommT>, CommittableMessage<CommT>>)
+                            constructor.newInstance(sink, isBatchMode, isCheckpointingEnabled);
+                }
+            }
+            throw new IllegalStateException(
+                    "No (sink, boolean, boolean) constructor on " + factoryClass.getName());
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException(
+                    "Failed to create the committer operator for a " + sink.getClass().getName(),
+                    e);
+        }
     }
 
     /**
