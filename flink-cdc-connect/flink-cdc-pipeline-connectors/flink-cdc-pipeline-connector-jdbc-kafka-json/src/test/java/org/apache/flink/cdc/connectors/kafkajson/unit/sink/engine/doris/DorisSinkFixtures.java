@@ -34,6 +34,7 @@ import org.apache.flink.cdc.common.types.RowType;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer.Response;
+import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.writer.DorisSinkWriterTest;
 import org.apache.flink.cdc.runtime.typeutils.BinaryRecordDataGenerator;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.metrics.groups.SinkWriterMetricGroup;

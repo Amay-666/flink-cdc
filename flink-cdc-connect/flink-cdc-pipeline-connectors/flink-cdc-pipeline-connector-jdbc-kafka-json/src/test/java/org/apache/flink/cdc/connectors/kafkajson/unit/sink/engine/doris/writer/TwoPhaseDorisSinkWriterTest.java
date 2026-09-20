@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris;
+package org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.writer;
 
 import org.apache.flink.api.connector.sink2.StatefulSink;
 import org.apache.flink.api.connector.sink2.TwoPhaseCommittingSink;
@@ -27,6 +27,7 @@ import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.state.DorisWr
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.state.DorisWriterStateSerializer;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.writer.TwoPhaseDorisSink;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.writer.TwoPhaseDorisSinkWriter;
+import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.DorisSinkFixtures;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.DorisSinkFixtures.FakeInitContext;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer.RecordedRequest;

@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris;
+package org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.ddl;
 
 import org.apache.flink.cdc.common.event.AlterColumnTypeEvent;
 import org.apache.flink.cdc.common.event.CreateTableEvent;

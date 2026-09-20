@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris;
+package org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.writer;
 
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.operators.MailboxExecutor;

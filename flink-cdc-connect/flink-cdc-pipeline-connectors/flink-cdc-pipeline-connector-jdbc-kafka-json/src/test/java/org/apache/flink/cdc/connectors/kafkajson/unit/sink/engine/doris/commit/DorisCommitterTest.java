@@ -15,11 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris;
+package org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.commit;
 
 import org.apache.flink.api.connector.sink2.Committer;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.commit.DorisCommittable;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.commit.DorisCommitter;
+import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.DorisSinkFixtures;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer.Response;
 
