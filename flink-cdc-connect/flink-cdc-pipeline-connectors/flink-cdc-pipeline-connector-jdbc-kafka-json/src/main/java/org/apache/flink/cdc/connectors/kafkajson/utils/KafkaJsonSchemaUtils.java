@@ -76,18 +76,22 @@ public class KafkaJsonSchemaUtils {
 
     public static Schema getTableSchema(KafkaJsonSourceConfig sourceConfig, TableId tableId) {
         try (JdbcConnection jdbc = openJdbcConnection(sourceConfig)) {
-            return getTableSchema(jdbc, sourceConfig, tableId);
+            return getTableSchema(jdbc, new KafkaJsonDialect(sourceConfig), tableId);
         } catch (SQLException e) {
             throw new RuntimeException(
                     "Error to get table schema for " + tableId + ": " + e.getMessage(), e);
         }
     }
 
-    /** Reads the schema of the given table using an already-opened connection. */
+    /**
+     * Reads the schema of the given table using an already-opened connection and the caller's
+     * (reusable) dialect: the dialect caches the {@code TableChange} per table, so repeated calls
+     * for the same table hit the cache instead of re-reading the JDBC metadata.
+     */
     public static Schema getTableSchema(
-            JdbcConnection jdbc, KafkaJsonSourceConfig sourceConfig, TableId tableId) {
+            JdbcConnection jdbc, KafkaJsonDialect dialect, TableId tableId) {
         TableChanges.TableChange tableChange =
-                new KafkaJsonDialect(sourceConfig).queryTableSchema(jdbc, toDbzTableId(tableId));
+                dialect.queryTableSchema(jdbc, toDbzTableId(tableId));
         return toSchema(tableChange.getTable());
     }
 

@@ -27,6 +27,7 @@ import org.apache.flink.cdc.connectors.base.source.meta.split.SourceSplitState;
 import org.apache.flink.cdc.connectors.base.source.metrics.SourceReaderMetrics;
 import org.apache.flink.cdc.connectors.base.source.reader.IncrementalSourceRecordEmitter;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
+import org.apache.flink.cdc.connectors.kafkajson.source.dialect.KafkaJsonDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffsetFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTableDiscoveryUtils;
 import org.apache.flink.cdc.connectors.kafkajson.utils.KafkaJsonSchemaUtils;
@@ -53,6 +54,18 @@ public class KafkaJsonPipelineRecordEmitter extends IncrementalSourceRecordEmitt
 
     private final KafkaJsonSourceConfig sourceConfig;
 
+    /**
+     * The dialect shared by every schema read of this emitter (the constructor's full-table scan
+     * and the per-split low-watermark reads). Its {@code KafkaJsonSchema} caches the {@code
+     * TableChange} of each table, so the low-watermark {@code CreateTableEvent} reuses the schema
+     * read at job start instead of re-querying the JDBC metadata — the same consistency rationale
+     * as the cached {@link #createTableEventCache} at the stream transition: never emit an evolved
+     * schema before the corresponding schema change event, and no NPE when a table is renamed or
+     * dropped while its snapshot splits are still pending. Tables not in the cache (newly added
+     * ones) are read from JDBC on first request.
+     */
+    private final KafkaJsonDialect dialect;
+
     // Used when startup mode is initial
     private final Set<TableId> alreadySendCreateTableTables;
 
@@ -70,6 +83,7 @@ public class KafkaJsonPipelineRecordEmitter extends IncrementalSourceRecordEmitt
                 sourceConfig.isIncludeSchemaChanges(),
                 new KafkaJsonOffsetFactory());
         this.sourceConfig = sourceConfig;
+        this.dialect = new KafkaJsonDialect(sourceConfig);
         this.alreadySendCreateTableTables = new HashSet<>();
         this.createTableEventCache = generateCreateTableEvent(sourceConfig);
     }
@@ -85,7 +99,7 @@ public class KafkaJsonPipelineRecordEmitter extends IncrementalSourceRecordEmitt
                     splitState.asSnapshotSplitState().toSourceSplit().getTableId();
             TableId commonTableId = KafkaJsonSchemaUtils.toCommonTableId(tableId);
             if (!alreadySendCreateTableTables.contains(commonTableId)) {
-                try (JdbcConnection jdbc = KafkaJsonSchemaUtils.openJdbcConnection(sourceConfig)) {
+                try (JdbcConnection jdbc = dialect.openJdbcConnection(sourceConfig)) {
                     sendCreateTableEvent(jdbc, commonTableId, output);
                     alreadySendCreateTableTables.add(commonTableId);
                 }
@@ -111,12 +125,12 @@ public class KafkaJsonPipelineRecordEmitter extends IncrementalSourceRecordEmitt
 
     private void sendCreateTableEvent(
             JdbcConnection jdbc, TableId tableId, SourceOutput<Event> output) {
-        Schema schema = KafkaJsonSchemaUtils.getTableSchema(jdbc, sourceConfig, tableId);
+        Schema schema = KafkaJsonSchemaUtils.getTableSchema(jdbc, dialect, tableId);
         output.collect(new CreateTableEvent(tableId, schema));
     }
 
     private List<CreateTableEvent> generateCreateTableEvent(KafkaJsonSourceConfig sourceConfig) {
-        try (JdbcConnection jdbc = KafkaJsonSchemaUtils.openJdbcConnection(sourceConfig)) {
+        try (JdbcConnection jdbc = dialect.openJdbcConnection(sourceConfig)) {
             List<CreateTableEvent> createTableEventCache = new ArrayList<>();
             List<io.debezium.relational.TableId> capturedTableIds =
                     KafkaJsonTableDiscoveryUtils.listTables(
@@ -128,8 +142,7 @@ public class KafkaJsonPipelineRecordEmitter extends IncrementalSourceRecordEmitt
                 createTableEventCache.add(
                         new CreateTableEvent(
                                 commonTableId,
-                                KafkaJsonSchemaUtils.getTableSchema(
-                                        jdbc, sourceConfig, commonTableId)));
+                                KafkaJsonSchemaUtils.getTableSchema(jdbc, dialect, commonTableId)));
             }
             return createTableEventCache;
         } catch (SQLException e) {
