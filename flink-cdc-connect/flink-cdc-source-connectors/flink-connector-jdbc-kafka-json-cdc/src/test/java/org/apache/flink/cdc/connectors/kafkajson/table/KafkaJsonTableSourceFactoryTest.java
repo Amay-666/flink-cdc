@@ -107,7 +107,6 @@ class KafkaJsonTableSourceFactoryTest {
                         KafkaJsonSourceOptions.MessageFormat.CANAL,
                         KafkaJsonSourceOptions.DatabaseType.MYSQL,
                         KafkaJsonSourceOptions.EventTime.ES,
-                        KafkaJsonSourceOptions.BoundaryMode.EXACTLY_ONCE,
                         KafkaJsonSourceOptions.KafkaStartupMode.EARLIEST,
                         KafkaJsonSourceOptions.DdlParser.DRUID,
                         new Properties());
@@ -123,7 +122,6 @@ class KafkaJsonTableSourceFactoryTest {
         options.put("properties.kafka.group.id", "group-1");
         options.put("scan.message.format", "debezium");
         options.put("scan.message.event-time", "ts");
-        options.put("scan.boundary.mode", "at-least-once");
         options.put("scan.kafka.startup.mode", "latest");
         options.put("scan.ddl.parser", "debezium");
         options.put("scan.incremental.snapshot.chunk.size", "8000");
@@ -170,22 +168,11 @@ class KafkaJsonTableSourceFactoryTest {
                         KafkaJsonSourceOptions.MessageFormat.DEBEZIUM,
                         KafkaJsonSourceOptions.DatabaseType.MYSQL,
                         KafkaJsonSourceOptions.EventTime.TS,
-                        KafkaJsonSourceOptions.BoundaryMode.AT_LEAST_ONCE,
                         KafkaJsonSourceOptions.KafkaStartupMode.LATEST,
                         KafkaJsonSourceOptions.DdlParser.DEBEZIUM,
                         kafkaProperties);
 
         assertEquals(expectedSource, actualSource);
-    }
-
-    @Test
-    void testTimestampStartupMode() {
-        Map<String, String> options = getAllOptions();
-        options.put("scan.startup.mode", "timestamp");
-        options.put("scan.startup.timestamp-millis", "1585723984000");
-
-        KafkaJsonTableSource source = (KafkaJsonTableSource) createTableSource(options);
-        assertEquals(StartupOptions.timestamp(1585723984000L), source.getStartupOptions());
     }
 
     @Test

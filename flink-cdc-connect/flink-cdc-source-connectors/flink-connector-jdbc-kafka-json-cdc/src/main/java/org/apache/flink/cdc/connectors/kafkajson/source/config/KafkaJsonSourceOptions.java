@@ -23,7 +23,7 @@ import org.apache.flink.configuration.ConfigOptions;
 
 import java.util.Locale;
 
-/** Configurations for the Canal source. */
+/** Configurations for the kafka-json source. */
 public class KafkaJsonSourceOptions extends JdbcSourceOptions {
 
     /** The port of the MySQL server, used for the JDBC snapshot phase. */
@@ -104,30 +104,13 @@ public class KafkaJsonSourceOptions extends JdbcSourceOptions {
                                     + "'ts' (producer send time; canal ts, debezium ts_ms), or 'tidb-tso' (TiDB "
                                     + "commit TSO for the TiCDC debezium format).");
 
-    /**
-     * How to handle the boundary when a stream message timestamp equals the snapshot high
-     * watermark.
-     */
-    public static final ConfigOption<String> BOUNDARY_MODE =
-            ConfigOptions.key("scan.boundary.mode")
-                    .stringType()
-                    .defaultValue(
-                            BoundaryMode.EXACTLY_ONCE
-                                    .toString()
-                                    .toLowerCase(Locale.ROOT)
-                                    .replace('_', '-'))
-                    .withDescription(
-                            "The boundary handling mode: 'exactly-once' drops stream messages whose timestamp "
-                                    + "equals the snapshot high watermark (strict snapshot-first, default); "
-                                    + "'at-least-once' keeps them at the cost of possible duplicates.");
-
     /** Kafka consumer startup mode used for stream-only scenarios. */
     public static final ConfigOption<String> KAFKA_STARTUP_MODE =
             ConfigOptions.key("scan.kafka.startup.mode")
                     .stringType()
                     .defaultValue(KafkaStartupMode.EARLIEST.toString().toLowerCase(Locale.ROOT))
                     .withDescription(
-                            "Kafka consumer startup mode for stream-only scenarios: 'earliest' (default), 'latest' or 'timestamp'.");
+                            "Kafka consumer startup mode for stream-only scenarios: 'earliest' (default) or 'latest'.");
 
     /** The DDL parser implementation. */
     public static final ConfigOption<String> CANAL_DDL_PARSER =
@@ -166,17 +149,10 @@ public class KafkaJsonSourceOptions extends JdbcSourceOptions {
         TIDB_TSO
     }
 
-    /** Boundary handling mode of the full->incremental switch. */
-    public enum BoundaryMode {
-        EXACTLY_ONCE,
-        AT_LEAST_ONCE
-    }
-
     /** Kafka consumer startup mode. */
     public enum KafkaStartupMode {
         EARLIEST,
-        LATEST,
-        TIMESTAMP
+        LATEST
     }
 
     /** DDL parser implementation. */

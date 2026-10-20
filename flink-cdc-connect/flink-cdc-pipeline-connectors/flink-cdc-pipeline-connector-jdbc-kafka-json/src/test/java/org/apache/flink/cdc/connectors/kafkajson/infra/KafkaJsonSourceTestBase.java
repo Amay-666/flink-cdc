@@ -186,7 +186,6 @@ public abstract class KafkaJsonSourceTestBase extends TestLogger {
                 .messageFormat(KafkaJsonSourceOptions.MessageFormat.CANAL)
                 .databaseType(databaseType)
                 .eventTime(KafkaJsonSourceOptions.EventTime.ES)
-                .boundaryMode(KafkaJsonSourceOptions.BoundaryMode.EXACTLY_ONCE)
                 .kafkaStartupMode(KafkaJsonSourceOptions.KafkaStartupMode.EARLIEST)
                 .ddlParser(KafkaJsonSourceOptions.DdlParser.DRUID);
     }

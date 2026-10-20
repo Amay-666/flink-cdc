@@ -111,11 +111,6 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
                         options,
                         KafkaJsonSourceOptions.EVENT_TIME,
                         KafkaJsonSourceOptions.EventTime.class);
-        KafkaJsonSourceOptions.BoundaryMode boundaryMode =
-                getEnumOption(
-                        options,
-                        KafkaJsonSourceOptions.BOUNDARY_MODE,
-                        KafkaJsonSourceOptions.BoundaryMode.class);
         KafkaJsonSourceOptions.KafkaStartupMode kafkaStartupMode =
                 getEnumOption(
                         options,
@@ -174,7 +169,6 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
                 messageFormat,
                 databaseType,
                 eventTime,
-                boundaryMode,
                 kafkaStartupMode,
                 ddlParser,
                 kafkaProperties);
@@ -204,7 +198,6 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
         options.add(KafkaJsonSourceOptions.CANAL_MYSQL_PORT);
         options.add(KafkaJsonSourceOptions.SERVER_TIME_ZONE);
         options.add(SourceOptions.SCAN_STARTUP_MODE);
-        options.add(SourceOptions.SCAN_STARTUP_TIMESTAMP_MILLIS);
         options.add(SourceOptions.SCAN_INCREMENTAL_SNAPSHOT_CHUNK_SIZE);
         options.add(SourceOptions.CHUNK_META_GROUP_SIZE);
         options.add(SourceOptions.SCAN_SNAPSHOT_FETCH_SIZE);
@@ -219,7 +212,6 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
         options.add(KafkaJsonSourceOptions.MESSAGE_FORMAT);
         options.add(KafkaJsonSourceOptions.DATABASE_TYPE);
         options.add(KafkaJsonSourceOptions.EVENT_TIME);
-        options.add(KafkaJsonSourceOptions.BOUNDARY_MODE);
         options.add(KafkaJsonSourceOptions.KAFKA_STARTUP_MODE);
         options.add(KafkaJsonSourceOptions.CANAL_DDL_PARSER);
         return options;
@@ -229,7 +221,6 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
     private static final String SCAN_STARTUP_MODE_VALUE_SNAPSHOT = "snapshot";
     private static final String SCAN_STARTUP_MODE_VALUE_EARLIEST = "earliest-offset";
     private static final String SCAN_STARTUP_MODE_VALUE_LATEST = "latest-offset";
-    private static final String SCAN_STARTUP_MODE_VALUE_TIMESTAMP = "timestamp";
 
     private static StartupOptions getStartupOptions(ReadableConfig config) {
         String modeString = config.get(SourceOptions.SCAN_STARTUP_MODE);
@@ -243,22 +234,17 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
                 return StartupOptions.latest();
             case SCAN_STARTUP_MODE_VALUE_EARLIEST:
                 return StartupOptions.earliest();
-            case SCAN_STARTUP_MODE_VALUE_TIMESTAMP:
-                return StartupOptions.timestamp(
-                        config.get(SourceOptions.SCAN_STARTUP_TIMESTAMP_MILLIS));
             default:
-                // 'specific-offset' (binlog file/pos) has no canal counterpart: the stream offset
-                // is
-                // the canal event time, which 'timestamp' already covers
+                // 'specific-offset' (binlog file/pos) and 'timestamp' have no canal counterpart:
+                // the stream offset is the canal event time, not a binlog position or epoch millis
                 throw new ValidationException(
                         String.format(
-                                "Invalid value for option '%s'. Supported values are [%s, %s, %s, %s, %s], but was: %s",
+                                "Invalid value for option '%s'. Supported values are [%s, %s, %s, %s], but was: %s",
                                 SourceOptions.SCAN_STARTUP_MODE.key(),
                                 SCAN_STARTUP_MODE_VALUE_INITIAL,
                                 SCAN_STARTUP_MODE_VALUE_SNAPSHOT,
                                 SCAN_STARTUP_MODE_VALUE_LATEST,
                                 SCAN_STARTUP_MODE_VALUE_EARLIEST,
-                                SCAN_STARTUP_MODE_VALUE_TIMESTAMP,
                                 modeString));
         }
     }

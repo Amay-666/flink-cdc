@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Unit test for the minimal Debezium MySQL connector config used by the Canal source, which is
+ * Unit test for the minimal Debezium MySQL connector config used by the kafka-json source, which is
  * provided through {@link KafkaJsonSourceConfig#getDbzConnectorConfig()}.
  */
 class KafkaJsonConnectorConfigTest {

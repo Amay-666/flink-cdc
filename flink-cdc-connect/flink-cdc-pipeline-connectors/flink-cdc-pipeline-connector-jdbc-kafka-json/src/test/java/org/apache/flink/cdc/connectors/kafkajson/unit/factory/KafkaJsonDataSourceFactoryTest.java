@@ -130,17 +130,16 @@ public class KafkaJsonDataSourceFactoryTest {
     }
 
     @Test
-    public void testTimestampStartupModeWithoutTimestampIsRejected() {
-        // scan.startup.timestamp-millis has no default value. Without an explicit check the missing
-        // option is unboxed from null into StartupOptions.timestamp(long) and surfaces as a bare
-        // NullPointerException instead of a message naming the option to set.
+    public void testTimestampStartupModeIsRejected() {
+        // the timestamp startup mode was removed: a "timestamp" value now falls into the
+        // invalid-enum rejection instead of the dedicated timestamp-millis validation
         Map<String, String> options = baseOptions();
         options.put(SCAN_STARTUP_MODE.key(), "timestamp");
         Factory.Context context = new MockContext(Configuration.fromMap(options));
 
         assertThatThrownBy(() -> factory.createDataSource(context))
                 .isInstanceOf(ValidationException.class)
-                .hasMessageContaining("scan.startup.timestamp-millis");
+                .hasMessageContaining("Invalid value for option 'scan.startup.mode'");
     }
 
     @Test

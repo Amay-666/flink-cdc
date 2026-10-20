@@ -51,8 +51,8 @@ import java.util.stream.Stream;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
- * A {@link DynamicTableSource} that describes how to create a Canal source (MySQL snapshot via JDBC
- * + incremental changes and DDL consumed from Kafka) from a logical description.
+ * A {@link DynamicTableSource} that describes how to create a kafka-json source (MySQL snapshot via
+ * JDBC + incremental changes and DDL consumed from Kafka) from a logical description.
  */
 public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMetadata {
 
@@ -82,7 +82,6 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
     private final KafkaJsonSourceOptions.MessageFormat messageFormat;
     private final KafkaJsonSourceOptions.DatabaseType databaseType;
     private final KafkaJsonSourceOptions.EventTime eventTime;
-    private final KafkaJsonSourceOptions.BoundaryMode boundaryMode;
     private final KafkaJsonSourceOptions.KafkaStartupMode kafkaStartupMode;
     private final KafkaJsonSourceOptions.DdlParser ddlParser;
     private final Properties kafkaProperties;
@@ -124,7 +123,6 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
             KafkaJsonSourceOptions.MessageFormat messageFormat,
             KafkaJsonSourceOptions.DatabaseType databaseType,
             KafkaJsonSourceOptions.EventTime eventTime,
-            KafkaJsonSourceOptions.BoundaryMode boundaryMode,
             KafkaJsonSourceOptions.KafkaStartupMode kafkaStartupMode,
             KafkaJsonSourceOptions.DdlParser ddlParser,
             Properties kafkaProperties) {
@@ -154,7 +152,6 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
         this.messageFormat = messageFormat;
         this.databaseType = databaseType;
         this.eventTime = eventTime;
-        this.boundaryMode = boundaryMode;
         this.kafkaStartupMode = kafkaStartupMode;
         this.ddlParser = ddlParser;
         this.kafkaProperties = kafkaProperties;
@@ -219,7 +216,6 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
                         .messageFormat(messageFormat)
                         .databaseType(databaseType)
                         .eventTime(eventTime)
-                        .boundaryMode(boundaryMode)
                         .kafkaStartupMode(kafkaStartupMode)
                         .ddlParser(ddlParser)
                         .kafkaProperties(kafkaProperties)
@@ -293,7 +289,6 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
                         messageFormat,
                         databaseType,
                         eventTime,
-                        boundaryMode,
                         kafkaStartupMode,
                         ddlParser,
                         kafkaProperties);
@@ -336,7 +331,6 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
                 && Objects.equals(kafkaTopics, that.kafkaTopics)
                 && messageFormat == that.messageFormat
                 && eventTime == that.eventTime
-                && boundaryMode == that.boundaryMode
                 && kafkaStartupMode == that.kafkaStartupMode
                 && ddlParser == that.ddlParser
                 && Objects.equals(kafkaProperties, that.kafkaProperties)
@@ -372,7 +366,6 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
                 kafkaTopics,
                 messageFormat,
                 eventTime,
-                boundaryMode,
                 kafkaStartupMode,
                 ddlParser,
                 kafkaProperties,

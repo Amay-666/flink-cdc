@@ -29,7 +29,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Properties;
 
-/** The configuration for the Canal source. */
+/** The configuration for the kafka-json source. */
 public class KafkaJsonSourceConfig extends JdbcSourceConfig {
 
     private static final long serialVersionUID = 1L;
@@ -41,7 +41,6 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
     private final KafkaJsonSourceOptions.MessageFormat messageFormat;
     private final KafkaJsonSourceOptions.DatabaseType databaseType;
     private final KafkaJsonSourceOptions.EventTime eventTime;
-    private final KafkaJsonSourceOptions.BoundaryMode boundaryMode;
     private final KafkaJsonSourceOptions.KafkaStartupMode kafkaStartupMode;
     private final KafkaJsonSourceOptions.DdlParser ddlParser;
     private final Properties kafkaProperties;
@@ -79,7 +78,6 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
             KafkaJsonSourceOptions.MessageFormat messageFormat,
             KafkaJsonSourceOptions.DatabaseType databaseType,
             KafkaJsonSourceOptions.EventTime eventTime,
-            KafkaJsonSourceOptions.BoundaryMode boundaryMode,
             KafkaJsonSourceOptions.KafkaStartupMode kafkaStartupMode,
             KafkaJsonSourceOptions.DdlParser ddlParser,
             Properties kafkaProperties) {
@@ -116,7 +114,6 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
         this.messageFormat = messageFormat;
         this.databaseType = databaseType;
         this.eventTime = eventTime;
-        this.boundaryMode = boundaryMode;
         this.kafkaStartupMode = kafkaStartupMode;
         this.ddlParser = ddlParser;
         this.kafkaProperties = kafkaProperties;
@@ -153,10 +150,6 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
 
     public KafkaJsonSourceOptions.EventTime getEventTime() {
         return eventTime;
-    }
-
-    public KafkaJsonSourceOptions.BoundaryMode getBoundaryMode() {
-        return boundaryMode;
     }
 
     public KafkaJsonSourceOptions.KafkaStartupMode getKafkaStartupMode() {

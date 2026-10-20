@@ -191,13 +191,6 @@ public class KafkaJsonSourceBuilder<T> {
         return this;
     }
 
-    /** The boundary handling mode of the full->incremental switch. */
-    public KafkaJsonSourceBuilder<T> boundaryMode(
-            KafkaJsonSourceOptions.BoundaryMode boundaryMode) {
-        this.configFactory.boundaryMode(boundaryMode);
-        return this;
-    }
-
     /** The Kafka consumer startup mode for stream-only scenarios. */
     public KafkaJsonSourceBuilder<T> kafkaStartupMode(
             KafkaJsonSourceOptions.KafkaStartupMode kafkaStartupMode) {

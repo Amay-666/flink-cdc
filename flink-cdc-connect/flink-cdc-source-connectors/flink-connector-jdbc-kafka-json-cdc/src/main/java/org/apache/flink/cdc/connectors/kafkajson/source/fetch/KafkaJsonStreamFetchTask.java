@@ -430,8 +430,6 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
                 case LATEST:
                     consumer.seekToEnd(partitions);
                     break;
-                case TIMESTAMP:
-                    // fall through to earliest until a dedicated timestamp option is added
                 case EARLIEST:
                 default:
                     consumer.seekToBeginning(partitions);

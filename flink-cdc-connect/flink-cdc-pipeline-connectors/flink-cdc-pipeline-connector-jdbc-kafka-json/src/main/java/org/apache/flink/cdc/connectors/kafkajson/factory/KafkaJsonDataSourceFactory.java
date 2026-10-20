@@ -47,7 +47,6 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.BOUNDARY_MODE;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.CANAL_DDL_PARSER;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.CHUNK_KEY_EVEN_DISTRIBUTION_FACTOR_LOWER_BOUND;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.CHUNK_KEY_EVEN_DISTRIBUTION_FACTOR_UPPER_BOUND;
@@ -71,7 +70,6 @@ import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSour
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_NEWLY_ADDED_TABLE_ENABLED;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_SNAPSHOT_FETCH_SIZE;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_STARTUP_MODE;
-import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_STARTUP_TIMESTAMP_MILLIS;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCHEMA_CHANGE_ENABLED;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SERVER_TIME_ZONE;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.TABLES;
@@ -140,8 +138,6 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
                 getEnumOption(config, MESSAGE_FORMAT, KafkaJsonSourceOptions.MessageFormat.class);
         KafkaJsonSourceOptions.EventTime eventTime =
                 getEnumOption(config, EVENT_TIME, KafkaJsonSourceOptions.EventTime.class);
-        KafkaJsonSourceOptions.BoundaryMode boundaryMode =
-                getEnumOption(config, BOUNDARY_MODE, KafkaJsonSourceOptions.BoundaryMode.class);
         KafkaJsonSourceOptions.KafkaStartupMode kafkaStartupMode =
                 getEnumOption(
                         config, KAFKA_STARTUP_MODE, KafkaJsonSourceOptions.KafkaStartupMode.class);
@@ -177,7 +173,6 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
                         .messageFormat(messageFormat)
                         .databaseType(databaseType)
                         .eventTime(eventTime)
-                        .boundaryMode(boundaryMode)
                         .kafkaStartupMode(kafkaStartupMode)
                         .ddlParser(ddlParser)
                         .kafkaProperties(kafkaProperties);
@@ -242,7 +237,6 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
         options.add(SERVER_TIME_ZONE);
         options.add(SCHEMA_CHANGE_ENABLED);
         options.add(SCAN_STARTUP_MODE);
-        options.add(SCAN_STARTUP_TIMESTAMP_MILLIS);
         options.add(SCAN_INCREMENTAL_SNAPSHOT_CHUNK_SIZE);
         options.add(SCAN_SNAPSHOT_FETCH_SIZE);
         options.add(SCAN_INCREMENTAL_SNAPSHOT_CHUNK_KEY_COLUMN);
@@ -257,7 +251,6 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
         options.add(KAFKA_GROUP_ID);
         options.add(MESSAGE_FORMAT);
         options.add(EVENT_TIME);
-        options.add(BOUNDARY_MODE);
         options.add(KAFKA_STARTUP_MODE);
         options.add(CANAL_DDL_PARSER);
         // must be registered here, otherwise FactoryHelper.validateExcept rejects it as an
@@ -275,7 +268,6 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
     private static final String SCAN_STARTUP_MODE_VALUE_SNAPSHOT = "snapshot";
     private static final String SCAN_STARTUP_MODE_VALUE_EARLIEST = "earliest-offset";
     private static final String SCAN_STARTUP_MODE_VALUE_LATEST = "latest-offset";
-    private static final String SCAN_STARTUP_MODE_VALUE_TIMESTAMP = "timestamp";
 
     private static StartupOptions getStartupOptions(Configuration config) {
         String modeString = config.get(SCAN_STARTUP_MODE);
@@ -289,33 +281,17 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
                 return StartupOptions.latest();
             case SCAN_STARTUP_MODE_VALUE_EARLIEST:
                 return StartupOptions.earliest();
-            case SCAN_STARTUP_MODE_VALUE_TIMESTAMP:
-                // scan.startup.timestamp-millis has no default, so a plain get() would unbox null
-                // into the primitive long parameter of StartupOptions.timestamp and surface as a
-                // bare NPE instead of the actionable message below.
-                return StartupOptions.timestamp(
-                        config.getOptional(SCAN_STARTUP_TIMESTAMP_MILLIS)
-                                .orElseThrow(
-                                        () ->
-                                                new ValidationException(
-                                                        String.format(
-                                                                "Option '%s' is required when '%s' is set to '%s'.",
-                                                                SCAN_STARTUP_TIMESTAMP_MILLIS.key(),
-                                                                SCAN_STARTUP_MODE.key(),
-                                                                SCAN_STARTUP_MODE_VALUE_TIMESTAMP))));
             default:
-                // 'specific-offset' (binlog file/pos) has no canal counterpart: the stream offset
-                // is
-                // the canal event time, which 'timestamp' already covers
+                // 'specific-offset' (binlog file/pos) and 'timestamp' have no canal counterpart:
+                // the stream offset is the canal event time, not a binlog position or epoch millis
                 throw new ValidationException(
                         String.format(
-                                "Invalid value for option '%s'. Supported values are [%s, %s, %s, %s, %s], but was: %s",
+                                "Invalid value for option '%s'. Supported values are [%s, %s, %s, %s], but was: %s",
                                 SCAN_STARTUP_MODE.key(),
                                 SCAN_STARTUP_MODE_VALUE_INITIAL,
                                 SCAN_STARTUP_MODE_VALUE_SNAPSHOT,
                                 SCAN_STARTUP_MODE_VALUE_LATEST,
                                 SCAN_STARTUP_MODE_VALUE_EARLIEST,
-                                SCAN_STARTUP_MODE_VALUE_TIMESTAMP,
                                 modeString));
         }
     }

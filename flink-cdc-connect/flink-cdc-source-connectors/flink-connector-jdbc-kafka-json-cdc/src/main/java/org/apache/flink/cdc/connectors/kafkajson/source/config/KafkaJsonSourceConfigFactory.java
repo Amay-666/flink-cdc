@@ -52,10 +52,6 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
                     KafkaJsonSourceOptions.DatabaseType.class);
     private KafkaJsonSourceOptions.EventTime eventTime =
             enumDefault(KafkaJsonSourceOptions.EVENT_TIME, KafkaJsonSourceOptions.EventTime.class);
-    private KafkaJsonSourceOptions.BoundaryMode boundaryMode =
-            enumDefault(
-                    KafkaJsonSourceOptions.BOUNDARY_MODE,
-                    KafkaJsonSourceOptions.BoundaryMode.class);
     private KafkaJsonSourceOptions.KafkaStartupMode kafkaStartupMode =
             enumDefault(
                     KafkaJsonSourceOptions.KAFKA_STARTUP_MODE,
@@ -158,7 +154,6 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
                 messageFormat,
                 databaseType,
                 eventTime,
-                boundaryMode,
                 kafkaStartupMode,
                 ddlParser,
                 kafkaProperties);
@@ -199,13 +194,6 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
     /** The timestamp field used as the offset event time. */
     public KafkaJsonSourceConfigFactory eventTime(KafkaJsonSourceOptions.EventTime eventTime) {
         this.eventTime = eventTime;
-        return this;
-    }
-
-    /** The boundary handling mode of the full->incremental switch. */
-    public KafkaJsonSourceConfigFactory boundaryMode(
-            KafkaJsonSourceOptions.BoundaryMode boundaryMode) {
-        this.boundaryMode = boundaryMode;
         return this;
     }
 

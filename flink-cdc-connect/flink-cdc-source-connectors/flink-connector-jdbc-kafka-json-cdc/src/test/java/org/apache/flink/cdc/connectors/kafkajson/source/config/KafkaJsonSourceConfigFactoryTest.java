@@ -62,7 +62,6 @@ class KafkaJsonSourceConfigFactoryTest {
         assertEquals(KafkaJsonSourceOptions.MessageFormat.CANAL, config.getMessageFormat());
         assertEquals(KafkaJsonSourceOptions.DatabaseType.MYSQL, config.getDatabaseType());
         assertEquals(KafkaJsonSourceOptions.EventTime.ES, config.getEventTime());
-        assertEquals(KafkaJsonSourceOptions.BoundaryMode.EXACTLY_ONCE, config.getBoundaryMode());
         assertEquals(
                 KafkaJsonSourceOptions.KafkaStartupMode.EARLIEST, config.getKafkaStartupMode());
         assertEquals(KafkaJsonSourceOptions.DdlParser.DRUID, config.getDdlParser());
@@ -97,7 +96,6 @@ class KafkaJsonSourceConfigFactoryTest {
                 buildFactory()
                         .messageFormat(KafkaJsonSourceOptions.MessageFormat.CANAL)
                         .eventTime(KafkaJsonSourceOptions.EventTime.TS)
-                        .boundaryMode(KafkaJsonSourceOptions.BoundaryMode.AT_LEAST_ONCE)
                         .kafkaStartupMode(KafkaJsonSourceOptions.KafkaStartupMode.LATEST)
                         .ddlParser(KafkaJsonSourceOptions.DdlParser.DEBEZIUM)
                         .kafkaProperties(kafkaProperties)
@@ -105,7 +103,6 @@ class KafkaJsonSourceConfigFactoryTest {
 
         assertEquals(KafkaJsonSourceOptions.MessageFormat.CANAL, config.getMessageFormat());
         assertEquals(KafkaJsonSourceOptions.EventTime.TS, config.getEventTime());
-        assertEquals(KafkaJsonSourceOptions.BoundaryMode.AT_LEAST_ONCE, config.getBoundaryMode());
         assertEquals(KafkaJsonSourceOptions.KafkaStartupMode.LATEST, config.getKafkaStartupMode());
         assertEquals(KafkaJsonSourceOptions.DdlParser.DEBEZIUM, config.getDdlParser());
         assertEquals("500", config.getKafkaProperties().getProperty("max.poll.records"));

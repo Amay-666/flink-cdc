@@ -113,14 +113,7 @@ public class KafkaJsonDataSourceOptions {
                     .defaultValue("initial")
                     .withDescription(
                             "Optional startup mode for the jdbc-kafka-json CDC consumer, valid enumerations are "
-                                    + "\"initial\", \"earliest-offset\", \"latest-offset\", \"timestamp\"");
-
-    public static final ConfigOption<Long> SCAN_STARTUP_TIMESTAMP_MILLIS =
-            ConfigOptions.key("scan.startup.timestamp-millis")
-                    .longType()
-                    .noDefaultValue()
-                    .withDescription(
-                            "Optional timestamp used in case of \"timestamp\" startup mode");
+                                    + "\"initial\", \"earliest-offset\", \"latest-offset\"");
 
     /** Kafka bootstrap servers that external tools (canal) write the messages to. */
     public static final ConfigOption<String> KAFKA_BOOTSTRAP_SERVERS =
@@ -181,26 +174,13 @@ public class KafkaJsonDataSourceOptions {
                     .withDescription(
                             "The timestamp used as the offset event time for canal messages: 'es' (binlog execution time, default) or 'ts' (canal send time).");
 
-    /**
-     * How to handle the boundary when a stream message timestamp equals the snapshot high
-     * watermark.
-     */
-    public static final ConfigOption<String> BOUNDARY_MODE =
-            ConfigOptions.key("scan.boundary.mode")
-                    .stringType()
-                    .defaultValue("exactly-once")
-                    .withDescription(
-                            "The boundary handling mode: 'exactly-once' drops stream messages whose timestamp "
-                                    + "equals the snapshot high watermark (strict snapshot-first, default); "
-                                    + "'at-least-once' keeps them at the cost of possible duplicates.");
-
     /** Kafka consumer startup mode used for stream-only scenarios. */
     public static final ConfigOption<String> KAFKA_STARTUP_MODE =
             ConfigOptions.key("scan.kafka.startup.mode")
                     .stringType()
                     .defaultValue("earliest")
                     .withDescription(
-                            "Kafka consumer startup mode for stream-only scenarios: 'earliest' (default), 'latest' or 'timestamp'.");
+                            "Kafka consumer startup mode for stream-only scenarios: 'earliest' (default) or 'latest'.");
 
     /** The DDL parser implementation. */
     public static final ConfigOption<String> CANAL_DDL_PARSER =
