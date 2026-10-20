@@ -200,6 +200,8 @@ public class DorisHttpClient implements Closeable {
      */
     private final String groupCommitMode;
 
+    private final boolean isGroupCommit;
+
     public DorisHttpClient(String fenodes, String username, String password, int maxRetries) {
         this(fenodes, username, password, maxRetries, Collections.emptyMap(), "off");
     }
@@ -255,6 +257,9 @@ public class DorisHttpClient implements Closeable {
                                 ? Collections.emptyMap()
                                 : streamLoadProperties);
         this.groupCommitMode = groupCommitMode == null ? "off" : groupCommitMode.toLowerCase();
+        // Use the normalized field: callers pass the header value, which is null when Group
+        // Commit is off, and "off".equalsIgnoreCase(null) would read that as enabled.
+        this.isGroupCommit = !"off".equalsIgnoreCase(this.groupCommitMode);
         this.client =
                 new OkHttpClient.Builder()
                         .connectTimeout(30, TimeUnit.SECONDS)
@@ -647,7 +652,6 @@ public class DorisHttpClient implements Closeable {
      */
     private Request loadRequest(
             String url, byte[] body, String label, boolean expectContinue, boolean twoPhaseCommit) {
-        boolean groupCommit = label == null && !"off".equalsIgnoreCase(groupCommitMode);
         Map<String, String> headers = new LinkedHashMap<>();
         // label: only in non-Group-Commit mode (specifying a label degrades to non-GC in Doris)
         if (label != null) {
@@ -662,7 +666,7 @@ public class DorisHttpClient implements Closeable {
         // semantics (true = delete by key, false = upsert) without any merge_type.
         headers.put("hidden_columns", DELETE_SIGN_COLUMN);
         // group_commit: sent instead of a label when Group Commit is enabled
-        if (groupCommit) {
+        if (isGroupCommit && label == null) {
             headers.put("group_commit", groupCommitMode);
         }
         // sink.properties pass-through: user-supplied StreamLoad properties (columns=...,

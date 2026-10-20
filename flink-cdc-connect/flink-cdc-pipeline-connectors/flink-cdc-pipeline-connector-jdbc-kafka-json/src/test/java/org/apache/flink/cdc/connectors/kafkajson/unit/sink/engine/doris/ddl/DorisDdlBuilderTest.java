@@ -96,8 +96,8 @@ public class DorisDdlBuilderTest {
                 .containsExactly(
                         "CREATE TABLE IF NOT EXISTS `shop`.`orders` "
                                 + "(`id` INT COMMENT 'primary id', `name` VARCHAR(48) COMMENT 'the name') "
-                                + "COMMENT 'order table' "
-                                + "UNIQUE KEY(`id`) DISTRIBUTED BY HASH(`id`) BUCKETS AUTO");
+                                + "UNIQUE KEY(`id`) COMMENT 'order table' "
+                                + "DISTRIBUTED BY HASH(`id`) BUCKETS AUTO");
     }
 
     @Test
@@ -133,6 +133,11 @@ public class DorisDdlBuilderTest {
                         .physicalColumn("c_ts", DataTypes.TIMESTAMP(9))
                         .physicalColumn("c_ltz", DataTypes.TIMESTAMP_LTZ(3))
                         .physicalColumn("c_tz", DataTypes.TIMESTAMP_TZ())
+                        // Doris has no binary type: the byte[] is base64-encoded into the
+                        // stream-load JSON, so BINARY/VARBINARY (and BYTES, the unlimited
+                        // VARBINARY root that BLOB columns map to) become STRING columns.
+                        .physicalColumn("c_bin", DataTypes.BINARY(8))
+                        .physicalColumn("c_varbin", DataTypes.VARBINARY(16))
                         .physicalColumn("c_arr", DataTypes.ARRAY(DataTypes.INT()))
                         .physicalColumn(
                                 "c_map", DataTypes.MAP(DataTypes.VARCHAR(8), DataTypes.INT()))
@@ -147,8 +152,9 @@ public class DorisDdlBuilderTest {
                         "CREATE TABLE IF NOT EXISTS `shop`.`orders` "
                                 + "(`c_char` CHAR(8), `c_bool` BOOLEAN, `c_dec` DECIMAL(20, 4), "
                                 + "`c_date` DATE, `c_time` STRING, `c_ts` DATETIMEV2(6), "
-                                + "`c_ltz` DATETIMEV2(3), `c_tz` DATETIMEV2(6), `c_arr` STRING, "
-                                + "`c_map` STRING) "
+                                + "`c_ltz` DATETIMEV2(3), `c_tz` DATETIMEV2(6), "
+                                + "`c_bin` STRING, `c_varbin` STRING, "
+                                + "`c_arr` STRING, `c_map` STRING) "
                                 + "UNIQUE KEY(`c_char`) DISTRIBUTED BY HASH(`c_char`) BUCKETS AUTO");
     }
 

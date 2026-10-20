@@ -44,6 +44,7 @@ import javax.annotation.Nullable;
 
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -137,19 +138,21 @@ public class DorisDdlBuilder implements Serializable {
                         .append(columns)
                         .append(")");
         String comment = schema.comment();
-        if (comment != null && !comment.isEmpty()) {
-            sql.append(" COMMENT '").append(escapeSql(comment)).append("'");
-        }
+        boolean hasTableComment = comment != null && !comment.isEmpty();
         if (primaryKeys.isEmpty()) {
             String distributeKey = firstPhysicalColumn(schema);
             sql.append(" DUPLICATE KEY(")
                     .append(quote(distributeKey))
-                    .append(") DISTRIBUTED BY HASH(")
+                    .append(")")
+                    .append(hasTableComment ? " COMMENT '" + escapeSql(comment) + "'" : "")
+                    .append(" DISTRIBUTED BY HASH(")
                     .append(quote(distributeKey));
         } else {
             sql.append(" UNIQUE KEY(")
                     .append(quoteColumns(primaryKeys))
-                    .append(") DISTRIBUTED BY HASH(")
+                    .append(")")
+                    .append(hasTableComment ? " COMMENT '" + escapeSql(comment) + "'" : "")
+                    .append(" DISTRIBUTED BY HASH(")
                     .append(quoteColumns(primaryKeys));
         }
         int tableBuckets = options.getTableBuckets();
@@ -175,6 +178,10 @@ public class DorisDdlBuilder implements Serializable {
         }
         if (!allProps.isEmpty()) {
             sql.append(" PROPERTIES (").append(buildTableProperties(allProps)).append(")");
+        }
+        if (options.isDropTableBeforeCreate()) {
+            String dropTableSql = "DROP TABLE IF EXISTS " + qualified(tableId);
+            return Arrays.asList(dropTableSql, sql.toString());
         }
         return singleton(sql.toString());
     }
@@ -498,6 +505,11 @@ public class DorisDdlBuilder implements Serializable {
         TableId tableId = event.tableId();
         List<String> sqls = new ArrayList<>();
         for (Map.Entry<String, String> entry : event.getCommentMapping().entrySet()) {
+            // a null comment means the column has none — nothing to apply, and
+            // escapeSql would NPE on it
+            if (entry.getValue() == null) {
+                continue;
+            }
             sqls.add(
                     "ALTER TABLE "
                             + qualified(tableId)
@@ -551,6 +563,13 @@ public class DorisDdlBuilder implements Serializable {
                 // holds that rendering — the same mapping the released Doris Flink connector
                 // applies to Flink's TimeType. Without this case every table with a TIME column
                 // fails at CREATE/ADD/MODIFY COLUMN time with "Unsupported type for Doris DDL".
+                return "STRING";
+            case BINARY:
+            case VARBINARY:
+                // Doris has no binary column type either: the row converter emits the raw
+                // byte[] and the stream-load JSON writer (Jackson) base64-encodes it, so a
+                // STRING column holds the encoding — the same mapping the released Doris Flink
+                // connector applies to Flink's BINARY/VARBINARY/BYTES types.
                 return "STRING";
             case ARRAY:
             case MAP:

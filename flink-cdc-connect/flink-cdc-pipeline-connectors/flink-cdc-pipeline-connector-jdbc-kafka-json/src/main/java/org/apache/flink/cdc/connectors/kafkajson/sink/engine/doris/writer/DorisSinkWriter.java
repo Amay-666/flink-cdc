@@ -251,6 +251,16 @@ public class DorisSinkWriter implements SinkWriter<Event> {
                         pair.getNewTableId(),
                         new DorisRowConverter(pair.getSchema(), pipelineZoneId));
             }
+            // The RenameTableEvent will distribute the data from the source table to the new
+            // subtasks.
+            // It is necessary to assign new values to the counter of each subtask.
+            if (isGroupCommit) {
+                long timeBased = System.currentTimeMillis() * 1_000_000L;
+                if (timeBased > sequenceCounter.get()) {
+                    LOG.info("Bumping sequenceCounter to {} on Event: {}", timeBased, event);
+                    sequenceCounter.set(timeBased);
+                }
+            }
         } else if (event instanceof DropTableEvent) {
             ArrayDeque<Map<String, Object>> dropped = buffer.remove(event.tableId());
             if (dropped != null) {

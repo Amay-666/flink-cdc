@@ -258,6 +258,10 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
                     .durationType()
                     .defaultValue(Duration.ofMinutes(30));
 
+    /** Whether to drop the table before creating it. */
+    public static final ConfigOption<Boolean> IS_DROP_TABLE_BEFORE_CREATE =
+            ConfigOptions.key("sink.is-drop-table-before-create").booleanType().defaultValue(false);
+
     public DorisDataSinkOptions(Configuration config) {
         super(config);
         WriterMode mode = getWriterMode();
@@ -437,5 +441,9 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
 
     public Duration getSchemaChangeMaxWait() {
         return getConfig().get(SCHEMA_CHANGE_MAX_WAIT);
+    }
+
+    public boolean isDropTableBeforeCreate() {
+        return getConfig().get(IS_DROP_TABLE_BEFORE_CREATE);
     }
 }
