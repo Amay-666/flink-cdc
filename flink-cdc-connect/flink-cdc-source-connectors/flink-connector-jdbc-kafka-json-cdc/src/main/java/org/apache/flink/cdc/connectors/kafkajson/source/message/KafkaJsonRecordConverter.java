@@ -119,7 +119,6 @@ public class KafkaJsonRecordConverter {
         String op = message.getType() == null ? "" : message.getType().toUpperCase(Locale.ROOT);
         switch (op) {
             case "INSERT":
-            case "QUERY":
                 return convertCanalRows(
                         message, topic, partition, kafkaOffset, Envelope.Operation.CREATE);
             case "UPDATE":
@@ -134,7 +133,8 @@ public class KafkaJsonRecordConverter {
                 // TiCDC does not filter them itself, so dropping them is the consumer's job.
                 return Collections.emptyList();
             default:
-                // GTID / XACOMPLETE / SAVEPOINT / ... : no data rows
+                // QUERY (isDdl=false: BEGIN/COMMIT/SET), GTID / XACOMPLETE / SAVEPOINT / ... :
+                // no data rows
                 return Collections.emptyList();
         }
     }

@@ -18,6 +18,7 @@
 package org.apache.flink.cdc.connectors.kafkajson.source.utils;
 
 import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessage;
+import org.apache.flink.cdc.connectors.kafkajson.source.type.MySqlEnumSetLabels;
 import org.apache.flink.util.FlinkRuntimeException;
 
 import io.debezium.relational.Column;
@@ -142,8 +143,7 @@ public class KafkaJsonTableUtils {
      * Builds a {@link ColumnEditor} from a column name, its MySQL type expression and comment.
      *
      * <p>The DDL parsers pass the {@code COMMENT '...'} clause of a column definition here so that
-     * a comment change on a {@code MODIFY}/{@code CHANGE} column can be detected; the canal-message
-     * path ({@link #buildTable(CanalMessage)}) carries no comments and passes {@code null}.
+     * a comment change on a {@code MODIFY}/{@code CHANGE} column can be detected;
      */
     public static ColumnEditor buildColumn(
             String name, String mysqlType, int position, @Nullable String comment) {
@@ -221,6 +221,7 @@ public class KafkaJsonTableUtils {
                 jdbcType = Types.FLOAT;
                 break;
             case "double":
+            case "real": // MySQL synonym of DOUBLE (REAL_AS_FLOAT mode is not modeled)
                 typeName = "DOUBLE";
                 jdbcType = Types.DOUBLE;
                 break;
@@ -265,12 +266,12 @@ public class KafkaJsonTableUtils {
             case "enum":
                 typeName = "ENUM";
                 jdbcType = Types.VARCHAR;
-                enumValues = parseEnumValues(params);
+                enumValues = MySqlEnumSetLabels.parse(mysqlType);
                 break;
             case "set":
                 typeName = "SET";
                 jdbcType = Types.VARCHAR;
-                enumValues = parseEnumValues(params);
+                enumValues = MySqlEnumSetLabels.parse(mysqlType);
                 break;
             default:
                 if (STRING_TYPES.contains(base)) {
@@ -285,6 +286,15 @@ public class KafkaJsonTableUtils {
                 } else {
                     throw new FlinkRuntimeException("Unsupported mysqlType: " + mysqlType);
                 }
+        }
+        if (jdbcType == Types.FLOAT || jdbcType == Types.DOUBLE || jdbcType == Types.REAL) {
+            // Approximate numerics carry no scale: the parsed display scale ("float(12,0)" —
+            // TiCDC renders the display width) is garbage (MySQL deprecated FLOAT(M,D)), and a
+            // present scale suppresses the single-precision FLOAT32 schema branch in
+            // MySqlValueConverters. That mismatch makes the record carry a DOUBLE layout
+            // while the column type stays FLOAT, and reading 4 bytes from the 8-byte slot
+            // silently corrupts the value to 0.0.
+            scale = null;
         }
         return new ParsedType(base, typeName, jdbcType, length, scale, enumValues);
     }
@@ -304,18 +314,6 @@ public class KafkaJsonTableUtils {
         } catch (NumberFormatException e) {
             return new int[] {0, -1};
         }
-    }
-
-    private static List<String> parseEnumValues(String params) {
-        if (params == null) {
-            return Collections.emptyList();
-        }
-        List<String> values = new ArrayList<>();
-        Matcher matcher = Pattern.compile("'((?:[^']|'')*)'").matcher(params);
-        while (matcher.find()) {
-            values.add(matcher.group(1).replace("''", "'"));
-        }
-        return values;
     }
 
     /** Whether the (upper-cased) type name denotes an unsigned integer type. */

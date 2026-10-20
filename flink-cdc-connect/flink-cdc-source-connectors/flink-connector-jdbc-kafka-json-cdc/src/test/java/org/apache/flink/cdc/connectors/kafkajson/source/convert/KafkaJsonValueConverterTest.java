@@ -34,8 +34,10 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.Base64;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -157,14 +159,21 @@ class KafkaJsonValueConverterTest {
     @Test
     void testTimestampWithFractionAndNonUtcZone() {
         KafkaJsonValueConverter shanghai = new KafkaJsonValueConverter(ZoneId.of("Asia/Shanghai"));
+        // the value converter stringifies the OffsetDateTime keeping its offset, and the
+        // pipeline deserializer parses that string with Instant.parse (Z-form only), so a
+        // non-UTC server zone must still render the SAME instant in UTC: 15:03:02.5 +08:00
+        // == 07:03:02.5Z
         OffsetDateTime expected =
-                OffsetDateTime.of(
-                        LocalDateTime.parse("2020-08-13T15:03:02.5"), ZoneOffset.ofHours(8));
-        assertEquals(
-                expected,
-                shanghai.convert(
-                        column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP", 3),
-                        "2020-08-13 15:03:02.5"));
+                OffsetDateTime.of(LocalDateTime.parse("2020-08-13T07:03:02.5"), ZoneOffset.UTC);
+        OffsetDateTime converted =
+                (OffsetDateTime)
+                        shanghai.convert(
+                                column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP", 3),
+                                "2020-08-13 15:03:02.5");
+        assertEquals(expected, converted);
+        // the stringified form must stay Instant.parse-able — the property the pipeline
+        // deserializer depends on
+        assertEquals(converted.toInstant(), java.time.Instant.parse(converted.toString()));
     }
 
     @Test
@@ -179,10 +188,77 @@ class KafkaJsonValueConverterTest {
     }
 
     @Test
+    void testBinaryColumnsRawBytesDecoded() {
+        // TiCDC's canal-json embeds the raw bytes in the JSON string instead of base64-encoding
+        // them: the decode falls back to taking the string as the raw bytes (observed for
+        // X'0F0F0F0F0F0F0F0F' arriving as 8 raw 0x0F chars, which base64 rejects)
+        byte[] expected = new byte[] {0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F};
+        String raw = new String(expected, java.nio.charset.StandardCharsets.ISO_8859_1);
+        assertArrayEquals(
+                expected, (byte[]) converter.convert(column(Types.BINARY, "BINARY", 8), raw));
+        assertArrayEquals(
+                new byte[] {(byte) 0xAB},
+                (byte[]) converter.convert(column(Types.VARBINARY, "VARBINARY", 16), "«"));
+    }
+
+    @Test
     void testYearEnumSetPassThrough() {
         assertEquals("2020", converter.convert(column(Types.DATE, "YEAR", 4), "2020"));
         assertEquals("red", converter.convert(column(Types.VARCHAR, "ENUM", 255), "red"));
         assertEquals("a,b", converter.convert(column(Types.VARCHAR, "SET", 255), "a,b"));
+    }
+
+    @Test
+    void testEnumIndexFromTidcCanalMappedToLabel() {
+        Column enumAbc =
+                Column.editor()
+                        .name("c")
+                        .type("ENUM")
+                        .jdbcType(Types.VARCHAR)
+                        .length(1)
+                        .enumValues(Arrays.asList("a", "b", "c"))
+                        .create();
+        // TiCDC's canal-json renders the 1-based index of the stored label
+        assertEquals("c", converter.convert(enumAbc, "3"));
+        assertEquals("a", converter.convert(enumAbc, "1"));
+        // Alibaba's canal renders the label: a non-digit label passes through
+        assertEquals("b", converter.convert(enumAbc, "b"));
+        // an out-of-range index passes through unchanged
+        assertEquals("9", converter.convert(enumAbc, "9"));
+
+        // a digit that IS itself a label passes through as the label — both canal flavors
+        // agree on it anyway (the label at its own index)
+        Column enumDigits =
+                Column.editor()
+                        .name("c")
+                        .type("ENUM")
+                        .jdbcType(Types.VARCHAR)
+                        .length(1)
+                        .enumValues(Arrays.asList("1", "2"))
+                        .create();
+        assertEquals("2", converter.convert(enumDigits, "2"));
+        assertEquals("1", converter.convert(enumDigits, "1"));
+    }
+
+    @Test
+    void testSetBitmaskFromTidcCanalMappedToLabels() {
+        Column setXyz =
+                Column.editor()
+                        .name("c")
+                        .type("SET")
+                        .jdbcType(Types.VARCHAR)
+                        .length(6)
+                        .enumValues(Arrays.asList("x", "y", "z"))
+                        .create();
+        // TiCDC's canal-json renders the numeric bitmask of the stored members
+        assertEquals("y", converter.convert(setXyz, "2")); // bit 2
+        assertEquals("x,z", converter.convert(setXyz, "5")); // bits 1 + 4
+        assertEquals("x,y,z", converter.convert(setXyz, "7")); // all bits
+        assertEquals("", converter.convert(setXyz, "0")); // the empty SET
+        // Alibaba's canal renders the comma-joined labels: a non-digit value passes through
+        assertEquals("x,z", converter.convert(setXyz, "x,z"));
+        // an out-of-range bitmask passes through unchanged
+        assertEquals("8", converter.convert(setXyz, "8"));
     }
 
     @Test
@@ -201,15 +277,23 @@ class KafkaJsonValueConverterTest {
     }
 
     @Test
-    void testFloatAndDoublePassThrough() {
-        assertEquals("1.5", converter.convert(column(Types.FLOAT, "FLOAT", 12), "1.5"));
-        assertEquals("-1.5", converter.convert(column(Types.DOUBLE, "DOUBLE", 22), "-1.5"));
-        // scientific notation is preserved verbatim (the Debezium converter parses it from String)
+    void testFloatAndDoubleParsed() {
+        // the canal text must be parsed to a Float/Double: convertReal (the single-precision
+        // branch of the convertFloat override) and convertDouble require a Number, and a plain
+        // String falls through undelivered (nulled with "Unexpected value ... class=String")
+        assertEquals(1.5f, converter.convert(column(Types.FLOAT, "FLOAT", 12), "1.5"));
+        assertEquals(-1.5d, converter.convert(column(Types.DOUBLE, "DOUBLE", 22), "-1.5"));
+        // scientific notation parses too
         assertEquals(
-                "1.7976931348623157E308",
+                1.7976931348623157E308,
                 converter.convert(column(Types.DOUBLE, "DOUBLE", 22), "1.7976931348623157E308"));
-        // UNSIGNED float/double are not in the unsigned-integer list and pass through too
-        assertEquals("1.5", converter.convert(column(Types.DOUBLE, "DOUBLE UNSIGNED", 22), "1.5"));
+        // REAL follows the single-precision path
+        assertEquals(2.5f, converter.convert(column(Types.REAL, "REAL", 12), "2.5"));
+        // a malformed value fails fast with the column named
+        assertThatThrownBy(
+                        () -> converter.convert(column(Types.FLOAT, "FLOAT", 12), "not-a-number"))
+                .isInstanceOf(FlinkRuntimeException.class)
+                .hasMessageContaining("Failed to convert canal FLOAT value");
     }
 
     @Test
@@ -360,6 +444,30 @@ class KafkaJsonValueConverterTest {
                 converter.convertFromJson(
                         column(Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMP", 6),
                         JsonNodeFactory.instance.numberNode(expectedTimestampMillis)));
+    }
+
+    @Test
+    void testConvertFromJsonDatetimeMicrosecondPrecision() {
+        // Debezium adaptive encodes DATETIME(4-6) as epoch micros; the sub-millisecond digits
+        // must survive into java.sql.Timestamp (which has nanosecond precision)
+        java.time.Instant expected = java.time.Instant.parse("2020-08-13T15:03:02.123456Z");
+        long micros = expected.getEpochSecond() * 1_000_000L + expected.getNano() / 1_000L;
+        assertEquals(
+                java.sql.Timestamp.from(expected),
+                converter.convertFromJson(
+                        column(Types.TIMESTAMP, "DATETIME", 6),
+                        JsonNodeFactory.instance.numberNode(micros)));
+
+        // a pre-epoch DATETIME keeps its fraction on the correct side of the second:
+        // floorDiv/floorMod (unlike truncating division) keep -123456µs = 1970-01-01 minus
+        // 123.456ms, not 123ms
+        java.time.Instant before = java.time.Instant.parse("1969-12-31T23:59:59.876544Z");
+        long beforeMicros = before.getEpochSecond() * 1_000_000L + before.getNano() / 1_000L;
+        assertEquals(
+                java.sql.Timestamp.from(before),
+                converter.convertFromJson(
+                        column(Types.TIMESTAMP, "DATETIME", 6),
+                        JsonNodeFactory.instance.numberNode(beforeMicros)));
     }
 
     @Test

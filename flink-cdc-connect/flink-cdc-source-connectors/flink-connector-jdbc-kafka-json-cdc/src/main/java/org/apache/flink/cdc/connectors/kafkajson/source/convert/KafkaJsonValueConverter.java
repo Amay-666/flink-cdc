@@ -21,7 +21,6 @@ import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTableUtil
 import org.apache.flink.util.FlinkRuntimeException;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import io.debezium.connector.mysql.MySqlValueConverters;
 import io.debezium.relational.Column;
 
 import java.math.BigDecimal;
@@ -35,9 +34,11 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Base64;
+import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
@@ -112,6 +113,15 @@ public class KafkaJsonValueConverter {
                 return toDate(column, value);
             case java.sql.Types.TIME:
                 return MySqlValueConverters.stringToDuration(value);
+            case java.sql.Types.FLOAT: // MySQL FLOAT
+                // convertReal (the single-precision branch of the convertFloat override)
+                // requires a Float; the canal text must be parsed here
+                return toFloat(value, column);
+            case java.sql.Types.REAL: // MySQL REAL
+                return toFloat(value, column);
+            case java.sql.Types.DOUBLE: // MySQL DOUBLE
+                // convertDouble requires a Double; the canal text must be parsed here
+                return toDouble(value, column);
             case java.sql.Types.TIMESTAMP: // MySQL DATETIME
                 return toTimestamp(column, value);
             case java.sql.Types.TIMESTAMP_WITH_TIMEZONE: // MySQL TIMESTAMP
@@ -120,9 +130,51 @@ public class KafkaJsonValueConverter {
             case java.sql.Types.VARBINARY:
             case java.sql.Types.LONGVARBINARY:
             case java.sql.Types.BLOB:
-                return decodeBase64(value, "canal binary value");
+                return decodeCanalBinary(value);
             default:
                 break;
+        }
+        // ENUM: TiCDC's canal-json renders the 1-based index of the stored label instead of
+        // the label itself (Alibaba's canal renders the label). A digit value that is not
+        // itself one of the column's labels is such an index — map it back. A digit that IS
+        // a label (or an out-of-range/non-digit value) passes through unchanged, so both
+        // canal flavors stay correct.
+        List<String> enumLabels = column.enumValues();
+        if ("ENUM".equals(typeName) && enumLabels != null && !enumLabels.contains(value)) {
+            try {
+                int index = Integer.parseInt(value);
+                if (index >= 1 && index <= enumLabels.size()) {
+                    return enumLabels.get(index - 1);
+                }
+            } catch (NumberFormatException e) {
+                // a non-digit, non-label value: pass through unchanged
+            }
+        }
+        // SET: TiCDC's canal-json renders the numeric bitmask of the stored members instead
+        // of the comma-joined labels (Alibaba's canal renders the labels). The same digit
+        // heuristic applies: a digit value that is not itself one of the labels is such a
+        // bitmask — map it back to the comma-joined member labels.
+        if ("SET".equals(typeName) && enumLabels != null && !enumLabels.contains(value)) {
+            try {
+                long bits = Long.parseLong(value);
+                if (bits >= 0 && bits < (1L << Math.min(enumLabels.size(), 62))) {
+                    if (bits == 0) {
+                        return ""; // the empty SET
+                    }
+                    StringBuilder labels = new StringBuilder();
+                    for (int i = 0; i < enumLabels.size(); i++) {
+                        if ((bits & (1L << i)) != 0) {
+                            if (labels.length() > 0) {
+                                labels.append(',');
+                            }
+                            labels.append(enumLabels.get(i));
+                        }
+                    }
+                    return labels.toString();
+                }
+            } catch (NumberFormatException e) {
+                // a non-digit, non-label value: pass through unchanged
+            }
         }
         // UNSIGNED integer converters require a Number input
         if (KafkaJsonTableUtils.isUnsigned(typeName)) {
@@ -180,13 +232,27 @@ public class KafkaJsonValueConverter {
                     case java.sql.Types.TIME:
                         // Debezium adaptive: millis since midnight
                         return Duration.ofMillis(node.asLong());
-                    case java.sql.Types.TIMESTAMP: // MySQL DATETIME
-                        // Debezium adaptive: micros since the epoch
-                        return new Timestamp(node.asLong() / 1000L);
+                    case java.sql.Types.TIMESTAMP:
+                        { // MySQL DATETIME
+                            // Debezium adaptive: micros since the epoch. java.sql.Timestamp carries
+                            // nanosecond precision, so the sub-millisecond digits are restored via
+                            // Instant — a bare Timestamp(millis) would truncate DATETIME(4-6)
+                            // values,
+                            // and truncating division would also misplace the fraction of pre-epoch
+                            // values. floorDiv/floorMod keep negative epochs correct.
+                            long micros = node.asLong();
+                            return Timestamp.from(
+                                    Instant.ofEpochSecond(
+                                            Math.floorDiv(micros, 1_000_000L),
+                                            Math.floorMod(micros, 1_000_000L) * 1_000L));
+                        }
                     case java.sql.Types.TIMESTAMP_WITH_TIMEZONE: // MySQL TIMESTAMP
-                        // Debezium adaptive: millis since the epoch, rendered in the server zone
+                        // Debezium adaptive: millis since the epoch. Render in UTC: the value
+                        // converter stringifies this OffsetDateTime into the ZonedTimestamp
+                        // field keeping its offset, and the pipeline deserializer parses that
+                        // string with Instant.parse — which only accepts the 'Z' form.
                         return OffsetDateTime.ofInstant(
-                                Instant.ofEpochMilli(node.asLong()), serverZoneId);
+                                Instant.ofEpochMilli(node.asLong()), ZoneOffset.UTC);
                     default:
                         break;
                 }
@@ -224,6 +290,32 @@ public class KafkaJsonValueConverter {
         } catch (NumberFormatException e) {
             throw new FlinkRuntimeException(
                     "Failed to convert canal value '" + value + "' for column " + column.name(), e);
+        }
+    }
+
+    private Float toFloat(String value, Column column) {
+        try {
+            return Float.parseFloat(value);
+        } catch (NumberFormatException e) {
+            throw new FlinkRuntimeException(
+                    "Failed to convert canal FLOAT value '"
+                            + value
+                            + "' for column "
+                            + column.name(),
+                    e);
+        }
+    }
+
+    private Double toDouble(String value, Column column) {
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException e) {
+            throw new FlinkRuntimeException(
+                    "Failed to convert canal DOUBLE value '"
+                            + value
+                            + "' for column "
+                            + column.name(),
+                    e);
         }
     }
 
@@ -266,7 +358,11 @@ public class KafkaJsonValueConverter {
         }
         try {
             LocalDateTime local = LocalDateTime.parse(value.replace(' ', 'T'), fractionFormatter);
-            return OffsetDateTime.of(local, serverZoneId.getRules().getOffset(local));
+            // Render in UTC: the value converter stringifies this OffsetDateTime into the
+            // ZonedTimestamp field keeping its offset, and the pipeline deserializer parses
+            // that string with Instant.parse — which only accepts the 'Z' form. The instant
+            // is unchanged; only the string representation differs.
+            return OffsetDateTime.ofInstant(local.atZone(serverZoneId).toInstant(), ZoneOffset.UTC);
         } catch (DateTimeParseException e) {
             throw new FlinkRuntimeException(
                     "Failed to convert canal TIMESTAMP value '"
@@ -323,6 +419,29 @@ public class KafkaJsonValueConverter {
                 || "DECIMAL".equals(baseName)
                 || "NUMERIC".equals(baseName)
                 || "FIXED".equals(baseName);
+    }
+
+    /**
+     * Decodes a canal binary column value: Alibaba's canal base64-encodes the bytes, while TiCDC's
+     * canal-json embeds the raw bytes in the JSON string (observed: {@code X'0F0F0F0F0F0F0F0F'}
+     * arrives as 8 raw 0x0F chars, which is not base64 text). The interpretation is picked by
+     * shape.
+     */
+    private byte[] decodeCanalBinary(String value) {
+        if (isBase64Text(value)) {
+            return decodeBase64(value, "binary value");
+        }
+        // take the string as the raw bytes: the ISO-8859-1 roundtrip preserves every char 1:1
+        return value.getBytes(StandardCharsets.ISO_8859_1);
+    }
+
+    /** Base64-shaped text: alphabet characters with at most two trailing padding characters. */
+    private static final Pattern BASE64_TEXT = Pattern.compile("[A-Za-z0-9+/]*={0,2}");
+
+    /** Returns whether the text has the base64 shape: alphabet-only, valid padding, quartets. */
+    private static boolean isBase64Text(String value) {
+        int len = value.length();
+        return len > 0 && len % 4 == 0 && BASE64_TEXT.matcher(value).matches();
     }
 
     private byte[] decodeBase64(String value, String what) {

@@ -46,7 +46,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * The database schema of the Canal source.
+ * The database schema of the kafka-json source.
  *
  * <p>It is a {@link RelationalDatabaseSchema} so that the flink-cdc-base incremental-snapshot
  * machinery ({@code isRecordBetween}, the event dispatcher, the deserialization) can look up the
@@ -144,11 +144,17 @@ public class KafkaJsonSchema extends io.debezium.relational.RelationalDatabaseSc
 
     private void readTableSchema(JdbcConnection jdbc, TableId tableId) throws SQLException {
         Tables tables = new Tables();
+        // Restrict the metadata walk to the requested table. The previous global include-list
+        // filter made every single-table request fetch the columns of ALL captured tables (one
+        // per-table getColumns query per table, or one whole-database column scan when the
+        // include-list covers everything), so resolving N tables cost N*N metadata reads. The
+        // conjunction with the include-list keeps the previous behaviour for tables outside it:
+        // they are not read and tables.forTable stays null (requireNonNull below).
         jdbc.readSchema(
                 tables,
                 tableId.catalog(),
                 null,
-                sourceConfig.getTableFilters().dataCollectionFilter(),
+                singleTableFilter(tableId, sourceConfig.getTableFilters().dataCollectionFilter()),
                 null,
                 false);
 
@@ -168,6 +174,15 @@ public class KafkaJsonSchema extends io.debezium.relational.RelationalDatabaseSc
         this.schemasByTableId.put(tableId, tableChange);
         // register in the record factory so the fetch task can build records for this table
         recordFactory.registerTable(table);
+    }
+
+    /**
+     * Returns a filter that admits only the requested table, and only when the include-list admits
+     * it too. Visible for testing.
+     */
+    static Tables.TableFilter singleTableFilter(TableId tableId, Tables.TableFilter includeList) {
+        return Tables.TableFilter.fromPredicate(
+                id -> tableId.equals(id) && includeList.isIncluded(id));
     }
 
     /**

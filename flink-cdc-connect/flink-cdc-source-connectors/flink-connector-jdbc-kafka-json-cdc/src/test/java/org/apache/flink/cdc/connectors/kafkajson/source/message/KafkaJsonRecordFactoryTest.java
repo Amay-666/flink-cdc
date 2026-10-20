@@ -19,6 +19,7 @@ package org.apache.flink.cdc.connectors.kafkajson.source.message;
 
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
+import org.apache.flink.cdc.connectors.kafkajson.source.convert.MySqlValueConverters;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.schema.KafkaJsonSourceInfo;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTableUtils;
@@ -161,11 +162,7 @@ class KafkaJsonRecordFactoryTest {
         assertEquals(Long.valueOf(millisOf("2020-08-13 15:00:00")), after.getInt64("created_at"));
         assertEquals(LocalDate.parse("2020-08-13").toEpochDay(), (long) after.getInt32("birth"));
         assertEquals(
-                Long.valueOf(
-                        io.debezium.connector.mysql.MySqlValueConverters.stringToDuration(
-                                                "15:03:02")
-                                        .toNanos()
-                                / 1_000L),
+                Long.valueOf(MySqlValueConverters.stringToDuration("15:03:02").toNanos() / 1_000L),
                 after.getInt64("login_time"));
         assertEquals((short) 1, after.getInt16("enabled"));
 

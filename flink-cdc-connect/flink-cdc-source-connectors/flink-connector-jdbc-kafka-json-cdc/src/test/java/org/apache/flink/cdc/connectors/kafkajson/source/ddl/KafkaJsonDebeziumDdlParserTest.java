@@ -23,10 +23,12 @@ import io.debezium.relational.TableId;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Types;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /** Unit test for {@link KafkaJsonDebeziumDdlParser} (Debezium's MySQL ANTLR parser). */
@@ -142,6 +144,112 @@ class KafkaJsonDebeziumDdlParserTest {
         // a truncate does not change the schema: the table is preserved as-is
         assertEquals(baseTable(), result.getOldTable());
         assertEquals(baseTable(), result.getNewTable());
+    }
+
+    @Test
+    void testParseCreateTableFullTypeMatrix() {
+        // The same type matrix as KafkaJsonTableUtilsTest#testFullTypeMatrix and the Druid parser
+        // matrix, parsed with Debezium's ANTLR parser. The assertions document THIS parser's
+        // mapping, which is Debezium's own (MySqlAntlrDdlParser), not the shared
+        // KafkaJsonTableUtils mapping — differences between the two are noted inline.
+        TableId matrixId = new TableId("test", null, "type_matrix");
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        matrixId,
+                        null,
+                        "CREATE TABLE `test`.`type_matrix` ("
+                                + "`c_tinyint` TINYINT(4), "
+                                + "`c_tinyint_u` TINYINT(3) UNSIGNED, "
+                                + "`c_smallint` SMALLINT(6), "
+                                + "`c_mediumint` MEDIUMINT(9), "
+                                + "`c_int` INT(11), "
+                                + "`c_int_u` INT(10) UNSIGNED, "
+                                + "`c_bigint` BIGINT(20), "
+                                + "`c_bigint_u` BIGINT(20) UNSIGNED, "
+                                + "`c_float` FLOAT, "
+                                + "`c_double` DOUBLE, "
+                                + "`c_real` REAL, "
+                                + "`c_decimal` DECIMAL(20,4), "
+                                + "`c_bit` BIT(8), "
+                                + "`c_bool` BOOLEAN, "
+                                + "`c_date` DATE, "
+                                + "`c_time` TIME, "
+                                + "`c_datetime` DATETIME, "
+                                + "`c_datetime_p` DATETIME(3), "
+                                + "`c_timestamp` TIMESTAMP, "
+                                + "`c_year` YEAR, "
+                                + "`c_json` JSON, "
+                                + "`c_enum` ENUM('a','b','c'), "
+                                + "`c_set` SET('x','y'), "
+                                + "`c_char` CHAR(16), "
+                                + "`c_varchar` VARCHAR(100), "
+                                + "`c_tinytext` TINYTEXT, "
+                                + "`c_text` TEXT, "
+                                + "`c_binary` BINARY(8), "
+                                + "`c_varbinary` VARBINARY(64), "
+                                + "`c_tinyblob` TINYBLOB, "
+                                + "`c_blob` BLOB, "
+                                + "PRIMARY KEY (`c_int`))");
+
+        assertEquals(KafkaJsonTableChangeType.CREATE, result.getType());
+        Table table = result.getNewTable();
+        assertEquals(31, table.columns().size());
+        assertEquals(Collections.singletonList("c_int"), table.primaryKeyColumnNames());
+
+        assertColumn(table, "c_tinyint", "TINYINT", Types.SMALLINT, 4);
+        assertColumn(table, "c_tinyint_u", "TINYINT UNSIGNED", Types.SMALLINT, 3);
+        assertColumn(table, "c_smallint", "SMALLINT", Types.SMALLINT, 6);
+        assertColumn(table, "c_mediumint", "MEDIUMINT", Types.INTEGER, 9);
+        assertColumn(table, "c_int", "INT", Types.INTEGER, 11);
+        assertColumn(table, "c_int_u", "INT UNSIGNED", Types.INTEGER, 10);
+        assertColumn(table, "c_bigint", "BIGINT", Types.BIGINT, 20);
+        assertColumn(table, "c_bigint_u", "BIGINT UNSIGNED", Types.BIGINT, 20);
+        // a length-less type reports -1 (Debezium) rather than 0 (KafkaJsonTableUtils)
+        assertColumn(table, "c_float", "FLOAT", Types.FLOAT, -1);
+        assertColumn(table, "c_double", "DOUBLE", Types.DOUBLE, -1);
+        // Debezium maps REAL to Types.REAL and keeps the name (KafkaJsonTableUtils normalizes
+        // both to DOUBLE); one deployment uses a single parser, so the difference never mixes
+        assertColumn(table, "c_real", "REAL", Types.REAL, -1);
+        assertColumn(table, "c_decimal", "DECIMAL", Types.DECIMAL, 20);
+        assertEquals(Integer.valueOf(4), table.columnWithName("c_decimal").scale().get());
+        assertColumn(table, "c_bit", "BIT", Types.BIT, 8);
+        assertColumn(table, "c_bool", "BOOLEAN", Types.BOOLEAN, -1);
+        assertColumn(table, "c_date", "DATE", Types.DATE, -1);
+        assertColumn(table, "c_time", "TIME", Types.TIME, -1);
+        assertColumn(table, "c_datetime", "DATETIME", Types.TIMESTAMP, -1);
+        assertColumn(table, "c_datetime_p", "DATETIME", Types.TIMESTAMP, 3);
+        assertColumn(table, "c_timestamp", "TIMESTAMP", Types.TIMESTAMP_WITH_TIMEZONE, -1);
+        assertColumn(table, "c_year", "YEAR", Types.INTEGER, -1);
+        // Debezium maps JSON to Types.OTHER (KafkaJsonTableUtils uses LONGVARCHAR)
+        assertColumn(table, "c_json", "JSON", Types.OTHER, -1);
+        // Debezium maps ENUM/SET to Types.CHAR; ENUM length is the longest value, SET length the
+        // comma-joined width (KafkaJsonTableUtils uses VARCHAR/0 instead)
+        assertColumn(table, "c_enum", "ENUM", Types.CHAR, 1);
+        assertColumn(table, "c_set", "SET", Types.CHAR, 3);
+        // Debezium keeps the quotes on enum values (KafkaJsonTableUtils strips them)
+        assertEquals(
+                Arrays.asList("'a'", "'b'", "'c'"), table.columnWithName("c_enum").enumValues());
+        assertEquals(Arrays.asList("'x'", "'y'"), table.columnWithName("c_set").enumValues());
+        assertColumn(table, "c_char", "CHAR", Types.CHAR, 16);
+        assertColumn(table, "c_varchar", "VARCHAR", Types.VARCHAR, 100);
+        // Debezium keeps the declared text-family name (KafkaJsonTableUtils collapses to VARCHAR)
+        assertColumn(table, "c_tinytext", "TINYTEXT", Types.VARCHAR, -1);
+        assertColumn(table, "c_text", "TEXT", Types.VARCHAR, -1);
+        assertColumn(table, "c_binary", "BINARY", Types.BINARY, 8);
+        assertColumn(table, "c_varbinary", "VARBINARY", Types.VARBINARY, 64);
+        // Debezium keeps the declared blob-family name (KafkaJsonTableUtils collapses to BLOB)
+        assertColumn(table, "c_tinyblob", "TINYBLOB", Types.BLOB, -1);
+        assertColumn(table, "c_blob", "BLOB", Types.BLOB, -1);
+    }
+
+    private static void assertColumn(
+            Table table, String name, String typeName, int jdbcType, int length) {
+        Column column = table.columnWithName(name);
+        assertNotNull(column, "column " + name + " is missing");
+        assertEquals(typeName, column.typeName(), "typeName of " + name);
+        assertEquals(jdbcType, column.jdbcType(), "jdbcType of " + name);
+        assertEquals(length, column.length(), "length of " + name);
     }
 
     private static Table baseTable() {

@@ -158,7 +158,12 @@ public final class KafkaJsonColumnMeta {
                 return DataTypes.BOOLEAN();
             case "TINYINT":
                 // MySQL has no boolean type, it uses tinyint(1) to represent boolean
-                return precision == 1 ? DataTypes.BOOLEAN() : DataTypes.TINYINT();
+                if (precision == 1) {
+                    return DataTypes.BOOLEAN();
+                }
+                // unsigned tinyint (0..255) exceeds the signed TINYINT range, promote to
+                // SMALLINT the same way the released MySQL connector's row-type inference does
+                return unsigned ? DataTypes.SMALLINT() : DataTypes.TINYINT();
             case "SMALLINT":
                 return unsigned ? DataTypes.INT() : DataTypes.SMALLINT();
             case "MEDIUMINT":
@@ -205,6 +210,15 @@ public final class KafkaJsonColumnMeta {
             case "LONGTEXT":
             case "JSON":
             case "ENUM":
+                // SET is the comma-joined label string ("x,z") in both the canal message and the
+                // Debezium EnumSet struct, and the official Doris MySQL mapping keeps it a STRING
+                // of the delimited labels. It must NOT become an ARRAY<STRING>: the pipeline's
+                // binary record format does not support complex types in cdc-3.2.1 —
+                // BinaryRecordData.getArray/AbstractBinaryWriter lack ARRAY/MAP support
+                // (https://issues.apache.org/jira/browse/FLINK-37017, fixed only in cdc-3.3.0) —
+                // so an ARRAY column crashes every sink reading the record with
+                // UnsupportedOperationException.
+            case "SET":
             case "GEOMETRY":
             case "POINT":
             case "LINESTRING":
@@ -224,8 +238,6 @@ public final class KafkaJsonColumnMeta {
             case "MEDIUMBLOB":
             case "LONGBLOB":
                 return DataTypes.BYTES();
-            case "SET":
-                return DataTypes.ARRAY(DataTypes.STRING());
             default:
                 throw new UnsupportedOperationException(
                         String.format("Don't support MySQL type '%s' yet.", originalTypeName));

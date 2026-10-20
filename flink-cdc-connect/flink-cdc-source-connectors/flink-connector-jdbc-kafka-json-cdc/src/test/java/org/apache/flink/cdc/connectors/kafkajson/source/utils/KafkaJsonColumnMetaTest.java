@@ -183,8 +183,10 @@ class KafkaJsonColumnMetaTest {
     }
 
     @Test
-    void testSetAsArray() {
-        assertEquals("ARRAY<STRING>", toCdc("SET", 255));
+    void testSetAsString() {
+        // the official Doris MySQL mapping keeps SET as the STRING of delimited labels; an
+        // ARRAY<STRING> could not even cross the pipeline's binary record format
+        assertEquals("STRING", toCdc("SET", 255));
     }
 
     @Test

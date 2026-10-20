@@ -56,6 +56,10 @@ class KafkaJsonTypeUtilsTest {
                 KafkaJsonTypeUtils.fromDbzColumn(column("BIGINT UNSIGNED", 20)).toString());
         assertEquals(
                 "INT", KafkaJsonTypeUtils.fromDbzColumn(column("SMALLINT UNSIGNED", 6)).toString());
+        // unsigned tinyint (0..255) does not fit the signed TINYINT range, widen to SMALLINT
+        assertEquals(
+                "SMALLINT",
+                KafkaJsonTypeUtils.fromDbzColumn(column("TINYINT UNSIGNED", 3)).toString());
         // zerofill implies unsigned
         assertEquals(
                 "BIGINT",

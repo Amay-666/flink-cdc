@@ -134,6 +134,31 @@ class KafkaJsonRecordConverterTest {
     }
 
     @Test
+    void testNonDdlQueryProducesNoRecords() {
+        // canal emits type=QUERY with isDdl=false for transaction control (BEGIN/COMMIT) and
+        // session statements (SET); they carry no DML data rows and must not be mapped to INSERT
+        List<SourceRecord> records =
+                converter(false)
+                        .convert(
+                                new CanalMessageParser()
+                                        .parse(
+                                                "{"
+                                                        + "\"data\":[],"
+                                                        + "\"database\":\"test\",\"es\":1598752886000,"
+                                                        + "\"id\":1,\"isDdl\":false,"
+                                                        + MYSQL_TYPE
+                                                        + ",\"old\":null,\"pkNames\":[\"id\"],"
+                                                        + "\"sql\":\"BEGIN\",\"sqlType\":{},"
+                                                        + "\"table\":\"users\","
+                                                        + "\"ts\":1598752887000,\"type\":\"QUERY\"}"),
+                                "test.users",
+                                0,
+                                100L);
+
+        assertTrue(records.isEmpty());
+    }
+
+    @Test
     void testInsertWithMultipleRows() {
         KafkaJsonRecordConverter converter = converter(false);
         List<SourceRecord> records =
@@ -175,6 +200,75 @@ class KafkaJsonRecordConverterTest {
         assertEquals("100", second.sourceOffset().get("offset"));
         assertEquals("1598752886000", second.sourceOffset().get("eventTime"));
         assertEquals("0", second.sourceOffset().get("partition"));
+    }
+
+    @Test
+    void testEnumIndexMappedToLabel() {
+        // TiCDC's canal-json renders the 1-based index of the stored ENUM label. The registry's
+        // column carries the label list (filled from information_schema's COLUMN_TYPE by
+        // KafkaJsonSchema#readTableSchema — TiDB's DatabaseMetaData reports bare "ENUM"), and
+        // the converter maps the index back to the label.
+        KafkaJsonSourceConfigFactory factory =
+                new KafkaJsonSourceConfigFactory()
+                        .hostname("localhost")
+                        .username("root")
+                        .password("x")
+                        .databaseList("test")
+                        .tableList("test.users")
+                        .kafkaBootstrapServers("b")
+                        .kafkaTopics("t")
+                        .serverTimeZone("UTC");
+        KafkaJsonSourceConfig config = factory.create(0);
+        KafkaJsonRecordFactory recordFactory = new KafkaJsonRecordFactory(config);
+        // the column as readTableSchema registers it: the label list filled from
+        // information_schema's "enum('a','b','c')"
+        recordFactory.registerTable(
+                Table.editor()
+                        .tableId(USERS_ID)
+                        .addColumn(
+                                Column.editor()
+                                        .name("id")
+                                        .type("BIGINT")
+                                        .jdbcType(Types.BIGINT)
+                                        .length(20)
+                                        .optional(false)
+                                        .position(1)
+                                        .create())
+                        .addColumn(
+                                Column.editor()
+                                        .name("color")
+                                        .type("ENUM")
+                                        .jdbcType(Types.VARCHAR)
+                                        .length(1)
+                                        .optional(true)
+                                        .position(2)
+                                        .enumValues(java.util.Arrays.asList("a", "b", "c"))
+                                        .create())
+                        .setPrimaryKeyNames("id")
+                        .create());
+        KafkaJsonRecordConverter converter = new KafkaJsonRecordConverter(recordFactory, config);
+
+        List<SourceRecord> records =
+                converter.convert(
+                        new CanalMessageParser()
+                                .parse(
+                                        "{"
+                                                + "\"data\":[{\"id\":\"1\",\"color\":\"3\"}],"
+                                                + "\"database\":\"test\",\"es\":1598752886000,\"id\":1,"
+                                                + "\"isDdl\":false,"
+                                                + "\"mysqlType\":{\"id\":\"bigint(20)\","
+                                                + "\"color\":\"enum('a','b','c')\"},"
+                                                + "\"old\":null,\"pkNames\":[\"id\"],"
+                                                + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
+                                                + "\"ts\":1598752887000,\"type\":\"INSERT\"}"),
+                        "test.users",
+                        0,
+                        100L);
+
+        assertEquals(1, records.size());
+        Struct value = (Struct) records.get(0).value();
+        // TiCDC's 1-based index 3 maps back to the label 'c'
+        assertEquals("c", value.getStruct("after").getString("color"));
     }
 
     @Test

@@ -89,6 +89,95 @@ class KafkaJsonJdbcConnectionTest {
         assertThat(column.isGenerated()).isFalse();
     }
 
+    @Test
+    void overrideColumnMapsTinyintToSmallint() {
+        // The driver reports TINYINT (unsigned or not) as Types.TINYINT, which the Debezium
+        // base schema builder maps onto the INT8 schema — a TINYINT UNSIGNED value (0..255)
+        // no longer fits it and the record factory drops the value to null. The shared
+        // mapping (KafkaJsonTableUtils#parseType, mirroring Debezium's MySQL ANTLR parser)
+        // uses Types.SMALLINT.
+        KafkaJsonJdbcConnection connection = connection();
+
+        ColumnEditor unsigned =
+                Column.editor()
+                        .name("c")
+                        .type("TINYINT UNSIGNED")
+                        .jdbcType(Types.TINYINT)
+                        .length(3);
+        assertThat(connection.overrideColumn(unsigned).jdbcType()).isEqualTo(Types.SMALLINT);
+
+        ColumnEditor signed =
+                Column.editor().name("c").type("TINYINT").jdbcType(Types.TINYINT).length(4);
+        assertThat(connection.overrideColumn(signed).jdbcType()).isEqualTo(Types.SMALLINT);
+    }
+
+    @Test
+    void overrideColumnMapsMysqlTimestampToTimestampWithTimezone() {
+        // The driver reports MySQL TIMESTAMP as Types.TIMESTAMP exactly like DATETIME; the
+        // shared mapping distinguishes them by the type name. Without the remap the base
+        // class's zone-less DATETIME conversion of the JDBC-snapshot value shifts it by the
+        // server zone offset (a +08:00 server rendered a 10:20:30 TIMESTAMP as 18:20:30).
+        KafkaJsonJdbcConnection connection = connection();
+
+        ColumnEditor timestamp =
+                Column.editor().name("c").type("TIMESTAMP").jdbcType(Types.TIMESTAMP).length(19);
+        assertThat(connection.overrideColumn(timestamp).jdbcType())
+                .isEqualTo(Types.TIMESTAMP_WITH_TIMEZONE);
+
+        // DATETIME keeps Types.TIMESTAMP: it is genuinely zone-less
+        ColumnEditor datetime =
+                Column.editor().name("c").type("DATETIME").jdbcType(Types.TIMESTAMP).length(19);
+        assertThat(connection.overrideColumn(datetime).jdbcType()).isEqualTo(Types.TIMESTAMP);
+    }
+
+    @Test
+    void overrideColumnClearsTheApproximateNumericScale() {
+        // TiDB's metadata reports a FLOAT column's DECIMAL_DIGITS as 0 (MySQL proper reports
+        // null): a present scale suppresses the single-precision FLOAT32 schema branch in
+        // MySqlValueConverters, the record then carries a DOUBLE layout while the column
+        // type stays FLOAT, and reading 4 bytes from the 8-byte slot silently corrupts the
+        // value to 0.0.
+        KafkaJsonJdbcConnection connection = connection();
+
+        ColumnEditor floatCol =
+                Column.editor().name("c").type("FLOAT").jdbcType(Types.REAL).length(12).scale(0);
+        assertThat(connection.overrideColumn(floatCol).create().scale()).isEmpty();
+
+        ColumnEditor doubleCol =
+                Column.editor().name("c").type("DOUBLE").jdbcType(Types.DOUBLE).length(22).scale(0);
+        assertThat(connection.overrideColumn(doubleCol).create().scale()).isEmpty();
+    }
+
+    @Test
+    void overrideColumnPreservesTheExactNumericScaleAndOtherTypes() {
+        // DECIMAL's scale is meaningful and must survive the compensation
+        KafkaJsonJdbcConnection connection = connection();
+
+        ColumnEditor decimal =
+                Column.editor()
+                        .name("c")
+                        .type("DECIMAL")
+                        .jdbcType(Types.DECIMAL)
+                        .length(20)
+                        .scale(4);
+        Column fixed = connection.overrideColumn(decimal).create();
+        assertThat(fixed.scale()).isPresent().contains(4);
+
+        ColumnEditor bigint =
+                Column.editor().name("c").type("BIGINT").jdbcType(Types.BIGINT).length(20);
+        Column passed = connection.overrideColumn(bigint).create();
+        assertThat(passed.jdbcType()).isEqualTo(Types.BIGINT);
+        assertThat(passed.length()).isEqualTo(20);
+    }
+
+    private static KafkaJsonJdbcConnection connection() {
+        return new KafkaJsonJdbcConnection(
+                JdbcConfiguration.create().with("database.hostname", "localhost").build(),
+                (ConnectionFactory) config -> null,
+                "`",
+                "`");
+    }
+
     /** Returns fake {@link DatabaseMetaData#getColumns} values; records every getString index. */
     private static class RecordingMetadataHandler implements InvocationHandler {
 

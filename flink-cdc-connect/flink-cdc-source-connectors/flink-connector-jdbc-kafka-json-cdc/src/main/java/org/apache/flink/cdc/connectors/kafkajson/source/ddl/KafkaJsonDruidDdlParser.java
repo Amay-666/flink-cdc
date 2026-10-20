@@ -56,6 +56,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -367,7 +368,12 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
     private static void compareColumnChanges(
             List<ColumnChangeInfo> columnChanges, Column oldColumn, Column newColumn) {
         String columnName = newColumn.name();
-        // Check type change
+        // same-type ENUM/SET: skip the type check (the sink column type is unchanged)
+        if (isSameEnumOrSetType(oldColumn, newColumn)) {
+            appendCommentChange(columnChanges, columnName, oldColumn, newColumn);
+            appendPositionChange(columnChanges, columnName, oldColumn, newColumn);
+            return;
+        }
         if (!sameColumnType(oldColumn, newColumn)) {
             columnChanges.add(
                     new ColumnChangeInfo(
@@ -376,7 +382,24 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
                             oldColumn.typeName() + "(" + oldColumn.length() + ")",
                             newColumn.typeName() + "(" + newColumn.length() + ")"));
         }
-        // Check comment change
+        appendCommentChange(columnChanges, columnName, oldColumn, newColumn);
+        appendPositionChange(columnChanges, columnName, oldColumn, newColumn);
+    }
+
+    /** Both columns are the same ENUM or the same SET type (typeName and jdbcType match). */
+    private static boolean isSameEnumOrSetType(Column a, Column b) {
+        String aTypeName = a.typeName().toUpperCase(Locale.ROOT);
+        String bTypeName = b.typeName().toUpperCase(Locale.ROOT);
+        return ("ENUM".equals(aTypeName) || "SET".equals(aTypeName))
+                && aTypeName.equals(bTypeName)
+                && a.jdbcType() == b.jdbcType();
+    }
+
+    private static void appendCommentChange(
+            List<ColumnChangeInfo> columnChanges,
+            String columnName,
+            Column oldColumn,
+            Column newColumn) {
         String oldComment = oldColumn.comment();
         String newComment = newColumn.comment();
         if (!equalsSafe(oldComment, newComment)) {
@@ -387,7 +410,13 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
                             oldComment,
                             newComment));
         }
-        // Check position change
+    }
+
+    private static void appendPositionChange(
+            List<ColumnChangeInfo> columnChanges,
+            String columnName,
+            Column oldColumn,
+            Column newColumn) {
         if (oldColumn.position() != newColumn.position()) {
             columnChanges.add(
                     new ColumnChangeInfo(
@@ -408,12 +437,26 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
         return a.equals(b);
     }
 
-    /** Checks if two columns have the same type definition (type name, length, scale). */
-    private static boolean sameColumnType(Column a, Column b) {
+    /**
+     * Checks if two columns have the same base type (jdbcType, length, scale, typeName) — the
+     * ENUM/SET labels are excluded. An ENUM/SET list replacement changes only the labels while the
+     * base type stays identical.
+     */
+    private static boolean sameColumnBaseType(Column a, Column b) {
         return a.jdbcType() == b.jdbcType()
                 && a.length() == b.length()
                 && a.scale() == b.scale()
                 && a.typeName().equals(b.typeName());
+    }
+
+    /**
+     * Checks if two columns have the same type definition (type name, length, scale, enum values).
+     * The enum values must be compared too: a MODIFY COLUMN that replaces the ENUM list changes
+     * only them (typeName stays "ENUM", jdbcType stays VARCHAR) — without this check the change is
+     * misclassified as a comment change and the sink NPEs on the null comment.
+     */
+    private static boolean sameColumnType(Column a, Column b) {
+        return sameColumnBaseType(a, b) && Objects.equals(a.enumValues(), b.enumValues());
     }
 
     private static int positionOf(TableEditor table, String columnName) {

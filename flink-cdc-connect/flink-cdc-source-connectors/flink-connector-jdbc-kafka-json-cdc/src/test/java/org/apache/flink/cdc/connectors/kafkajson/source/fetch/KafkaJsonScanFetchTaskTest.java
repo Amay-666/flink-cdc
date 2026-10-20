@@ -53,6 +53,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Types;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -62,6 +63,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -212,6 +214,36 @@ class KafkaJsonScanFetchTaskTest {
         assertEquals("true", source.getString("snapshot"));
         assertEquals("t", record.topic());
         assertEquals(Integer.valueOf(0), record.kafkaPartition());
+    }
+
+    @Test
+    void testBinaryTimeToDuration() {
+        // 13:45:01 — 8 bytes: sign(0), days=0 (4 LE bytes), hours=13, minutes=45, seconds=1
+        byte[] wholeSecond = {0, 0, 0, 0, 0, 13, 45, 1};
+        assertEquals(
+                Duration.ofHours(13).plusMinutes(45).plusSeconds(1),
+                KafkaJsonScanFetchTask.binaryTimeToDuration(wholeSecond));
+
+        // 13:45:01.123456 — 12 bytes with the little-endian microsecond part (123456 = 0x01E240)
+        byte[] withMicros = {0, 0, 0, 0, 0, 13, 45, 1, 0x40, (byte) 0xE2, 0x01, 0x00};
+        assertEquals(
+                Duration.ofHours(13).plusMinutes(45).plusSeconds(1).plusNanos(123456_000L),
+                KafkaJsonScanFetchTask.binaryTimeToDuration(withMicros));
+
+        // a negative time keeps the sign flag
+        byte[] negative = {1, 0, 0, 0, 0, 5, 30, 0};
+        assertEquals(
+                Duration.ofHours(5).plusMinutes(30).negated(),
+                KafkaJsonScanFetchTask.binaryTimeToDuration(negative));
+
+        // a multi-day time (2 days 4 hours = 52:00:00) counts into the hours
+        byte[] multiDay = {0, 2, 0, 0, 0, 4, 0, 0};
+        assertEquals(Duration.ofHours(52), KafkaJsonScanFetchTask.binaryTimeToDuration(multiDay));
+
+        // an unexpected byte length fails fast instead of producing garbage
+        assertThrows(
+                IllegalStateException.class,
+                () -> KafkaJsonScanFetchTask.binaryTimeToDuration(new byte[] {1, 2, 3}));
     }
 
     private static void assertReadRecord(SourceRecord record, long id, String name) {

@@ -19,6 +19,7 @@ package org.apache.flink.cdc.connectors.kafkajson.source.message;
 
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.convert.KafkaJsonValueConverter;
+import org.apache.flink.cdc.connectors.kafkajson.source.convert.MySqlValueConverters;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonPartition;
 import org.apache.flink.cdc.connectors.kafkajson.source.schema.KafkaJsonSourceInfo;
@@ -26,7 +27,6 @@ import org.apache.flink.cdc.connectors.kafkajson.source.schema.KafkaJsonSourceIn
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.debezium.connector.mysql.MySqlConnectorConfig;
-import io.debezium.connector.mysql.MySqlValueConverters;
 import io.debezium.data.Envelope;
 import io.debezium.jdbc.JdbcValueConverters;
 import io.debezium.jdbc.TemporalPrecisionMode;
@@ -53,7 +53,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Builds the Debezium-shaped {@link SourceRecord}s for the Canal source.
+ * Builds the Debezium-shaped {@link SourceRecord}s for the kafka-json source.
  *
  * <p>Both the snapshot phase (rows read from MySQL via JDBC) and the streaming phase (canal
  * flatMessages consumed from Kafka) produce their records through this single factory so that the
@@ -256,13 +256,9 @@ public class KafkaJsonRecordFactory implements Serializable {
     private static MySqlValueConverters createValueConverters(MySqlConnectorConfig dbzConfig) {
         TemporalPrecisionMode timePrecisionMode = dbzConfig.getTemporalPrecisionMode();
         JdbcValueConverters.DecimalMode decimalMode = dbzConfig.getDecimalMode();
-        String bigIntUnsignedHandlingModeStr =
-                dbzConfig.getConfig().getString(MySqlConnectorConfig.BIGINT_UNSIGNED_HANDLING_MODE);
-        MySqlConnectorConfig.BigIntUnsignedHandlingMode bigIntUnsignedHandlingMode =
-                MySqlConnectorConfig.BigIntUnsignedHandlingMode.parse(
-                        bigIntUnsignedHandlingModeStr);
+        // Force PRECISE so BIGINT UNSIGNED values do not overflow Java Long.
         JdbcValueConverters.BigIntUnsignedMode bigIntUnsignedMode =
-                bigIntUnsignedHandlingMode.asBigIntUnsignedMode();
+                JdbcValueConverters.BigIntUnsignedMode.PRECISE;
 
         boolean timeAdjusterEnabled =
                 dbzConfig.getConfig().getBoolean(MySqlConnectorConfig.ENABLE_TIME_ADJUSTER);

@@ -17,6 +17,7 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.table;
 
+import org.apache.flink.cdc.connectors.kafkajson.source.convert.MySqlValueConverters;
 import org.apache.flink.cdc.debezium.table.DeserializationRuntimeConverter;
 import org.apache.flink.cdc.debezium.table.DeserializationRuntimeConverterFactory;
 import org.apache.flink.table.data.GenericArrayData;
@@ -29,7 +30,6 @@ import com.esri.core.geometry.ogc.OGCGeometry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
-import io.debezium.connector.mysql.MySqlValueConverters;
 import io.debezium.data.EnumSet;
 import io.debezium.data.geometry.Geometry;
 import io.debezium.data.geometry.Point;

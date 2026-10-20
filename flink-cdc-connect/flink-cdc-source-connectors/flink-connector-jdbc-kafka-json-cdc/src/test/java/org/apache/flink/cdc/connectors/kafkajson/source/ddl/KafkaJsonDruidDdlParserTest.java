@@ -277,6 +277,196 @@ class KafkaJsonDruidDdlParserTest {
     }
 
     @Test
+    void testParseAlterModifyColumnReplacesEnumList() {
+        // MySQL MODIFY COLUMN replaces the whole ENUM list — the DDL text carries the complete
+        // new expression. The registry column (labels filled from information_schema by
+        // KafkaJsonJdbcConnection) is superseded by the new list.
+        //
+        // The Doris column type is unchanged (VARCHAR stays VARCHAR), so NO pipeline schema
+        // change event is emitted — the new table (with the new labels) is re-registered
+        // source-side only, which is all that's needed to map TiCDC's numeric index through
+        // the NEW list.
+        Table tableWithEnum =
+                Table.editor()
+                        .tableId(TABLE_ID)
+                        .addColumn(
+                                Column.editor()
+                                        .name("id")
+                                        .type("BIGINT")
+                                        .jdbcType(Types.BIGINT)
+                                        .length(20)
+                                        .optional(false)
+                                        .position(1)
+                                        .create())
+                        .addColumn(
+                                Column.editor()
+                                        .name("status")
+                                        .type("ENUM")
+                                        .jdbcType(Types.VARCHAR)
+                                        .length(1)
+                                        .optional(true)
+                                        .position(2)
+                                        .enumValues(
+                                                java.util.Arrays.asList(
+                                                        "active", "inactive", "pending"))
+                                        .create())
+                        .setPrimaryKeyNames("id")
+                        .create();
+
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        tableWithEnum,
+                        "ALTER TABLE `test`.`users` MODIFY COLUMN `status` "
+                                + "ENUM('active','archived','retired','pending')");
+
+        // the new table carries the replaced label list ...
+        Column status = result.getNewTable().columnWithName("status");
+        assertEquals(
+                java.util.Arrays.asList("active", "archived", "retired", "pending"),
+                status.enumValues());
+        // ... but no column change is emitted (the sink column type is unchanged)
+        assertTrue(result.getColumnChanges().isEmpty());
+    }
+
+    @Test
+    void testEnumListChangeWithCommentChangeEmitsCommentOnly() {
+        // ENUM('a','b') → ENUM('a','c') COMMENT 'em': the label list is source-side only,
+        // but the comment change must still reach the sink
+        Table table =
+                Table.editor()
+                        .tableId(TABLE_ID)
+                        .addColumn(
+                                Column.editor()
+                                        .name("id")
+                                        .type("BIGINT")
+                                        .jdbcType(Types.BIGINT)
+                                        .length(20)
+                                        .optional(false)
+                                        .position(1)
+                                        .create())
+                        .addColumn(
+                                Column.editor()
+                                        .name("status")
+                                        .type("ENUM")
+                                        .jdbcType(Types.VARCHAR)
+                                        .length(1)
+                                        .optional(true)
+                                        .position(2)
+                                        .enumValues(java.util.Arrays.asList("a", "b"))
+                                        .comment("old")
+                                        .create())
+                        .setPrimaryKeyNames("id")
+                        .create();
+
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        table,
+                        "ALTER TABLE `test`.`users` MODIFY COLUMN `status` "
+                                + "ENUM('a','c') COMMENT 'em'");
+
+        // the comment change IS emitted ...
+        List<ColumnChangeInfo> changes = result.getColumnChanges();
+        assertEquals(1, changes.size());
+        assertEquals(KafkaJsonTableChangeType.ALTER_COLUMN_COMMENT, changes.get(0).getChangeType());
+        assertEquals("em", changes.get(0).getNewValue());
+        // ... and the new table carries the replaced labels
+        assertEquals(
+                java.util.Arrays.asList("a", "c"),
+                result.getNewTable().columnWithName("status").enumValues());
+    }
+
+    @Test
+    void testEnumToVarcharIsATypeChange() {
+        // ENUM('a','b') → VARCHAR(50): a real type change that must NOT be swallowed
+        // by the same-type ENUM/SET branch
+        Table table =
+                Table.editor()
+                        .tableId(TABLE_ID)
+                        .addColumn(
+                                Column.editor()
+                                        .name("id")
+                                        .type("BIGINT")
+                                        .jdbcType(Types.BIGINT)
+                                        .length(20)
+                                        .optional(false)
+                                        .position(1)
+                                        .create())
+                        .addColumn(
+                                Column.editor()
+                                        .name("status")
+                                        .type("ENUM")
+                                        .jdbcType(Types.VARCHAR)
+                                        .length(1)
+                                        .optional(true)
+                                        .position(2)
+                                        .enumValues(java.util.Arrays.asList("a", "b"))
+                                        .create())
+                        .setPrimaryKeyNames("id")
+                        .create();
+
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        table,
+                        "ALTER TABLE `test`.`users` MODIFY COLUMN `status` VARCHAR(50)");
+
+        List<ColumnChangeInfo> changes = result.getColumnChanges();
+        assertEquals(1, changes.size());
+        assertEquals(KafkaJsonTableChangeType.ALTER_COLUMN_TYPE, changes.get(0).getChangeType());
+        // the new column is VARCHAR with no enum values
+        assertTrue(result.getNewTable().columnWithName("status").enumValues().isEmpty());
+    }
+
+    @Test
+    void testEnumListChangeWithNullabilityIsIgnored() {
+        // ENUM('a','b') NOT NULL → ENUM('a','c') NULL: nullability is already ignored by
+        // design, so this behaves the same as a pure label replacement — no pipeline event
+        Table table =
+                Table.editor()
+                        .tableId(TABLE_ID)
+                        .addColumn(
+                                Column.editor()
+                                        .name("id")
+                                        .type("BIGINT")
+                                        .jdbcType(Types.BIGINT)
+                                        .length(20)
+                                        .optional(false)
+                                        .position(1)
+                                        .create())
+                        .addColumn(
+                                Column.editor()
+                                        .name("status")
+                                        .type("ENUM")
+                                        .jdbcType(Types.VARCHAR)
+                                        .length(1)
+                                        .optional(false)
+                                        .position(2)
+                                        .enumValues(java.util.Arrays.asList("a", "b"))
+                                        .create())
+                        .setPrimaryKeyNames("id")
+                        .create();
+
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        table,
+                        "ALTER TABLE `test`.`users` MODIFY COLUMN `status` "
+                                + "ENUM('a','c') NULL");
+
+        // no changes (nullability is ignored, label change is source-side only)
+        assertTrue(result.getColumnChanges().isEmpty());
+        assertEquals(
+                java.util.Arrays.asList("a", "c"),
+                result.getNewTable().columnWithName("status").enumValues());
+    }
+
+    @Test
     void testParseAlterModifyOnlyOptionalIsIgnored() {
         KafkaJsonDdlParsedResult result =
                 parser.parse(
@@ -392,6 +582,126 @@ class KafkaJsonDruidDdlParserTest {
         Column amount = table.columnWithName("amount");
         assertEquals("BIGINT UNSIGNED", amount.typeName());
         assertTrue(KafkaJsonTableUtils.isUnsigned(amount.typeName()));
+    }
+
+    /**
+     * The full MySQL type matrix through the DDL path: the same types as the canal-mysqlType matrix
+     * ({@code KafkaJsonTableUtilsTest#testFullTypeMatrix}) parsed from one CREATE TABLE, asserting
+     * that a DDL-derived column and a canal-message-derived column of the same type are built
+     * identically — the property the shared {@code KafkaJsonTableUtils} mapping guarantees.
+     */
+    @Test
+    void testParseCreateTableFullTypeMatrix() {
+        TableId matrixId = new TableId("test", null, "type_matrix");
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        matrixId,
+                        null,
+                        "CREATE TABLE `test`.`type_matrix` ("
+                                + "`c_tinyint` tinyint(4), "
+                                + "`c_tinyint_u` tinyint(3) unsigned, "
+                                + "`c_smallint` smallint(6), "
+                                + "`c_smallint_u` smallint unsigned, "
+                                + "`c_mediumint` mediumint(9), "
+                                + "`c_mediumint_u` mediumint unsigned, "
+                                + "`c_int` int(11), "
+                                + "`c_int_u` int(10) unsigned, "
+                                + "`c_bigint` bigint(20), "
+                                + "`c_bigint_u` bigint(20) unsigned, "
+                                + "`c_float` float, "
+                                + "`c_double` double, "
+                                + "`c_real` real, "
+                                + "`c_decimal` decimal(20,4), "
+                                + "`c_decimal_nop` decimal, "
+                                + "`c_bit` bit(8), "
+                                + "`c_bool` boolean, "
+                                + "`c_date` date, "
+                                + "`c_time` time, "
+                                + "`c_time_p` time(3), "
+                                + "`c_datetime` datetime, "
+                                + "`c_datetime_p` datetime(3), "
+                                + "`c_datetime_p6` datetime(6), "
+                                + "`c_timestamp` timestamp, "
+                                + "`c_year` year, "
+                                + "`c_json` json, "
+                                + "`c_enum` enum('a','b','c'), "
+                                + "`c_set` set('x','y'), "
+                                + "`c_char` char(16), "
+                                + "`c_varchar` varchar(100), "
+                                + "`c_tinytext` tinytext, "
+                                + "`c_text` text, "
+                                + "`c_mediumtext` mediumtext, "
+                                + "`c_longtext` longtext, "
+                                + "`c_binary` binary(8), "
+                                + "`c_varbinary` varbinary(64), "
+                                + "`c_tinyblob` tinyblob, "
+                                + "`c_blob` blob, "
+                                + "`c_mediumblob` mediumblob, "
+                                + "`c_longblob` longblob, "
+                                + "PRIMARY KEY (`c_int`))");
+
+        assertEquals(KafkaJsonTableChangeType.CREATE, result.getType());
+        Table table = result.getNewTable();
+        assertEquals(40, table.columns().size());
+        assertEquals(Collections.singletonList("c_int"), table.primaryKeyColumnNames());
+
+        assertColumn(table, "c_tinyint", "TINYINT", Types.SMALLINT, 4);
+        assertColumn(table, "c_tinyint_u", "TINYINT UNSIGNED", Types.SMALLINT, 3);
+        assertColumn(table, "c_smallint", "SMALLINT", Types.SMALLINT, 6);
+        assertColumn(table, "c_smallint_u", "SMALLINT UNSIGNED", Types.SMALLINT, 0);
+        assertColumn(table, "c_mediumint", "MEDIUMINT", Types.INTEGER, 9);
+        assertColumn(table, "c_mediumint_u", "MEDIUMINT UNSIGNED", Types.INTEGER, 0);
+        assertColumn(table, "c_int", "INT", Types.INTEGER, 11);
+        assertColumn(table, "c_int_u", "INT UNSIGNED", Types.INTEGER, 10);
+        assertColumn(table, "c_bigint", "BIGINT", Types.BIGINT, 20);
+        assertColumn(table, "c_bigint_u", "BIGINT UNSIGNED", Types.BIGINT, 20);
+        assertColumn(table, "c_float", "FLOAT", Types.FLOAT, 0);
+        assertColumn(table, "c_double", "DOUBLE", Types.DOUBLE, 0);
+        assertColumn(table, "c_real", "DOUBLE", Types.DOUBLE, 0);
+        assertColumn(table, "c_decimal", "DECIMAL", Types.DECIMAL, 20);
+        assertEquals(Integer.valueOf(4), table.columnWithName("c_decimal").scale().get());
+        assertColumn(table, "c_decimal_nop", "DECIMAL", Types.DECIMAL, 36);
+        assertColumn(table, "c_bit", "BIT", Types.BIT, 8);
+        assertColumn(table, "c_bool", "BOOLEAN", Types.BOOLEAN, 0);
+        assertColumn(table, "c_date", "DATE", Types.DATE, 0);
+        assertColumn(table, "c_time", "TIME", Types.TIME, 0);
+        assertColumn(table, "c_time_p", "TIME", Types.TIME, 3);
+        assertColumn(table, "c_datetime", "DATETIME", Types.TIMESTAMP, 0);
+        assertColumn(table, "c_datetime_p", "DATETIME", Types.TIMESTAMP, 3);
+        assertColumn(table, "c_datetime_p6", "DATETIME", Types.TIMESTAMP, 6);
+        assertColumn(table, "c_timestamp", "TIMESTAMP", Types.TIMESTAMP_WITH_TIMEZONE, 0);
+        assertColumn(table, "c_year", "YEAR", Types.DATE, 0);
+        assertColumn(table, "c_json", "JSON", Types.LONGVARCHAR, 0);
+        assertColumn(table, "c_enum", "ENUM", Types.VARCHAR, 0);
+        assertColumn(table, "c_set", "SET", Types.VARCHAR, 0);
+        assertEquals(Arrays.asList("a", "b", "c"), table.columnWithName("c_enum").enumValues());
+        assertEquals(Arrays.asList("x", "y"), table.columnWithName("c_set").enumValues());
+        assertColumn(table, "c_char", "VARCHAR", Types.VARCHAR, 16);
+        assertColumn(table, "c_varchar", "VARCHAR", Types.VARCHAR, 100);
+        assertColumn(table, "c_tinytext", "VARCHAR", Types.VARCHAR, 0);
+        assertColumn(table, "c_text", "VARCHAR", Types.VARCHAR, 0);
+        assertColumn(table, "c_mediumtext", "VARCHAR", Types.VARCHAR, 0);
+        assertColumn(table, "c_longtext", "VARCHAR", Types.VARCHAR, 0);
+        assertColumn(table, "c_binary", "BINARY", Types.BINARY, 8);
+        assertColumn(table, "c_varbinary", "VARBINARY", Types.VARBINARY, 64);
+        assertColumn(table, "c_tinyblob", "BLOB", Types.BLOB, 0);
+        assertColumn(table, "c_blob", "BLOB", Types.BLOB, 0);
+        assertColumn(table, "c_mediumblob", "BLOB", Types.BLOB, 0);
+        assertColumn(table, "c_longblob", "BLOB", Types.BLOB, 0);
+
+        // positions follow the declaration order
+        assertEquals(1, table.columnWithName("c_tinyint").position());
+        assertEquals(40, table.columnWithName("c_longblob").position());
+    }
+
+    private static void assertColumn(
+            Table table, String name, String typeName, int jdbcType, int length) {
+        Column column = table.columnWithName(name);
+        assertNotNull(column, "column " + name + " is missing");
+        assertEquals(typeName, column.typeName(), "typeName of " + name);
+        assertEquals(jdbcType, column.jdbcType(), "jdbcType of " + name);
+        assertEquals(length, column.length(), "length of " + name);
     }
 
     @Test

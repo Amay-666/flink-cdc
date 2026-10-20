@@ -22,6 +22,7 @@ import org.apache.flink.cdc.connectors.base.source.meta.split.StreamSplit;
 import org.apache.flink.cdc.connectors.base.source.reader.external.AbstractScanFetchTask;
 import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonSchema;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
+import org.apache.flink.cdc.connectors.kafkajson.source.convert.MySqlValueConverters;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.KafkaJsonRecordFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.schema.KafkaJsonSourceInfo;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonQueryUtils;
@@ -41,15 +42,18 @@ import org.apache.kafka.connect.source.SourceRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
+import java.sql.Blob;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.time.Duration;
 import java.util.List;
 
 /**
- * The snapshot fetch task of the Canal source, driving the incremental snapshot of one snapshot
- * split through the base framework's {@link AbstractScanFetchTask} algorithm:
+ * The snapshot fetch task of the kafka-json source, driving the incremental snapshot of one
+ * snapshot split through the base framework's {@link AbstractScanFetchTask} algorithm:
  *
  * <ol>
  *   <li>the base captures the low watermark (the current Kafka stream position),
@@ -146,7 +150,7 @@ public class KafkaJsonScanFetchTask extends AbstractScanFetchTask {
                 throw new IllegalStateException(
                         "Cannot find table "
                                 + tableId
-                                + " in the canal schema; the table schema must be registered "
+                                + " in the kafka-json schema; the table schema must be registered "
                                 + "before reading its snapshot");
             }
 
@@ -165,7 +169,8 @@ public class KafkaJsonScanFetchTask extends AbstractScanFetchTask {
                             SnapshotRecord.TRUE);
             List<String> kafkaTopics = sourceConfig.getKafkaTopics();
             if (kafkaTopics.isEmpty()) {
-                throw new IllegalStateException("No Kafka topic configured for the Canal source");
+                throw new IllegalStateException(
+                        "No Kafka topic configured for the kafka-json source");
             }
             final String topic = kafkaTopics.get(0);
 
@@ -201,7 +206,7 @@ public class KafkaJsonScanFetchTask extends AbstractScanFetchTask {
                     rows++;
                     final Object[] row = new Object[columns.size()];
                     for (Column column : columns) {
-                        row[column.position() - 1] = rs.getObject(column.position());
+                        row[column.position() - 1] = readField(rs, column.position(), column);
                     }
                     SourceRecord record =
                             recordFactory.createRecord(
@@ -232,6 +237,79 @@ public class KafkaJsonScanFetchTask extends AbstractScanFetchTask {
                         Strings.duration(System.currentTimeMillis() - exportStart));
             }
         }
+
+        /**
+         * Reads a JDBC field through the type-specific accessor — the DBZ-3238 workaround the MySQL
+         * connector's snapshot read task ({@code MySqlSnapshotSplitReadTask#readField}) applies. A
+         * raw {@code rs.getObject()} returns Java types the Debezium value converters reject:
+         * {@code java.sql.Time} for TIME (DBZ-342) and a {@code Boolean} (TINYINT(1)) or {@code
+         * Short} (unsigned) for TINYINT — the conversion then nulls the value.
+         */
+        private Object readField(ResultSet rs, int fieldNo, Column column) throws SQLException {
+            if (column.jdbcType() == Types.TIME) {
+                return readTimeField(rs, fieldNo);
+            }
+            if (column.jdbcType() == Types.TINYINT || column.jdbcType() == Types.SMALLINT) {
+                // JDBC's rs.getObject() will return a Boolean for all TINYINT(1) columns and a
+                // Short for an unsigned TINYINT; read both as int
+                return rs.getObject(fieldNo) == null ? null : rs.getInt(fieldNo);
+            }
+            return rs.getObject(fieldNo);
+        }
+
+        /**
+         * Reads a MySQL TIME field into the {@link java.time.Duration} the value converters expect.
+         *
+         * <p>The pool's JDBC URL ({@code useCursorFetch=true}) serves snapshot rows through the
+         * binary protocol, whose TIME bytes are the packed {@code ProtocolBinary:: MYSQL_TYPE_TIME}
+         * layout — sign flag, days, hours, minutes, seconds, optional microseconds — not the {@code
+         * HH:mm:ss[.ffffff]} text that {@code MySqlValueConverters#stringToDuration} (the DBZ-342
+         * workaround the MySQL connector's text-protocol reader uses) expects. The sign flag (0 or
+         * 1) is never a printable digit, so the two encodings are unambiguous.
+         */
+        private Object readTimeField(ResultSet rs, int fieldNo) throws SQLException {
+            Blob b = rs.getBlob(fieldNo);
+            if (b == null) {
+                return null; // Don't continue parsing time field if it is null
+            }
+            byte[] bytes = b.getBytes(1, (int) b.length());
+            if (bytes.length == 0) {
+                return null;
+            }
+            if (bytes[0] == 0 || bytes[0] == 1) {
+                return binaryTimeToDuration(bytes);
+            }
+            return MySqlValueConverters.stringToDuration(new String(bytes, StandardCharsets.UTF_8));
+        }
+    }
+
+    /**
+     * Parses the packed {@code ProtocolBinary::MYSQL_TYPE_TIME} layout: a sign flag, an unsigned
+     * 4-byte little-endian day count, hours, minutes, seconds and an optional unsigned 4-byte
+     * little-endian microsecond part (8 bytes without the fraction, 12 with). Visible for testing.
+     */
+    static Duration binaryTimeToDuration(byte[] bytes) {
+        if (bytes.length != 8 && bytes.length != 12) {
+            throw new IllegalStateException(
+                    "Invalid byte length of a MySQL binary TIME value: " + bytes.length);
+        }
+        boolean negative = bytes[0] == 1;
+        int days = readUnsignedIntLE(bytes, 1);
+        int hours = bytes[5] & 0xFF;
+        int minutes = bytes[6] & 0xFF;
+        int seconds = bytes[7] & 0xFF;
+        long micros = bytes.length == 12 ? readUnsignedIntLE(bytes, 8) : 0L;
+        Duration duration =
+                Duration.ofSeconds((((long) days) * 24 + hours) * 3600L + minutes * 60L + seconds)
+                        .plusNanos(micros * 1000L);
+        return negative ? duration.negated() : duration;
+    }
+
+    private static int readUnsignedIntLE(byte[] bytes, int offset) {
+        return (bytes[offset] & 0xFF)
+                | ((bytes[offset + 1] & 0xFF) << 8)
+                | ((bytes[offset + 2] & 0xFF) << 16)
+                | ((bytes[offset + 3] & 0xFF) << 24);
     }
 
     /** The {@link ChangeEventSource.ChangeEventSourceContext} of a snapshot split read. */
