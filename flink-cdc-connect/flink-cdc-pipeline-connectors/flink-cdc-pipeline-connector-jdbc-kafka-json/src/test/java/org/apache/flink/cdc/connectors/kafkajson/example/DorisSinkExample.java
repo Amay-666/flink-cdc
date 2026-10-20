@@ -27,6 +27,7 @@ import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSink
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions;
 import org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSource;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.connector.sink2.CommittableMessage;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -34,6 +35,8 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 
 import java.time.Duration;
 import java.time.ZoneId;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Runnable end-to-end assembly of the connector's own DataStream topology: a canal-sourced stream
@@ -55,46 +58,78 @@ import java.time.ZoneId;
  * if the sink ran at a different parallelism from the source, Flink would rebalance the events in
  * front of the schema operator and the rows of one primary key would no longer arrive in the order
  * they happened (see {@link KafkaJsonDataSinkBuilder}).
+ *
+ * <p>The endpoints and credentials are read from {@code e2e/env.yaml} (see {@link E2eConfig}); the
+ * repository only carries the placeholder template, so no real connection details are committed.
  */
 public class DorisSinkExample {
 
     /** The connector source identifier of the underlying canal connector. */
-    public static final String CANAL_SOURCE_IDENTIFIER = "jdbc-kafka-json-cdc";
+    public static final String SOURCE_IDENTIFIER = "jdbc-kafka-json-cdc";
 
     /** The parallelism of the whole job: the source and every sink operator run at this value. */
     private static final int PARALLELISM = 4;
 
     public static void main(String[] args) throws Exception {
+        // The endpoints and credentials come from e2e/env.yaml (see E2eConfig); the repository only
+        // carries e2e/env.yaml.template, so no real connection details are committed.
+        E2eConfig e2e = E2eConfig.get();
+        String database = e2e.getString("mysql.database");
+
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        env.enableCheckpointing(60_000L);
+        env.enableCheckpointing(6_000L);
         // The source runs at this parallelism (buildSource inherits it) and the sink chain follows
         // the source, so one setting covers the whole job.
         env.setParallelism(PARALLELISM);
 
         KafkaJsonSourceConfigFactory configFactory =
                 new KafkaJsonSourceConfigFactory()
-                        .hostname("localhost")
-                        .port(3306)
-                        .username("root")
-                        .password("123456")
-                        .databaseList("test")
-                        .tableList("test.users")
-                        .kafkaBootstrapServers("localhost:9092")
-                        .kafkaGroupId("kafka-json-doris")
-                        .kafkaTopics("canal-topic")
-                        .startupOptions(StartupOptions.latest())
+                        .hostname(e2e.getString("mysql.host"))
+                        .port(e2e.getInt("mysql.port"))
+                        .username(e2e.getString("mysql.user"))
+                        .password(e2e.getString("mysql.password"))
+                        .databaseList(database)
+                        .tableList(
+                                database
+                                        + ".test_schema_change3|"
+                                        + database
+                                        + ".test_schema_change4")
+                        .databaseType(KafkaJsonSourceOptions.DatabaseType.TIDB)
+                        .eventTime(KafkaJsonSourceOptions.EventTime.TIDB_TSO)
+                        .scanNewlyAddedTableEnabled(true)
+                        .includeSchemaChanges(true)
+                        .kafkaBootstrapServers(e2e.getString("kafka.servers"))
+                        .kafkaGroupId(e2e.getString("kafka.group"))
+                        .kafkaTopics(e2e.getString("kafka.topic"))
+                        .startupOptions(StartupOptions.initial())
                         .serverTimeZone("Asia/Shanghai");
+        // Consume what the source reads with:
+        // kafka-console-consumer --bootstrap-server <kafka.servers> --topic <kafka.topic>
 
         DataStream<Event> source = buildSource(env, configFactory);
 
         Configuration sinkConfig = new Configuration();
-        sinkConfig.set(DorisDataSinkOptions.FENODES, "localhost:8030");
-        sinkConfig.set(DorisDataSinkOptions.USERNAME, "root");
-        sinkConfig.set(DorisDataSinkOptions.PASSWORD, "123456");
+        sinkConfig.set(DorisDataSinkOptions.FENODES, e2e.getString("doris.feHttp"));
+        sinkConfig.set(DorisDataSinkOptions.USERNAME, e2e.getString("doris.user"));
+        sinkConfig.set(DorisDataSinkOptions.PASSWORD, e2e.getString("doris.password"));
+        Map<String, String> tableProperties = new HashMap<>();
+        tableProperties.put("replication_allocation", "tag.location.group_a: 3");
+        sinkConfig.set(DorisDataSinkOptions.TABLE_PROPERTIES, tableProperties);
+        sinkConfig.set(DorisDataSinkOptions.TABLE_BUCKETS, 8);
+        sinkConfig.set(
+                DorisDataSinkOptions.GROUP_COMMIT_MODE,
+                DorisDataSinkOptions.GroupCommitMode.ASYNC_MODE);
+        sinkConfig.set(
+                DorisDataSinkOptions.WRITER_MODE, DorisDataSinkOptions.WriterMode.STATEFUL.name());
+        sinkConfig.set(DorisDataSinkOptions.IS_DROP_TABLE_BEFORE_CREATE, true);
+        DorisDataSinkOptions dorisDataSinkOptions = new DorisDataSinkOptions(sinkConfig);
+        dorisDataSinkOptions.withTableMapping(
+                (tableId) -> tableId.getSchemaName() + "_" + tableId.getTableName());
+        dorisDataSinkOptions.withDatabaseMapping((tableId) -> e2e.getString("doris.database"));
 
         buildSink(
                 source,
-                new DorisDataSinkOptions(sinkConfig),
+                dorisDataSinkOptions,
                 Duration.ofSeconds(30),
                 SchemaChangeBehavior.EVOLVE,
                 "Asia/Shanghai");
@@ -114,17 +149,16 @@ public class DorisSinkExample {
                 (FlinkSourceProvider)
                         new KafkaJsonDataSource(configFactory).getEventSourceProvider();
         return env.fromSource(
-                provider.getSource(), WatermarkStrategy.noWatermarks(), "canal-source");
+                provider.getSource(), WatermarkStrategy.noWatermarks(), SOURCE_IDENTIFIER);
     }
 
     /**
      * Builds the sink topology for a Doris target: schema operator + partitioning chain + the
-     * writer operator driving the dialect's sink, plus the committer when that sink commits in two
-     * phases. The whole chain runs at the parallelism of {@code source}. Returns the writer
-     * operator's commit output stream — empty for the single-phase modes, the sink's committable
-     * for {@code stateful-2pc}; callers that only run the job can ignore it.
+     * writer operator driving {@code DorisSink}. The whole chain runs at the parallelism of {@code
+     * source}. Returns the writer operator's (empty) commit output stream; callers that only run
+     * the job can ignore it.
      */
-    public static <CommT> DataStream<CommittableMessage<CommT>> buildSink(
+    public static DataStream<CommittableMessage<Void>> buildSink(
             DataStream<Event> source,
             DorisDataSinkOptions sinkOptions,
             Duration rpcTimeout,
