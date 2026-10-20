@@ -26,8 +26,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * The {@link SchemaChangeEventHandler} of the Canal source: parses the {@code source} struct of a
- * {@link SchemaChangeEvent} into the source-map embedded in the schema-change history record.
+ * The {@link SchemaChangeEventHandler} of the kafka-json source: parses the {@code source} struct
+ * of a {@link SchemaChangeEvent} into the source-map embedded in the schema-change history record.
  *
  * <p>The upstream canal flatMessage carries no per-event source struct (canal has no binlog
  * position/filename in the DDL message), so the map carries only the fields the downstream

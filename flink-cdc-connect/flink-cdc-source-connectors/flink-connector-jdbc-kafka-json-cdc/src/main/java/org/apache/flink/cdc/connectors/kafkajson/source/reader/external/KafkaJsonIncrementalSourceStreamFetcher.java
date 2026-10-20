@@ -182,32 +182,39 @@ public class KafkaJsonIncrementalSourceStreamFetcher
      *  only the change event belong to [1024, 2048) and offset is after highWatermark1 should send.
      * </pre>
      *
-     * <p>Three cases the watermark rule cannot decide are settled against the schema store, the
-     * registry of the tables this source knows:
+     * <p>shouldEmit decision flow (first match wins):
      *
-     * <ul>
-     *   <li>a table whose snapshot split infos never covered it inside this split — a table renamed
-     *       after its snapshot (the infos and watermarks keep the pre-rename name, and no record
-     *       can ever match them again) or a table created while the job runs. It is emitted once
-     *       its schema is in the store. The rule is deliberately the store rather than "the table
-     *       is in this split's {@code tableSchemas}": the store is what a restarted job rebuilds
-     *       from the checkpointed split state, so the same decision is reached again after a
-     *       failure;
-     *   <li>a table the store no longer knows, whose records were nevertheless converted before the
-     *       DDL that removed or renamed it (the fetch task applies a DDL as it consumes it, while
-     *       the reader drains the queue behind it). Such a record is emitted: the queue delivers it
-     *       ahead of the DDL that changed the table, so the sink still has the table when it
-     *       arrives, and the watermark rule cannot judge it at all — it would need the table's
-     *       split column, which is exactly what is gone;
-     *   <li>a non-data-change record (a schema change or a signal event), which is always emitted
-     *       so that it reaches the state of Flink.
-     * </ul>
+     * <pre>{@code
+     * ① record is NOT a DataChangeEvent? ─────────────────────► true
      *
-     * <p>The widened scope of the first case is deliberate: a record in between is delivered once
-     * by this path and once more by the backfill, so a sink must tolerate a repeated change of the
-     * same row (the Doris sink upserts by primary key). Withholding them instead would delay them,
-     * not drop them — the backfill covers them — which is why the released logic did so, and which
-     * is what made a renamed table's records disappear: nothing covers them any more.
+     * ② table in pureStreamPhaseTables OR
+     *    (table in maxSplitHighWatermarkMap AND Record offset ≥ maxHW)?
+     * (native — past snapshot, genuine incremental)         ──► true
+     *
+     * ③ tableFor(tableId) == null? ──────────────────────────► true
+     * (table existed when record was enqueued, but a DROP/RENAME in the
+     *  same Kafka batch has since removed it from the schema store;
+     *  the queue delivers DML ahead of DDL, so the sink still has the
+     *  old schema when this record arrives)
+     *
+     * ④ finishedSplitsInfo.containsKey(tableId)? ── YES ─► check:
+     *      PK ∈ split range AND offset > splitHW ──► true  (incremental)
+     *      otherwise                             ──► false (duplicate)
+     * (native — watermark signal deduplication)
+     *
+     * ⑤ (table in schemaStore but not in any finished split) ──► true
+     * (renamed table or newly created during stream — no snapshot
+     *  history to deduplicate against; cached in pureStreamPhaseTables)
+     *
+     * Ordering constraints:
+     *   ③ before ④ — a removed table's old name may still be in finishedSplitsInfo;
+     *       checking ③ first avoids a false "duplicate" verdict.
+     *   ④ before ⑤ — snapshotted tables must go through watermark dedup;
+     *       ⑤ only catches tables never snapshotted under this ID.
+     *
+     * A record may now be delivered twice by Branch ⑤ (once here, once by the backfill),
+     * rely on downstream to remove duplicates from the primary key
+     * }</pre>
      */
     @VisibleForTesting
     boolean shouldEmit(SourceRecord sourceRecord) {

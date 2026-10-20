@@ -18,6 +18,7 @@
 package org.apache.flink.cdc.connectors.kafkajson.serializer;
 
 import org.apache.flink.api.common.typeutils.SimpleTypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;

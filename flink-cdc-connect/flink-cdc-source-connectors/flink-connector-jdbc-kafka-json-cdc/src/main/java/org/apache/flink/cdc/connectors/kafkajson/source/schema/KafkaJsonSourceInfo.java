@@ -24,8 +24,8 @@ import io.debezium.connector.SnapshotRecord;
 import java.time.Instant;
 
 /**
- * The connector-specific source info of the Canal source: the {@code source} struct of the emitted
- * records.
+ * The connector-specific source info of the kafka-json source: the {@code source} struct of the
+ * emitted records.
  *
  * <p>Besides the common fields ({@code version}/{@code connector}/{@code name}/{@code ts_ms}/{@code
  * snapshot}/{@code db}) it carries the canal execution time ({@code es}) and send time ({@code

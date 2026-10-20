@@ -32,7 +32,7 @@ import java.util.Iterator;
 
 import static org.apache.flink.cdc.connectors.base.utils.SourceRecordUtils.rowToArray;
 
-/** Query-related utilities for the Canal (MySQL) source. */
+/** Query-related utilities for the kafka-json (MySQL) source. */
 public class KafkaJsonQueryUtils {
 
     private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonQueryUtils.class);

@@ -25,8 +25,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * The partition of the Canal source, mirroring {@code MySqlPartition}: the {@code source} partition
- * of the emitted records is {@code {"server": <logical name>}}.
+ * The partition of the kafka-json source, mirroring {@code MySqlPartition}: the {@code source}
+ * partition of the emitted records is {@code {"server": <logical name>}}.
  */
 public class KafkaJsonPartition implements Partition, Serializable {
 

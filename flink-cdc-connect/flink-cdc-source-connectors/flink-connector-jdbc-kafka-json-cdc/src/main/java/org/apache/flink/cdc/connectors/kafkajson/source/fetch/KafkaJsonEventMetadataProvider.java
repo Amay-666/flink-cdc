@@ -29,8 +29,8 @@ import java.util.Collections;
 import java.util.Map;
 
 /**
- * The {@link EventMetadataProvider} of the Canal source: the record timestamp is the canal event
- * time carried in the {@code source.ts_ms} field. Canal messages do not carry a binlog
+ * The {@link EventMetadataProvider} of the kafka-json source: the record timestamp is the canal
+ * event time carried in the {@code source.ts_ms} field. Canal messages do not carry a binlog
  * file/position, so no source-position map is produced.
  */
 public class KafkaJsonEventMetadataProvider implements EventMetadataProvider {

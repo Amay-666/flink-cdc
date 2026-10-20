@@ -27,7 +27,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * The offset for the Canal source.
+ * The offset for the kafka-json source.
  *
  * <p>Kafka does not have a globally monotonic position, so we use the <b>message event time</b> as
  * the primary ordering key, with {@code (partition, offset)} as the tie-breaker so that messages in

@@ -72,7 +72,7 @@ public abstract class KafkaJsonDataSinkDialect implements Serializable {
     /**
      * Creates the hash function provider used to partition data change events. The default keeps
      * rows of the same (table original name, primary key) on the same subtask — the {@code key by
-     * 表原始名称 + 主键 id} requirement — so a large table is spread by primary key instead of
+     * TableId + Primary Keys} requirement — so a large table is spread by primary key instead of
      * monopolizing a single subtask. Dialects may override to change the keying.
      */
     public HashFunctionProvider<DataChangeEvent> createHashFunctionProvider() {

@@ -27,7 +27,7 @@ import javax.annotation.Nullable;
 import java.util.Properties;
 import java.util.UUID;
 
-/** Shared Kafka consumer configuration helpers for the Canal source. */
+/** Shared Kafka consumer configuration helpers for the kafka-json source. */
 public class KafkaJsonKafkaUtils {
 
     private KafkaJsonKafkaUtils() {}

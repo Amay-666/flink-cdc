@@ -31,7 +31,7 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * The {@link OffsetContext} of the Canal source.
+ * The {@link OffsetContext} of the kafka-json source.
  *
  * <p>The offset is a {@link KafkaJsonOffset} — the Kafka position of the last consumed message,
  * keyed by its event time. The context is updated on every emitted record so that checkpointing and
@@ -85,7 +85,7 @@ public class KafkaJsonOffsetContext implements OffsetContext {
 
     @Override
     public void markLastSnapshotRecord() {
-        // the canal source never runs a snapshot inside the offset context
+        // the kafka-json source never runs a snapshot inside the offset context
     }
 
     @Override

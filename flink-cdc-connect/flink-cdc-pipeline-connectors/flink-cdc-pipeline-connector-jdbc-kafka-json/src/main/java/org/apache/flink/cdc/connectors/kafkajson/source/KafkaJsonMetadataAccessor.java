@@ -39,17 +39,20 @@ public class KafkaJsonMetadataAccessor implements MetadataAccessor {
     }
 
     /**
-     * Always throw {@link UnsupportedOperationException} because Canal does not support namespace.
+     * Always throw {@link UnsupportedOperationException} because the kafka-json source does not
+     * support namespace.
      */
     @Override
     public List<String> listNamespaces() {
-        throw new UnsupportedOperationException("List namespace is not supported by Canal.");
+        throw new UnsupportedOperationException(
+                "List namespace is not supported by the kafka-json source.");
     }
 
     /**
      * List all database from MySQL.
      *
-     * @param namespace This parameter is ignored because Canal does not support namespace.
+     * @param namespace This parameter is ignored because the kafka-json source does not support
+     *     namespace.
      * @return The list of database
      */
     @Override
@@ -60,7 +63,8 @@ public class KafkaJsonMetadataAccessor implements MetadataAccessor {
     /**
      * List tables from MySQL.
      *
-     * @param namespace This parameter is ignored because Canal does not support namespace.
+     * @param namespace This parameter is ignored because the kafka-json source does not support
+     *     namespace.
      * @param dbName The database to list tables from. If null, list tables from all databases.
      * @return The list of {@link TableId}s.
      */

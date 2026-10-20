@@ -26,7 +26,7 @@ import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
 
 /**
- * Builds the {@code source} struct of the Canal source records.
+ * Builds the {@code source} struct of the kafka-json source records.
  *
  * <p>The schema mirrors the MySQL connector's common fields ({@code version}/{@code connector}/
  * {@code name}/{@code ts_ms}/{@code snapshot}/{@code db}) and additionally exposes the canal {@code

@@ -55,7 +55,8 @@ import java.util.Map;
 import java.util.function.Supplier;
 
 /**
- * The MySQL dialect for the Canal source — the default selection of {@code scan.database.type}.
+ * The MySQL dialect for the kafka-json source — the default selection of {@code
+ * scan.database.type}.
  *
  * <p>The snapshot data is read directly from MySQL through JDBC (using the incremental snapshot
  * algorithm of flink-cdc-base), while the change-log data is consumed from Kafka where canal has
