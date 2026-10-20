@@ -22,6 +22,7 @@ import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceCo
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessageParser;
+import org.apache.flink.util.FlinkRuntimeException;
 
 import io.debezium.relational.Column;
 import io.debezium.relational.Table;
@@ -36,6 +37,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -260,20 +262,47 @@ class DebeziumRecordConverterTest {
     }
 
     @Test
-    void testUnregisteredTableDropsMessage() {
-        // a Debezium message cannot rebuild its schema (no mysqlType), so without the snapshot
-        // phase's registration the row is dropped, not mis-decoded
+    void testUnregisteredTableFailsFast() {
+        // a Debezium message carries no table metadata at all, so without the snapshot phase's
+        // registration the schema has to be read from the source database; with no schema source
+        // wired, the converter fails rather than emitting a mis-decoded (or dropped) row
+        FlinkRuntimeException error =
+                assertThrows(
+                        FlinkRuntimeException.class,
+                        () ->
+                                converter()
+                                        .convert(
+                                                parse(
+                                                        "{\"payload\":{\"after\":{\"id\":1},"
+                                                                + "\"source\":{\"db\":\"test\","
+                                                                + "\"table\":\"users\"},"
+                                                                + "\"op\":\"c\",\"ts_ms\":20}}"),
+                                                "test.users",
+                                                0,
+                                                100L));
+        assertTrue(error.getMessage().contains("test.users"), error.getMessage());
+    }
+
+    @Test
+    void testUnregisteredTableIsResolvedFromTheSourceDatabase() {
+        // the same first-DML fallback the canal path uses applies to a Debezium stream: the table
+        // is read through the resolver (JDBC in production) and registered
+        KafkaJsonRecordConverter converter =
+                new KafkaJsonRecordConverter(
+                        factory, config, tableId -> registerUsersTable(factory));
         List<SourceRecord> records =
-                converter()
-                        .convert(
-                                parse(
-                                        "{\"payload\":{\"after\":{\"id\":1},"
-                                                + "\"source\":{\"db\":\"test\",\"table\":\"users\"},"
-                                                + "\"op\":\"c\",\"ts_ms\":20}}"),
-                                "test.users",
-                                0,
-                                100L);
-        assertTrue(records.isEmpty());
+                converter.convert(
+                        parse(
+                                "{\"payload\":{\"after\":{\"id\":1,\"name\":\"Alice\","
+                                        + "\"amount\":123.45,\"birth\":18487},"
+                                        + "\"source\":{\"db\":\"test\",\"table\":\"users\"},"
+                                        + "\"op\":\"c\",\"ts_ms\":20}}"),
+                        "test.users",
+                        0,
+                        100L);
+        assertEquals(1, records.size());
+        assertEquals(
+                "Alice", ((Struct) records.get(0).value()).getStruct("after").getString("name"));
     }
 
     @Test

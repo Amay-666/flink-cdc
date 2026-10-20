@@ -32,7 +32,7 @@ import io.debezium.relational.Column;
  * once.
  *
  * <p><b>Temporal precision recovery:</b> the {@code length} of a Debezium {@link Column} carries
- * two meanings depending on the schema source. The streaming message path ({@link
+ * two meanings depending on the schema source. The DDL path ({@link
  * KafkaJsonTableUtils#buildColumn}) parses the DDL text, so {@code "time(3)"} yields the
  * fractional-seconds precision ({@code 3}) directly. The JDBC snapshot path reports the <em>display
  * width</em> instead &mdash; verified on MySQL 8.0.46 and TiDB: {@code DATETIME(6)} &rarr; {@code
@@ -84,7 +84,7 @@ public final class KafkaJsonColumnMeta {
 
         switch (baseName) {
             case "TIME":
-                // The length has two meanings. The message path (KafkaJsonTableUtils#buildColumn)
+                // The length has two meanings. The DDL path (KafkaJsonTableUtils#buildColumn)
                 // parses the DDL text, so "time(3)" yields the fractional-seconds precision (3)
                 // directly. The JDBC snapshot path reports the display width ("HH:MM:SS" = 8, or
                 // 9 + fsp when the fraction is present), from which the precision is recovered.
@@ -98,7 +98,7 @@ public final class KafkaJsonColumnMeta {
                 break;
             case "DATETIME":
             case "TIMESTAMP":
-                // Same dual semantics as TIME: the message path carries the DDL precision directly,
+                // Same dual semantics as TIME: the DDL path carries the precision directly,
                 // the JDBC path the display width ("YYYY-MM-DD HH:MM:SS" = 19, or 20 + fsp with a
                 // fraction). Display widths are at least 19, the FSP at most 6.
                 precision =

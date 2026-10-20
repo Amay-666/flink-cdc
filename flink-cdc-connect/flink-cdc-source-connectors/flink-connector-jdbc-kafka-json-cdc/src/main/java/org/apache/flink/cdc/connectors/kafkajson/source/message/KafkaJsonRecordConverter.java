@@ -22,6 +22,7 @@ import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOp
 import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.schema.KafkaJsonSourceInfo;
+import org.apache.flink.util.FlinkRuntimeException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.debezium.connector.SnapshotRecord;
@@ -32,6 +33,8 @@ import io.debezium.relational.TableId;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -56,8 +59,11 @@ import java.util.Map;
  *
  * <p><b>Debezium envelope</b> — a single typed {@code before}/{@code after} image per message, with
  * the {@code op} already in Debezium's {@code c}/{@code u}/{@code d}/{@code r} coding; the table
- * schema comes from the registered (JDBC) schema, so a table must be observed by the snapshot phase
- * before its Debezium messages are consumed.
+ * schema comes from the registered (JDBC or DDL) schema.
+ *
+ * <p>A message's own type metadata is never used to build the table schema (see {@link
+ * TableSchemaResolver}); a table whose first data change arrives before any schema was registered
+ * is read through JDBC, and a failure to do so fails the job instead of dropping the rows.
  *
  * <p>DDL messages are forwarded to the schema-change pipeline (Phase 8) and therefore skipped here.
  */
@@ -66,14 +72,52 @@ public class KafkaJsonRecordConverter {
     private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonRecordConverter.class);
 
     private final KafkaJsonRecordFactory factory;
+    private final KafkaJsonSourceConfig sourceConfig;
     private final EventTime eventTimeMode;
     private final MySqlConnectorConfig dbzConfig;
 
+    /**
+     * Reads the schema of a table that neither the snapshot phase nor a DDL registered, or {@code
+     * null} when the converter has no such source (unit tests). The connector never reconstructs a
+     * schema from a canal message's own {@code mysqlType}: it names MySQL types only, without the
+     * length or scale a Debezium {@link Table} needs, so a schema built from it would silently
+     * describe the wrong columns.
+     */
+    @Nullable private final TableSchemaResolver tableSchemaResolver;
+
     public KafkaJsonRecordConverter(
             KafkaJsonRecordFactory factory, KafkaJsonSourceConfig sourceConfig) {
+        this(factory, sourceConfig, null);
+    }
+
+    public KafkaJsonRecordConverter(
+            KafkaJsonRecordFactory factory,
+            KafkaJsonSourceConfig sourceConfig,
+            @Nullable TableSchemaResolver tableSchemaResolver) {
         this.factory = factory;
+        this.sourceConfig = sourceConfig;
         this.eventTimeMode = sourceConfig.getEventTime();
         this.dbzConfig = sourceConfig.getDbzConnectorConfig();
+        this.tableSchemaResolver = tableSchemaResolver;
+    }
+
+    /**
+     * Reads the schema of a table whose first data change arrived before any schema was registered
+     * for it — the pure-stream case, where neither the snapshot phase nor the table's DDL was seen.
+     *
+     * <p>The production implementation reads the schema from the source database over JDBC and
+     * registers it (see {@code KafkaJsonSourceFetchTaskContext}); a failure to do so must fail the
+     * job rather than drop the rows, because a row that is dropped here cannot be recovered.
+     */
+    @FunctionalInterface
+    public interface TableSchemaResolver {
+
+        /**
+         * Returns the registered schema of the table (or {@code null} when the table does not
+         * exist), throwing when the source database cannot be read.
+         */
+        @Nullable
+        Table resolve(TableId tableId);
     }
 
     /**
@@ -161,11 +205,7 @@ public class KafkaJsonRecordConverter {
         }
         Table table = resolveTable(message);
         if (table == null) {
-            LOG.warn(
-                    "No registered schema for Debezium DML on {}.{}; dropping the message (its "
-                            + "table must be observed by the snapshot phase first)",
-                    message.getDatabase(),
-                    message.getTable());
+            // the table is outside the configured table filter (logged by resolveTable)
             return Collections.emptyList();
         }
         Long eventTimeValue = eventTime(message, eventTimeMode);
@@ -308,49 +348,89 @@ public class KafkaJsonRecordConverter {
     }
 
     /**
-     * Returns the registered schema of the table a canal message belongs to, or {@code null} when
-     * the table was never registered (the caller drops the message).
+     * Returns the registered schema of the table a message belongs to, or {@code null} when the
+     * message belongs to a table outside the configured table filter (the caller drops it).
      *
      * <p>A table is registered by the schema the snapshot phase discovered for it, by its {@code
-     * CREATE} DDL, or by a rename of it. The message's own {@code mysqlType} is deliberately not
-     * used to build a schema on the fly: it carries MySQL type names only, without the length or
-     * scale a Debezium {@code Column} needs (and Debezium's own MySQL connector does not derive a
-     * schema from it either), so a schema built from it would silently describe the wrong columns.
+     * CREATE} DDL, or by a rename of it. A table inside the filter with no registered schema — its
+     * first change arrives before any DDL in a pure-stream deployment — is read from the source
+     * database through {@link TableSchemaResolver} and so registered. If that read fails, the job
+     * fails: a row dropped here cannot be recovered.
      */
+    @Nullable
     private Table resolveTable(CanalMessage message) {
-        TableId tableId =
-                new TableId(
-                        message.getDatabase() == null ? "" : message.getDatabase(),
-                        null,
-                        message.getTable());
-        Table table = factory.tableFor(tableId);
-        if (table == null) {
-            // Being here means a data record was consumed for a table whose schema this connector
-            // never saw — the rows cannot be converted, so they are dropped. The message names the
-            // table and the registry shows what was seen instead, so the cause (a Kafka start
-            // offset after the table's CREATE, or a table outside the configured filter) is
-            // diagnosable from this line.
-            LOG.warn(
-                    "No registered schema for canal DML on {}.{}, dropping the message; "
-                            + "registered tables: {}",
-                    message.getDatabase(),
-                    message.getTable(),
-                    factory.tableIds());
-        }
-        return table;
+        return resolveTable(message.getDatabase(), message.getTable());
     }
 
     /**
-     * Returns the registered schema of a Debezium message's table. A Debezium message carries no
-     * table metadata at all, so a table must have been registered before its messages can be
-     * converted.
+     * Returns the schema of the table a Debezium message belongs to. A Debezium message carries no
+     * table metadata at all, so a table that the snapshot phase and any DDL missed is resolved the
+     * same way as a canal table.
      */
+    @Nullable
     private Table resolveTable(DebeziumMessage message) {
-        TableId tableId =
-                new TableId(
-                        message.getDatabase() == null ? "" : message.getDatabase(),
-                        null,
-                        message.getTable());
-        return factory.tableFor(tableId);
+        return resolveTable(message.getDatabase(), message.getTable());
+    }
+
+    @Nullable
+    private Table resolveTable(String database, String tableName) {
+        TableId tableId = new TableId(database == null ? "" : database, null, tableName);
+        Table table = factory.tableFor(tableId);
+        if (table != null) {
+            return table;
+        }
+        if (!sourceConfig.getTableFilters().dataCollectionFilter().isIncluded(tableId)) {
+            // The stream carries every table the upstream log covers; a table outside the include
+            // list was never meant to be captured, so its changes are dropped rather than resolved.
+            LOG.debug("Ignoring a data change of {}: outside the configured table filter", tableId);
+            return null;
+        }
+        if (tableSchemaResolver == null) {
+            throw failFast(database, tableName, "no schema source is configured to read it", null);
+        }
+        LOG.info(
+                "No registered schema for {}.{}; reading it from the source database over JDBC",
+                database,
+                tableName);
+        Table resolved;
+        try {
+            resolved = tableSchemaResolver.resolve(tableId);
+        } catch (RuntimeException e) {
+            throw failFast(
+                    database,
+                    tableName,
+                    "reading it from the source database over JDBC failed: " + e.getMessage(),
+                    e);
+        }
+        if (resolved == null) {
+            throw failFast(database, tableName, "the source database has no such table", null);
+        }
+        return resolved;
+    }
+
+    /**
+     * Builds the failure raised when the first data change of a table arrives with no schema
+     * registered. Dropping the change would lose data silently, so the job stops with a message
+     * that names the table and the likely causes.
+     */
+    private static FlinkRuntimeException failFast(
+            String database, String tableName, String reason, @Nullable Throwable cause) {
+        String message =
+                "Failed to resolve the schema of "
+                        + database
+                        + "."
+                        + tableName
+                        + " after consuming its first data change and finding no registered "
+                        + "schema: "
+                        + reason
+                        + ". The schema of a table is registered by the JDBC snapshot or by its "
+                        + "CREATE/ALTER DDL; in a pure-stream deployment (no snapshot, no DDL) the "
+                        + "connector reads it from the source database instead. Make sure that "
+                        + "database is reachable with the configured connection and that "
+                        + tableName
+                        + " exists and is included in the configured table filter.";
+        return cause == null
+                ? new FlinkRuntimeException(message)
+                : new FlinkRuntimeException(message, cause);
     }
 }

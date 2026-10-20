@@ -42,7 +42,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -158,7 +157,18 @@ public class KafkaJsonSchema extends io.debezium.relational.RelationalDatabaseSc
                 null,
                 false);
 
-        Table table = Objects.requireNonNull(tables.forTable(tableId));
+        Table table = tables.forTable(tableId);
+        if (table == null) {
+            // readSchema found no such table: either it does not exist in the source database, or
+            // the database/schema did not match the id. A bare NullPointerException from
+            // requireNonNull would hide that from the caller (the first-data-change fallback of the
+            // record converter reports this message to the user).
+            throw new FlinkRuntimeException(
+                    "Table "
+                            + tableId
+                            + " was not found in the source database (or is outside the configured "
+                            + "table filter)");
+        }
         if (table.primaryKeyColumnNames().isEmpty()) {
             // The JDBC readSchema only reports the PRIMARY KEY. A table without one but with a
             // UNIQUE KEY (common with TiDB/TiCDC, which keys tables on a unique index) is promoted

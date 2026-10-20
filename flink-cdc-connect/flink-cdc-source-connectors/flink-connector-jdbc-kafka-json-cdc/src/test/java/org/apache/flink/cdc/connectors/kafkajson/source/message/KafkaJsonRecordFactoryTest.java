@@ -20,7 +20,6 @@ package org.apache.flink.cdc.connectors.kafkajson.source.message;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.convert.MySqlValueConverters;
-import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.schema.KafkaJsonSourceInfo;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTableUtils;
 
@@ -30,6 +29,8 @@ import io.debezium.connector.SnapshotRecord;
 import io.debezium.connector.mysql.MySqlConnectorConfig;
 import io.debezium.data.Envelope;
 import io.debezium.relational.Table;
+import io.debezium.relational.TableEditor;
+import io.debezium.relational.TableId;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.jupiter.api.Test;
@@ -40,7 +41,6 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
@@ -68,6 +68,10 @@ class KafkaJsonRecordFactoryTest {
     private final KafkaJsonRecordFactory factory = new KafkaJsonRecordFactory(config);
     private final MySqlConnectorConfig dbzConfig = config.getDbzConnectorConfig();
 
+    /**
+     * The schema the DDL of {@code test.users} builds, which the snapshot phase would have
+     * registered for it.
+     */
     private Table usersTable(String... pkNames) {
         Map<String, String> mysqlType = new java.util.LinkedHashMap<>();
         mysqlType.put("id", "bigint(20)");
@@ -79,18 +83,17 @@ class KafkaJsonRecordFactoryTest {
         mysqlType.put("login_time", "time");
         mysqlType.put("enabled", "tinyint(1)");
 
-        // LinkedHashMap keeps the column order deterministic (Jackson preserves JSON field order)
-        Map<String, String> row = new java.util.LinkedHashMap<>();
-        for (String col : mysqlType.keySet()) {
-            row.put(col, "");
+        TableEditor table = Table.editor().tableId(new TableId("test", null, "users"));
+        int position = 0;
+        for (Map.Entry<String, String> column : mysqlType.entrySet()) {
+            table.addColumn(
+                    KafkaJsonTableUtils.buildColumn(column.getKey(), column.getValue(), ++position)
+                            .create());
         }
-        CanalMessage message = new CanalMessage();
-        message.setDatabase("test");
-        message.setTable("users");
-        message.setPkNames(Arrays.asList(pkNames));
-        message.setMysqlType(mysqlType);
-        message.setData(Collections.singletonList(row));
-        return KafkaJsonTableUtils.buildTable(message);
+        if (pkNames.length > 0) {
+            table.setPrimaryKeyNames(pkNames);
+        }
+        return table.create();
     }
 
     private Map<String, String> aliceRow() {

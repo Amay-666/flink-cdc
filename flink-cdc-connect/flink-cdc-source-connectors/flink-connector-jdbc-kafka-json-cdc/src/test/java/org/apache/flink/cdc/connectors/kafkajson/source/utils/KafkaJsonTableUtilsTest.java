@@ -17,119 +17,70 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.utils;
 
-import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessage;
-
 import io.debezium.relational.Column;
-import io.debezium.relational.Table;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Types;
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Unit test for {@link KafkaJsonTableUtils}. */
+/**
+ * Unit test for {@link KafkaJsonTableUtils}: the MySQL type expression to Debezium {@link Column}
+ * mapping shared by the DDL parsers.
+ */
 class KafkaJsonTableUtilsTest {
 
-    private static CanalMessage message(
-            Map<String, String> mysqlType, Map<String, String> row, String... pkNames) {
-        CanalMessage message = new CanalMessage();
-        message.setDatabase("test");
-        message.setTable("users");
-        message.setPkNames(Arrays.asList(pkNames));
-        message.setMysqlType(mysqlType);
-        if (row != null) {
-            message.setData(Collections.singletonList(row));
-        }
-        return message;
+    private static Column column(String name, String mysqlType) {
+        return KafkaJsonTableUtils.buildColumn(name, mysqlType, 1).create();
     }
 
     @Test
-    void testBuildTableBasicTypes() {
-        Map<String, String> mysqlType = new HashMap<>();
-        mysqlType.put("id", "bigint(20)");
-        mysqlType.put("name", "varchar(255)");
-        mysqlType.put("amount", "decimal(10,2)");
-        mysqlType.put("created_at", "datetime");
-        mysqlType.put("updated_at", "timestamp(3)");
-        mysqlType.put("score", "double");
-        mysqlType.put("flag", "tinyint(1)");
-        mysqlType.put("unsigned_col", "int(10) unsigned");
-        mysqlType.put("tags", "set('a','b')");
-
-        // Jackson deserializes JSON objects into LinkedHashMap preserving field order,
-        // so the reconstructed table follows the (deterministic) data-row order
-        Map<String, String> row = new java.util.LinkedHashMap<>();
-        row.put("id", "1");
-        row.put("name", "Alice");
-        row.put("amount", "3.14");
-        row.put("created_at", "2020-08-13 15:00:00");
-        row.put("updated_at", "2020-08-13 15:00:00");
-        row.put("score", "1.5");
-        row.put("flag", "1");
-        row.put("unsigned_col", "1");
-        row.put("tags", "a");
-
-        Table table = KafkaJsonTableUtils.buildTable(message(mysqlType, row, "id"));
-
-        assertEquals("test.users", table.id().toString());
-        assertEquals(Arrays.asList("id"), table.primaryKeyColumnNames());
-
-        Column id = table.columnWithName("id");
+    void testBasicTypes() {
+        Column id = column("id", "bigint(20)");
         assertEquals(Types.BIGINT, id.jdbcType());
         assertEquals("BIGINT", id.typeName());
         assertEquals(20, id.length());
 
-        Column amount = table.columnWithName("amount");
+        Column amount = column("amount", "decimal(10,2)");
         assertEquals(Types.DECIMAL, amount.jdbcType());
         assertEquals(10, amount.length());
         assertEquals(Integer.valueOf(2), amount.scale().get());
 
-        Column createdAt = table.columnWithName("created_at");
+        Column createdAt = column("created_at", "datetime");
         assertEquals(Types.TIMESTAMP, createdAt.jdbcType());
         assertEquals("DATETIME", createdAt.typeName());
 
-        Column updatedAt = table.columnWithName("updated_at");
+        Column updatedAt = column("updated_at", "timestamp(3)");
         assertEquals(Types.TIMESTAMP_WITH_TIMEZONE, updatedAt.jdbcType());
         assertEquals("TIMESTAMP", updatedAt.typeName());
         assertEquals(3, updatedAt.length());
 
-        Column unsigned = table.columnWithName("unsigned_col");
+        Column unsigned = column("unsigned_col", "int(10) unsigned");
         assertEquals("INT UNSIGNED", unsigned.typeName());
         assertEquals(Types.INTEGER, unsigned.jdbcType());
 
-        Column tags = table.columnWithName("tags");
+        Column tags = column("tags", "set('a','b')");
         assertEquals("SET", tags.typeName());
         assertEquals(Arrays.asList("a", "b"), tags.enumValues());
-
-        // columns follow the order of the data row
-        assertEquals("id", table.columns().get(0).name());
-        assertEquals("tags", table.columns().get(table.columns().size() - 1).name());
     }
 
     @Test
     void testEnumWithEscapedQuotes() {
-        Map<String, String> mysqlType = new HashMap<>();
-        mysqlType.put("color", "enum('red','it''s')");
-        Table table =
-                KafkaJsonTableUtils.buildTable(
-                        message(mysqlType, Collections.singletonMap("color", "red")));
-        assertEquals(Arrays.asList("red", "it's"), table.columnWithName("color").enumValues());
+        Column color = column("color", "enum('red','it''s')");
+        assertEquals(Arrays.asList("red", "it's"), color.enumValues());
     }
 
     /**
      * The full MySQL type matrix: every type the connector claims to support, mapped through the
-     * canal {@code mysqlType} path (a LinkedHashMap keeps the column order deterministic). This is
-     * the authoritative mapping the DDL-parser matrix tests must stay consistent with: geometry
-     * types are the only exclusion (they fail fast, see {@link #testGeometryThrows()}).
+     * type-expression path the DDL parsers use. This is the authoritative mapping the DDL-parser
+     * matrix tests must stay consistent with: geometry types are the only exclusion (they fail
+     * fast, see {@link #testGeometryThrows()}).
      */
     @Test
     void testFullTypeMatrix() {
@@ -183,70 +134,69 @@ class KafkaJsonTableUtilsTest {
         mysqlType.put("c_mediumblob", "mediumblob");
         mysqlType.put("c_longblob", "longblob");
 
-        Table table = KafkaJsonTableUtils.buildTable(message(mysqlType, null, "c_int"));
-        assertEquals(mysqlType.size(), table.columns().size());
+        Map<String, Column> columns = new LinkedHashMap<>();
+        for (Map.Entry<String, String> type : mysqlType.entrySet()) {
+            columns.put(type.getKey(), column(type.getKey(), type.getValue()));
+        }
+        assertEquals(mysqlType.size(), columns.size());
 
-        assertColumn(table, "c_tinyint", "TINYINT", Types.SMALLINT, 4);
-        assertColumn(table, "c_tinyint_u", "TINYINT UNSIGNED", Types.SMALLINT, 3);
-        assertColumn(table, "c_smallint", "SMALLINT", Types.SMALLINT, 6);
-        assertColumn(table, "c_smallint_u", "SMALLINT UNSIGNED", Types.SMALLINT, 0);
-        assertColumn(table, "c_mediumint", "MEDIUMINT", Types.INTEGER, 9);
-        assertColumn(table, "c_mediumint_u", "MEDIUMINT UNSIGNED", Types.INTEGER, 0);
-        assertColumn(table, "c_int", "INT", Types.INTEGER, 11);
-        assertColumn(table, "c_int_u", "INT UNSIGNED", Types.INTEGER, 10);
-        assertColumn(table, "c_bigint", "BIGINT", Types.BIGINT, 20);
-        assertColumn(table, "c_bigint_u", "BIGINT UNSIGNED", Types.BIGINT, 20);
-        assertColumn(table, "c_float", "FLOAT", Types.FLOAT, 12);
+        assertColumn(columns, "c_tinyint", "TINYINT", Types.SMALLINT, 4);
+        assertColumn(columns, "c_tinyint_u", "TINYINT UNSIGNED", Types.SMALLINT, 3);
+        assertColumn(columns, "c_smallint", "SMALLINT", Types.SMALLINT, 6);
+        assertColumn(columns, "c_smallint_u", "SMALLINT UNSIGNED", Types.SMALLINT, 0);
+        assertColumn(columns, "c_mediumint", "MEDIUMINT", Types.INTEGER, 9);
+        assertColumn(columns, "c_mediumint_u", "MEDIUMINT UNSIGNED", Types.INTEGER, 0);
+        assertColumn(columns, "c_int", "INT", Types.INTEGER, 11);
+        assertColumn(columns, "c_int_u", "INT UNSIGNED", Types.INTEGER, 10);
+        assertColumn(columns, "c_bigint", "BIGINT", Types.BIGINT, 20);
+        assertColumn(columns, "c_bigint_u", "BIGINT UNSIGNED", Types.BIGINT, 20);
+        assertColumn(columns, "c_float", "FLOAT", Types.FLOAT, 12);
         // the display-width scale is stripped: a present scale suppresses the FLOAT32 schema
         // branch in MySqlValueConverters and corrupts the value (write 8 bytes, read 4)
-        assertTrue(!table.columnWithName("c_float").scale().isPresent());
-        assertColumn(table, "c_double", "DOUBLE", Types.DOUBLE, 22);
-        assertTrue(!table.columnWithName("c_double").scale().isPresent());
+        assertFalse(columns.get("c_float").scale().isPresent());
+        assertColumn(columns, "c_double", "DOUBLE", Types.DOUBLE, 22);
+        assertFalse(columns.get("c_double").scale().isPresent());
         // REAL is MySQL's synonym of DOUBLE
-        assertColumn(table, "c_real", "DOUBLE", Types.DOUBLE, 0);
-        assertColumn(table, "c_decimal", "DECIMAL", Types.DECIMAL, 20);
-        assertEquals(Integer.valueOf(4), table.columnWithName("c_decimal").scale().get());
+        assertColumn(columns, "c_real", "DOUBLE", Types.DOUBLE, 0);
+        assertColumn(columns, "c_decimal", "DECIMAL", Types.DECIMAL, 20);
+        assertEquals(Integer.valueOf(4), columns.get("c_decimal").scale().get());
         // a precision-less decimal defaults to 36 (Debezium requires a non-zero precision)
-        assertColumn(table, "c_decimal_nop", "DECIMAL", Types.DECIMAL, 36);
-        assertColumn(table, "c_bit", "BIT", Types.BIT, 8);
-        assertColumn(table, "c_bool", "BOOLEAN", Types.BOOLEAN, 0);
-        assertColumn(table, "c_date", "DATE", Types.DATE, 0);
-        assertColumn(table, "c_time", "TIME", Types.TIME, 0);
-        assertColumn(table, "c_time_p", "TIME", Types.TIME, 3);
-        assertColumn(table, "c_datetime", "DATETIME", Types.TIMESTAMP, 0);
-        assertColumn(table, "c_datetime_p", "DATETIME", Types.TIMESTAMP, 3);
-        assertColumn(table, "c_datetime_p6", "DATETIME", Types.TIMESTAMP, 6);
-        assertColumn(table, "c_timestamp", "TIMESTAMP", Types.TIMESTAMP_WITH_TIMEZONE, 0);
+        assertColumn(columns, "c_decimal_nop", "DECIMAL", Types.DECIMAL, 36);
+        assertColumn(columns, "c_bit", "BIT", Types.BIT, 8);
+        assertColumn(columns, "c_bool", "BOOLEAN", Types.BOOLEAN, 0);
+        assertColumn(columns, "c_date", "DATE", Types.DATE, 0);
+        assertColumn(columns, "c_time", "TIME", Types.TIME, 0);
+        assertColumn(columns, "c_time_p", "TIME", Types.TIME, 3);
+        assertColumn(columns, "c_datetime", "DATETIME", Types.TIMESTAMP, 0);
+        assertColumn(columns, "c_datetime_p", "DATETIME", Types.TIMESTAMP, 3);
+        assertColumn(columns, "c_datetime_p6", "DATETIME", Types.TIMESTAMP, 6);
+        assertColumn(columns, "c_timestamp", "TIMESTAMP", Types.TIMESTAMP_WITH_TIMEZONE, 0);
         // YEAR keeps its own type name but maps to the DATE jdbc type
-        assertColumn(table, "c_year", "YEAR", Types.DATE, 0);
-        assertColumn(table, "c_json", "JSON", Types.LONGVARCHAR, 0);
-        assertColumn(table, "c_enum", "ENUM", Types.VARCHAR, 0);
-        assertColumn(table, "c_set", "SET", Types.VARCHAR, 0);
-        assertEquals(Arrays.asList("a", "b", "c"), table.columnWithName("c_enum").enumValues());
-        assertEquals(Arrays.asList("x", "y"), table.columnWithName("c_set").enumValues());
+        assertColumn(columns, "c_year", "YEAR", Types.DATE, 0);
+        assertColumn(columns, "c_json", "JSON", Types.LONGVARCHAR, 0);
+        assertColumn(columns, "c_enum", "ENUM", Types.VARCHAR, 0);
+        assertColumn(columns, "c_set", "SET", Types.VARCHAR, 0);
+        assertEquals(Arrays.asList("a", "b", "c"), columns.get("c_enum").enumValues());
+        assertEquals(Arrays.asList("x", "y"), columns.get("c_set").enumValues());
         // text family members collapse to VARCHAR
-        assertColumn(table, "c_char", "VARCHAR", Types.VARCHAR, 16);
-        assertColumn(table, "c_varchar", "VARCHAR", Types.VARCHAR, 100);
-        assertColumn(table, "c_tinytext", "VARCHAR", Types.VARCHAR, 0);
-        assertColumn(table, "c_text", "VARCHAR", Types.VARCHAR, 0);
-        assertColumn(table, "c_mediumtext", "VARCHAR", Types.VARCHAR, 0);
-        assertColumn(table, "c_longtext", "VARCHAR", Types.VARCHAR, 0);
+        assertColumn(columns, "c_char", "VARCHAR", Types.VARCHAR, 16);
+        assertColumn(columns, "c_varchar", "VARCHAR", Types.VARCHAR, 100);
+        assertColumn(columns, "c_tinytext", "VARCHAR", Types.VARCHAR, 0);
+        assertColumn(columns, "c_text", "VARCHAR", Types.VARCHAR, 0);
+        assertColumn(columns, "c_mediumtext", "VARCHAR", Types.VARCHAR, 0);
+        assertColumn(columns, "c_longtext", "VARCHAR", Types.VARCHAR, 0);
         // blob family members collapse to BLOB
-        assertColumn(table, "c_binary", "BINARY", Types.BINARY, 8);
-        assertColumn(table, "c_varbinary", "VARBINARY", Types.VARBINARY, 64);
-        assertColumn(table, "c_tinyblob", "BLOB", Types.BLOB, 0);
-        assertColumn(table, "c_blob", "BLOB", Types.BLOB, 0);
-        assertColumn(table, "c_mediumblob", "BLOB", Types.BLOB, 0);
-        assertColumn(table, "c_longblob", "BLOB", Types.BLOB, 0);
-
-        // the column order follows the mysqlType map (the data row is absent)
-        assertEquals("c_int", table.columns().get(6).name());
-        assertEquals("c_longblob", table.columns().get(table.columns().size() - 1).name());
+        assertColumn(columns, "c_binary", "BINARY", Types.BINARY, 8);
+        assertColumn(columns, "c_varbinary", "VARBINARY", Types.VARBINARY, 64);
+        assertColumn(columns, "c_tinyblob", "BLOB", Types.BLOB, 0);
+        assertColumn(columns, "c_blob", "BLOB", Types.BLOB, 0);
+        assertColumn(columns, "c_mediumblob", "BLOB", Types.BLOB, 0);
+        assertColumn(columns, "c_longblob", "BLOB", Types.BLOB, 0);
     }
 
     private static void assertColumn(
-            Table table, String name, String typeName, int jdbcType, int length) {
-        Column column = table.columnWithName(name);
+            Map<String, Column> columns, String name, String typeName, int jdbcType, int length) {
+        Column column = columns.get(name);
         assertNotNull(column, "column " + name + " is missing");
         assertEquals(typeName, column.typeName(), "typeName of " + name);
         assertEquals(jdbcType, column.jdbcType(), "jdbcType of " + name);
@@ -254,56 +204,9 @@ class KafkaJsonTableUtilsTest {
     }
 
     @Test
-    void testTidbUniqueKeyInPkNamesBecomesPrimaryKey() {
-        // TiCDC's canal-json protocol carries the keyed columns (a UNIQUE KEY when the table has no
-        // PRIMARY KEY) in pkNames; buildTable must key the reconstructed table on them.
-        Map<String, String> mysqlType = new HashMap<>();
-        mysqlType.put("id", "bigint(20)");
-        mysqlType.put("email", "varchar(64)");
-        Map<String, String> row = new HashMap<>();
-        row.put("id", "1");
-        row.put("email", "a@b.com");
-        Table table = KafkaJsonTableUtils.buildTable(message(mysqlType, row, "email"));
-        assertEquals(Collections.singletonList("email"), table.primaryKeyColumnNames());
-        assertEquals(2, table.columns().size());
-    }
-
-    @Test
-    void testNoPrimaryKey() {
-        Map<String, String> mysqlType = new HashMap<>();
-        mysqlType.put("id", "int(11)");
-        Table table =
-                KafkaJsonTableUtils.buildTable(
-                        message(mysqlType, Collections.singletonMap("id", "1")));
-        assertTrue(table.primaryKeyColumnNames().isEmpty());
-    }
-
-    @Test
-    void testNullMysqlTypeFallsBackToVarchar() {
-        Table table =
-                KafkaJsonTableUtils.buildTable(
-                        message(Collections.emptyMap(), Collections.singletonMap("id", "1")));
-        // no mysqlType metadata at all -> single column with a best-effort type
-        assertEquals("VARCHAR", table.columnWithName("id").typeName());
-    }
-
-    @Test
-    void testEmptyMessageReturnsNull() {
-        CanalMessage message = new CanalMessage();
-        message.setDatabase("test");
-        message.setTable("users");
-        message.setData(Collections.emptyList());
-        assertNull(KafkaJsonTableUtils.buildTable(message));
-    }
-
-    @Test
     void testGeometryThrows() {
-        Map<String, String> mysqlType = new HashMap<>();
-        mysqlType.put("geo", "geometry");
         assertThrows(
                 org.apache.flink.util.FlinkRuntimeException.class,
-                () ->
-                        KafkaJsonTableUtils.buildTable(
-                                message(mysqlType, Collections.singletonMap("geo", ""))));
+                () -> KafkaJsonTableUtils.buildColumn("geo", "geometry", 1));
     }
 }

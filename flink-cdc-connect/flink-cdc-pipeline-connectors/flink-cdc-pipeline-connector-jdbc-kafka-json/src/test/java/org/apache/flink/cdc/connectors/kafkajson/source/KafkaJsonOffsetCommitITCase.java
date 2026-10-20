@@ -75,11 +75,12 @@ import static org.junit.Assert.fail;
  *
  * <p>A long checkpoint interval (30s) makes the "between checkpoints" window wide enough to observe
  * deterministically. The source runs in stream-only mode against the canal message format, so no
- * database snapshot is involved; the canal resolver builds the table schema from the message
- * itself. The stream-only run is expressed as {@code startup-options=earliest} (the connector's
- * config factory explicitly whitelists {@code EARLIEST_OFFSET}, which the base factory rejects)
- * plus {@code scan.kafka.startup.mode=earliest}; with no snapshot the stream split carries the
- * initial offset, so the latter drives the consumer's seek to the beginning of the log.
+ * database snapshot is involved; the first message is the table's {@code CREATE TABLE} DDL, which
+ * registers its schema without a database. The stream-only run is expressed as {@code
+ * startup-options=earliest} (the connector's config factory explicitly whitelists {@code
+ * EARLIEST_OFFSET}, which the base factory rejects) plus {@code scan.kafka.startup.mode=earliest};
+ * with no snapshot the stream split carries the initial offset, so the latter drives the consumer's
+ * seek to the beginning of the log.
  *
  * <p>Consumption is observed through a static counter incremented by the deserializer, which runs
  * inside the source operator and therefore reports each record as the reader consumes it, with no
@@ -139,8 +140,14 @@ public class KafkaJsonOffsetCommitITCase extends KafkaJsonSourceTestBase {
 
     @Test(timeout = 300_000)
     public void testGroupOffsetAdvancesOnlyOnCheckpoint() throws Exception {
-        // 1) first batch, consumed from earliest after the job starts
-        KafkaUtil.produce(KAFKA.getBootstrapServers(), TOPIC, Arrays.asList(insert(1), insert(2)));
+        // 1) first batch, consumed from earliest after the job starts. The CREATE TABLE DDL
+        // registers the table's schema (there is no database to read it from); the schema-change
+        // record it enqueues is not forwarded downstream because schema changes are disabled, so
+        // only the two INSERTs reach the deserializer.
+        KafkaUtil.produce(
+                KAFKA.getBootstrapServers(),
+                TOPIC,
+                Arrays.asList(createCustomers(), insert(1), insert(2)));
         CONSUMED.set(0);
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
@@ -180,8 +187,9 @@ public class KafkaJsonOffsetCommitITCase extends KafkaJsonSourceTestBase {
                     "first checkpoint to commit the consumed offset");
             long firstCommit = committedOffset();
             assertEquals(
-                    "first checkpoint must commit exactly the consumed first batch",
-                    2,
+                    "first checkpoint must commit exactly the consumed first batch "
+                            + "(the CREATE DDL and the two INSERTs)",
+                    3,
                     firstCommit);
             LOG.info("First checkpoint committed offset={}", firstCommit);
 
@@ -238,6 +246,22 @@ public class KafkaJsonOffsetCommitITCase extends KafkaJsonSourceTestBase {
             Thread.sleep(200);
         }
         fail("Timed out after " + timeoutMs + " ms waiting for: " + message);
+    }
+
+    /**
+     * A canal flatMessage {@code CREATE TABLE} for the {@code customers} table the INSERTs below
+     * write to. Its DDL registers the schema, so the inserts convert without a database.
+     */
+    private static String createCustomers() {
+        return "{\"data\":null,\"database\":\"test\",\"es\":1700000000000,\"id\":0,"
+                + "\"isDdl\":true,\"mysqlType\":null,\"old\":null,\"pkNames\":null,"
+                + "\"sql\":\"CREATE TABLE `customers` ("
+                + "`id` int NOT NULL, "
+                + "`name` varchar(255) DEFAULT NULL, "
+                + "`address` varchar(255) DEFAULT NULL, "
+                + "PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4\","
+                + "\"sqlType\":null,\"table\":\"customers\",\"ts\":1700000000000,"
+                + "\"type\":\"CREATE\"}";
     }
 
     /** A canal flatMessage INSERT for the standard {@code customers} table. */

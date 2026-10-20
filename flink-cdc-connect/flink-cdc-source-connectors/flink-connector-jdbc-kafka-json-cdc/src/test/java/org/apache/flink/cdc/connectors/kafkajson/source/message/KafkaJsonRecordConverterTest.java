@@ -21,6 +21,7 @@ import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceCo
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions;
 import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessageParser;
+import org.apache.flink.util.FlinkRuntimeException;
 
 import io.debezium.relational.Column;
 import io.debezium.relational.Table;
@@ -32,9 +33,11 @@ import org.junit.jupiter.api.Test;
 import java.sql.Types;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Unit test for {@link KafkaJsonRecordConverter}. */
@@ -48,8 +51,8 @@ class KafkaJsonRecordConverterTest {
     /**
      * The schema of {@code test.users} as the snapshot phase discovers it: read from MySQL via
      * JDBC, so the columns carry the length the message's {@code mysqlType} does not have. The
-     * converter only converts a message whose table is registered like this — it never builds a
-     * schema from the message itself — so every case below registers it first.
+     * converter never builds a schema from the message itself, so a case either registers this
+     * table first or supplies it through the resolver.
      */
     private static Table usersTable() {
         return Table.editor()
@@ -76,6 +79,19 @@ class KafkaJsonRecordConverterTest {
                 .create();
     }
 
+    private static KafkaJsonSourceConfig config() {
+        return new KafkaJsonSourceConfigFactory()
+                .hostname("localhost")
+                .username("root")
+                .password("x")
+                .databaseList("test")
+                .tableList("test.users")
+                .kafkaBootstrapServers("b")
+                .kafkaTopics("t")
+                .serverTimeZone("UTC")
+                .create(0);
+    }
+
     private KafkaJsonRecordConverter converter(boolean tsMode) {
         KafkaJsonSourceConfigFactory factory =
                 new KafkaJsonSourceConfigFactory()
@@ -97,22 +113,92 @@ class KafkaJsonRecordConverterTest {
     }
 
     @Test
-    void testUnregisteredTableDropsTheMessage() {
-        // a message whose table was never registered (its CREATE was not observed) has no schema to
-        // convert against; its rows are dropped rather than built from the message's mysqlType
-        KafkaJsonSourceConfigFactory factory =
-                new KafkaJsonSourceConfigFactory()
-                        .hostname("localhost")
-                        .username("root")
-                        .password("x")
-                        .databaseList("test")
-                        .tableList("test.users")
-                        .kafkaBootstrapServers("b")
-                        .kafkaTopics("t")
-                        .serverTimeZone("UTC");
-        KafkaJsonSourceConfig config = factory.create(0);
+    void testFirstDmlReadsTheMissingSchemaFromTheSourceDatabase() {
+        // A table whose schema was never registered — the first DML of a table in a pure-stream
+        // deployment — is read through the resolver (JDBC in production) and registered; the
+        // message's own mysqlType is not trusted.
+        KafkaJsonSourceConfig config = config();
+        KafkaJsonRecordFactory recordFactory = new KafkaJsonRecordFactory(config);
+        AtomicInteger resolutions = new AtomicInteger();
+        KafkaJsonRecordConverter converter =
+                new KafkaJsonRecordConverter(
+                        recordFactory,
+                        config,
+                        tableId -> {
+                            resolutions.incrementAndGet();
+                            Table table = usersTable();
+                            recordFactory.registerTable(table);
+                            return table;
+                        });
+        String insert =
+                "{"
+                        + "\"data\":[{\"id\":\"1\",\"name\":\"Alice\"}],"
+                        + "\"database\":\"test\",\"es\":1598752886000,\"id\":1,\"isDdl\":false,"
+                        + MYSQL_TYPE
+                        + ",\"old\":null,\"pkNames\":[\"id\"],"
+                        + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
+                        + "\"ts\":1598752887000,\"type\":\"INSERT\"}";
+
+        List<SourceRecord> records =
+                converter.convert(new CanalMessageParser().parse(insert), "test.users", 0, 100L);
+
+        assertEquals(1, records.size());
+        assertEquals(
+                "Alice", ((Struct) records.get(0).value()).getStruct("after").getString("name"));
+        assertEquals(1, resolutions.get());
+
+        // the resolver registered the table, so the next message resolves from the registry
+        converter.convert(new CanalMessageParser().parse(insert), "test.users", 1, 101L);
+        assertEquals(1, resolutions.get());
+    }
+
+    @Test
+    void testUnregisteredTableWithoutSchemaSourceFailsFast() {
+        // Dropping the change would lose data silently: with no way to read the table's schema the
+        // converter fails instead, naming the table.
+        KafkaJsonSourceConfig config = config();
         KafkaJsonRecordConverter converter =
                 new KafkaJsonRecordConverter(new KafkaJsonRecordFactory(config), config);
+
+        FlinkRuntimeException error =
+                assertThrows(
+                        FlinkRuntimeException.class,
+                        () ->
+                                converter.convert(
+                                        new CanalMessageParser()
+                                                .parse(
+                                                        "{"
+                                                                + "\"data\":[{\"id\":\"1\","
+                                                                + "\"name\":\"Alice\"}],"
+                                                                + "\"database\":\"test\","
+                                                                + "\"es\":1598752886000,"
+                                                                + "\"id\":1,\"isDdl\":false,"
+                                                                + MYSQL_TYPE
+                                                                + ",\"old\":null,"
+                                                                + "\"pkNames\":[\"id\"],"
+                                                                + "\"sql\":\"\",\"sqlType\":{},"
+                                                                + "\"table\":\"users\","
+                                                                + "\"ts\":1598752887000,"
+                                                                + "\"type\":\"INSERT\"}"),
+                                        "test.users",
+                                        0,
+                                        100L));
+
+        assertTrue(error.getMessage().contains("test.users"), error.getMessage());
+    }
+
+    @Test
+    void testTableOutsideTheFilterIsDropped() {
+        // The stream can carry tables outside the include list, which were never meant to be
+        // captured: their changes are dropped without touching the schema source.
+        KafkaJsonSourceConfig config = config();
+        KafkaJsonRecordConverter converter =
+                new KafkaJsonRecordConverter(
+                        new KafkaJsonRecordFactory(config),
+                        config,
+                        tableId -> {
+                            throw new AssertionError("resolver must not run for " + tableId);
+                        });
 
         List<SourceRecord> records =
                 converter.convert(
@@ -124,9 +210,9 @@ class KafkaJsonRecordConverterTest {
                                                 + "\"id\":1,\"isDdl\":false,"
                                                 + MYSQL_TYPE
                                                 + ",\"old\":null,\"pkNames\":[\"id\"],"
-                                                + "\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
+                                                + "\"sql\":\"\",\"sqlType\":{},\"table\":\"other\","
                                                 + "\"ts\":1598752887000,\"type\":\"INSERT\"}"),
-                        "test.users",
+                        "test.other",
                         0,
                         100L);
 

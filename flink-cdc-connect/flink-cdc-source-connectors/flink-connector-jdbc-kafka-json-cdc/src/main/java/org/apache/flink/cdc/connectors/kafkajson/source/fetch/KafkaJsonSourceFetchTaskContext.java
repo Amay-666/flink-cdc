@@ -108,9 +108,16 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
 
         if (schema == null) {
             this.recordFactory = new KafkaJsonRecordFactory(kafkaJsonSourceConfig);
-            this.recordConverter =
-                    new KafkaJsonRecordConverter(recordFactory, kafkaJsonSourceConfig);
             this.schema = new KafkaJsonSchema(kafkaJsonSourceConfig, recordFactory);
+            // A data change can reach the converter before the table's schema was registered —
+            // pure-stream mode, where neither the snapshot phase nor a DDL was seen. The resolver
+            // reads the table through JDBC then (lazily opening the connection) and registers it in
+            // the shared schema, so the message's own type metadata is never trusted.
+            this.recordConverter =
+                    new KafkaJsonRecordConverter(
+                            recordFactory,
+                            kafkaJsonSourceConfig,
+                            tableId -> schema.getTableSchema(getConnection(), tableId).getTable());
         }
         // register the table schemas carried by the split so the snapshot read can resolve them.
         // The splitter builds its schemas with a separate KafkaJsonRecordFactory instance, so the
@@ -220,10 +227,12 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
     }
 
     /**
-     * Returns (creating on first use) the JDBC connection used to read the snapshot data.
+     * Returns (creating on first use) the JDBC connection.
      *
-     * <p>The connection is created lazily so that stream-only readers never open a MySQL
-     * connection.
+     * <p>The connection is created lazily so that a stream-only reader never opens a MySQL
+     * connection unless it has to: when the first data change of a table arrives with no schema
+     * registered (no snapshot row, no DDL seen), the record converter reads that table through this
+     * connection and registers it.
      */
     public JdbcConnection getConnection() {
         if (jdbcConnection == null) {

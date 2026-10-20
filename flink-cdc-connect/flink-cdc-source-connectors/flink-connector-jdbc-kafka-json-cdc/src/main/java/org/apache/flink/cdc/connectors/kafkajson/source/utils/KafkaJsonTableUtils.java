@@ -17,38 +17,32 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.utils;
 
-import org.apache.flink.cdc.connectors.kafkajson.source.message.canal.CanalMessage;
 import org.apache.flink.cdc.connectors.kafkajson.source.type.MySqlEnumSetLabels;
 import org.apache.flink.util.FlinkRuntimeException;
 
 import io.debezium.relational.Column;
 import io.debezium.relational.ColumnEditor;
-import io.debezium.relational.Table;
-import io.debezium.relational.TableEditor;
-import io.debezium.relational.TableId;
 
 import javax.annotation.Nullable;
 
 import java.sql.Types;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Builds a Debezium {@link Table} from the type metadata that canal attaches to each flatMessage
- * ({@code mysqlType} / {@code sqlType} / {@code pkNames}).
+ * Builds Debezium {@link Column}s from MySQL type expressions ({@code bigint(20) unsigned}, {@code
+ * varchar(255)}, {@code enum('a','b')}, ...).
  *
- * <p>This is the fallback path of the schema resolution: when a table is not (yet) known to {@code
- * KafkaJsonSchema} — e.g. a table created after the snapshot discovery, or a stream-only setup
- * without JDBC credentials — the column types are reconstructed from the message itself. The
- * canonical path still prefers the JDBC schema from {@code KafkaJsonSchema}.
+ * <p>The DDL parsers reconstruct the type expression from their AST and pass it here, so a table
+ * built from a DDL is identical to the JDBC one for every type the connector supports. A canal
+ * flatMessage's own {@code mysqlType} is deliberately not a source of table schemas: it names MySQL
+ * types only, without the length or scale a Debezium {@link Column} needs, so a schema built from
+ * it would silently describe the wrong columns.
  */
 public class KafkaJsonTableUtils {
 
@@ -81,52 +75,6 @@ public class KafkaJsonTableUtils {
                             "geomcollection"));
 
     private KafkaJsonTableUtils() {}
-
-    /**
-     * Builds a {@link Table} for the message. The column order is taken from {@code data} when
-     * available (the first row), otherwise from {@code mysqlType}.
-     *
-     * @param message the canal flat message
-     * @return the reconstructed table, or {@code null} if the message carries no column metadata at
-     *     all
-     */
-    public static Table buildTable(CanalMessage message) {
-        TableId tableId =
-                new TableId(
-                        message.getDatabase() == null ? "" : message.getDatabase(),
-                        null,
-                        message.getTable());
-        List<String> columns = columnNames(message);
-        if (columns.isEmpty()) {
-            return null;
-        }
-        Map<String, String> mysqlType =
-                message.getMysqlType() == null ? Collections.emptyMap() : message.getMysqlType();
-        List<String> pkNames =
-                message.getPkNames() == null ? Collections.emptyList() : message.getPkNames();
-
-        TableEditor table = Table.editor().tableId(tableId);
-        int position = 0;
-        for (String columnName : columns) {
-            ColumnEditor editor = buildColumn(columnName, mysqlType.get(columnName), position + 1);
-            table.addColumn(editor.create());
-            position++;
-        }
-        if (!pkNames.isEmpty()) {
-            table.setPrimaryKeyNames(pkNames);
-        }
-        return table.create();
-    }
-
-    private static List<String> columnNames(CanalMessage message) {
-        if (message.getData() != null && !message.getData().isEmpty()) {
-            return new ArrayList<>(message.getData().get(0).keySet());
-        }
-        if (message.getMysqlType() != null) {
-            return new ArrayList<>(message.getMysqlType().keySet());
-        }
-        return Collections.emptyList();
-    }
 
     /**
      * Builds a {@link ColumnEditor} from a column name and its MySQL type expression.
