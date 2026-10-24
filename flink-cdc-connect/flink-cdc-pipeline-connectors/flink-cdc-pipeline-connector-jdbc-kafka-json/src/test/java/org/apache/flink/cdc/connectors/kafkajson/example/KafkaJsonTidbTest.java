@@ -106,7 +106,7 @@ public class KafkaJsonTidbTest {
                 KafkaJsonDataSourceOptions.PASSWORD, e2e.getString("mysql.password"));
         factoryConfiguration.set(
                 KafkaJsonDataSourceOptions.TABLES,
-                database + ".test_schema_change3|" + database + ".test_schema_change4");
+                database + ".test_schema_change3|test_schema_change4");
         factoryConfiguration.set(KafkaJsonDataSourceOptions.DATABASE_TYPE, "tidb");
         factoryConfiguration.set(KafkaJsonDataSourceOptions.EVENT_TIME, "tidb_tso");
         factoryConfiguration.set(KafkaJsonDataSourceOptions.SCAN_SNAPSHOT_FETCH_SIZE, 1000);

@@ -89,11 +89,7 @@ public class DorisSinkExample {
                         .username(e2e.getString("mysql.user"))
                         .password(e2e.getString("mysql.password"))
                         .databaseList(database)
-                        .tableList(
-                                database
-                                        + ".test_schema_change3|"
-                                        + database
-                                        + ".test_schema_change4")
+                        .tableList(database + ".test_schema_change3|test_schema_change4")
                         .databaseType(KafkaJsonSourceOptions.DatabaseType.TIDB)
                         .eventTime(KafkaJsonSourceOptions.EventTime.TIDB_TSO)
                         .scanNewlyAddedTableEnabled(true)
