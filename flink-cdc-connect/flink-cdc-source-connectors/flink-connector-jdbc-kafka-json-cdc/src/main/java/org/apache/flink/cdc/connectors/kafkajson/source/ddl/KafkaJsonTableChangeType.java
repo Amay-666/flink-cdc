@@ -36,6 +36,7 @@ package org.apache.flink.cdc.connectors.kafkajson.source.ddl;
  * the old and new column definitions.
  */
 public enum KafkaJsonTableChangeType {
+    CREATE_LIKE,
     CREATE,
     ALTER,
     DROP,

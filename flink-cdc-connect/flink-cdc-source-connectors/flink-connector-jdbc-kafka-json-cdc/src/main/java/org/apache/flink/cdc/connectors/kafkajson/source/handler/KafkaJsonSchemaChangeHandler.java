@@ -203,6 +203,11 @@ public class KafkaJsonSchemaChangeHandler {
             LOG.warn("Skipping a DDL that cannot be attributed to a table: {}", sql);
             return;
         }
+        if (result.getType() == KafkaJsonTableChangeType.CREATE_LIKE) {
+            // resolve the schema and register the table here, before applySchemaChange, so the
+            // new table is in the registry by the time any DML for it arrives
+            result = resolveCreateLike(context, result);
+        }
         List<KafkaJsonRenamePair> renamePairs = applySchemaChange(context, result);
         // Enqueue unconditionally, even when {@code include.schema.changes} is false: the
         // schema-change record is what the base {@code IncrementalSourceRecordEmitter} reads to
@@ -246,6 +251,39 @@ public class KafkaJsonSchemaChangeHandler {
                     result.getTableId());
         }
         return Collections.emptyList();
+    }
+
+    /**
+     * Resolves the schema of a {@code CREATE TABLE ... LIKE ...} result into a regular {@code
+     * CREATE} result: the DDL text carries no column definitions, so the schema is read from the
+     * in-memory store (by the LIKE source) or, when the source is not registered or its database
+     * is ambiguous, from the target table through JDBC (the DDL already executed on the server,
+     * the target exists with the source's structure). The resolved table flows through the
+     * regular CREATE path — {@code applySchemaChange} registers it and {@code
+     * buildTableChanges} emits the CreateTableEvent.
+     */
+    private static KafkaJsonDdlParsedResult resolveCreateLike(
+            KafkaJsonSourceFetchTaskContext context, KafkaJsonDdlParsedResult result) {
+        TableId likeTableId = result.getTableId();
+        Table likeTableSchema = null;
+        if (likeTableId != null) {
+            likeTableSchema = context.getDatabaseSchema().tableFor(likeTableId);
+        }
+        if (likeTableSchema == null) {
+            likeTableSchema =
+                    context.getDatabaseSchema()
+                            .getTableSchema(context.getConnection(), result.getNewTableId())
+                            .getTable();
+        }
+        Table newTable =
+                Table.editor()
+                        .tableId(result.getNewTableId())
+                        .setColumns(likeTableSchema.columns())
+                        .setPrimaryKeyNames(likeTableSchema.primaryKeyColumnNames())
+                        .setDefaultCharsetName(likeTableSchema.defaultCharsetName())
+                        .setComment(likeTableSchema.comment())
+                        .create();
+        return KafkaJsonDdlParsedResult.create(result.getNewTableId(), newTable);
     }
 
     /**
@@ -377,6 +415,8 @@ public class KafkaJsonSchemaChangeHandler {
         TableChanges tableChanges = new TableChanges();
         KafkaJsonTableChangeType type = result.getType();
         if (type == KafkaJsonTableChangeType.CREATE) {
+            // CREATE and CREATE_LIKE (resolved before applySchemaChange) both carry a complete
+            // newTable
             tableChanges.create(result.getNewTable());
         } else if (type == KafkaJsonTableChangeType.ALTER
                 || type == KafkaJsonTableChangeType.RENAME_COLUMN

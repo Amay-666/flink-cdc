@@ -17,6 +17,7 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.ddl;
 
+import org.apache.flink.cdc.common.utils.StringUtils;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTableUtils;
 
 import com.alibaba.druid.sql.SQLUtils;
@@ -31,6 +32,7 @@ import com.alibaba.druid.sql.ast.statement.SQLAlterTableItem;
 import com.alibaba.druid.sql.ast.statement.SQLAlterTableRename;
 import com.alibaba.druid.sql.ast.statement.SQLAlterTableRenameColumn;
 import com.alibaba.druid.sql.ast.statement.SQLAlterTableStatement;
+import com.alibaba.druid.sql.ast.statement.SQLColumnConstraint;
 import com.alibaba.druid.sql.ast.statement.SQLColumnDefinition;
 import com.alibaba.druid.sql.ast.statement.SQLCreateTableStatement;
 import com.alibaba.druid.sql.ast.statement.SQLDropTableStatement;
@@ -102,6 +104,10 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
             String database, @Nullable TableId tableId, @Nullable Table currentTable, String ddl) {
         SQLStatement statement = SQLUtils.parseSingleMysqlStatement(ddl);
         if (statement instanceof SQLCreateTableStatement) {
+            SQLCreateTableStatement createTableStatement = (SQLCreateTableStatement) statement;
+            if (createTableStatement.getLike() != null) {
+                return parseCreateLike(createTableStatement, tableId);
+            }
             // A CREATE needs the id of the table it creates, which the message supplies; it does
             // not
             // carry one for a Debezium schema-change record, and deriving it from the statement
@@ -109,7 +115,7 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
             // build a schema under a name the sink's table mapping has not seen.
             return tableId == null
                     ? null
-                    : parseCreate((SQLCreateTableStatement) statement, tableId);
+                    : parseCreate(createTableStatement, tableId);
         }
         if (statement instanceof MySqlRenameTableStatement) {
             return parseRenameTable(
@@ -130,28 +136,100 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
         return null;
     }
 
+    private static KafkaJsonDdlParsedResult parseCreateLike(
+            SQLCreateTableStatement statement, TableId tableId) {
+        String likeTableName = unquote(statement.getLike().getTableName());
+        String likeCatalog = unquote(statement.getLike().getCatalog());
+        String likeSchema = unquote(statement.getLike().getSchema());
+
+        boolean likeHasQualifier =
+                !StringUtils.isNullOrWhitespaceOnly(likeCatalog)
+                || !StringUtils.isNullOrWhitespaceOnly(likeSchema);
+        boolean tgtHasQualifier =
+                !StringUtils.isNullOrWhitespaceOnly(statement.getCatalog())
+                || !StringUtils.isNullOrWhitespaceOnly(statement.getSchema());
+
+        if (likeHasQualifier) {
+            return KafkaJsonDdlParsedResult.createLike(
+                    new TableId(likeCatalog, likeSchema, likeTableName), tableId);
+        }
+
+        if (tgtHasQualifier) {
+            // LIKE source unqualified, target qualified — the source's database is
+            // ambiguous, signal the handler to read the TARGET table through
+            // JDBC instead of guessing the source's database.
+            return KafkaJsonDdlParsedResult.createLike(null, tableId);
+        }
+        // Both unqualified
+        return KafkaJsonDdlParsedResult.createLike(
+                new TableId(tableId.catalog(), tableId.schema(), likeTableName), tableId);
+    }
+
     private static KafkaJsonDdlParsedResult parseCreate(
             SQLCreateTableStatement statement, TableId tableId) {
         TableEditor table = Table.editor().tableId(tableId);
         int position = 0;
+        List<String> inlinePrimaryKeys = new ArrayList<>();
+        List<String> inlineUniqueKeys = new ArrayList<>();
         for (SQLTableElement element : statement.getTableElementList()) {
             if (element instanceof SQLColumnDefinition) {
-                table.addColumn(buildColumn((SQLColumnDefinition) element, ++position).create());
+                SQLColumnDefinition colDef = (SQLColumnDefinition) element;
+                table.addColumn(buildColumn(colDef, ++position).create());
+                String columnName = unquote(colDef.getColumnName());
+                if (isInlinePrimaryKey(colDef)) {
+                    inlinePrimaryKeys.add(columnName);
+                }
+                if (isInlineUniqueKey(colDef)) {
+                    inlineUniqueKeys.add(columnName);
+                }
             }
         }
-        List<String> primaryKeyNames = statement.getPrimaryKeyNames();
-        if (primaryKeyNames != null && !primaryKeyNames.isEmpty()) {
+        // Druid's getPrimaryKeyNames only reads separately declared PRIMARY KEY clauses; an
+        // inline constraint (`id bigint NOT NULL PRIMARY KEY`) must be collected from the
+        // column definitions themselves. MySQL forbids both forms at once, so at most one
+        // source will be non-empty in valid SQL.
+        List<String> primaryKeyNames = new ArrayList<>(inlinePrimaryKeys);
+        if (statement.getPrimaryKeyNames() != null) {
+            primaryKeyNames.addAll(statement.getPrimaryKeyNames());
+        }
+        if (!primaryKeyNames.isEmpty()) {
             table.setPrimaryKeyNames(primaryKeyNames);
         } else {
             // A table without a PRIMARY KEY but with a UNIQUE KEY still has a keyed identity:
             // TiDB/TiCDC captures and deletes/upserts such a table on the unique columns. Promote
             // the first declared unique key so the schema change and downstream events key on it.
             List<String> uniqueKeyNames = firstUniqueKeyColumns(statement);
+            if (uniqueKeyNames.isEmpty()) {
+                uniqueKeyNames = inlineUniqueKeys;
+            }
             if (!uniqueKeyNames.isEmpty()) {
                 table.setPrimaryKeyNames(uniqueKeyNames);
             }
         }
         return KafkaJsonDdlParsedResult.create(tableId, table.create());
+    }
+
+    private static boolean isInlinePrimaryKey(SQLColumnDefinition column) {
+        return hasInlineConstraint(column, "PRIMARY", "KEY");
+    }
+
+    private static boolean isInlineUniqueKey(SQLColumnDefinition column) {
+        return hasInlineConstraint(column, "UNIQUE", null);
+    }
+
+    private static boolean hasInlineConstraint(
+            SQLColumnDefinition column, String first, String second) {
+        List<SQLColumnConstraint> constraints = column.getConstraints();
+        if (constraints == null) {
+            return false;
+        }
+        for (SQLColumnConstraint constraint : constraints) {
+            String text = constraint.toString().toUpperCase(Locale.ROOT);
+            if (text.contains(first) && (second == null || text.contains(second))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

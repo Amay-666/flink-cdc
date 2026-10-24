@@ -19,6 +19,7 @@ package org.apache.flink.cdc.connectors.kafkajson.source.ddl;
 
 import com.alibaba.druid.sql.SQLUtils;
 import com.alibaba.druid.sql.ast.SQLStatement;
+import com.alibaba.druid.sql.ast.statement.SQLCreateTableStatement;
 import io.debezium.connector.mysql.antlr.MySqlAntlrDdlParser;
 import io.debezium.relational.Table;
 import io.debezium.relational.TableId;
@@ -62,6 +63,13 @@ public class KafkaJsonDebeziumDdlParser implements KafkaJsonDdlParser {
     public KafkaJsonDdlParsedResult parse(
             String database, @Nullable TableId tableId, @Nullable Table currentTable, String ddl) {
         try {
+            // Detect CREATE TABLE ... LIKE ... with Druid before the ANTLR parse: the ANTLR
+            // parser resolves the LIKE source from the seeded Tables instance, which never
+            // contains it, producing a zero-column table
+            KafkaJsonDdlParsedResult createLikeResult = parseCreateLike(database, ddl, tableId);
+            if (createLikeResult != null) {
+                return createLikeResult;
+            }
             List<KafkaJsonRenamePair> renamePairs = parseRenameIds(database, ddl);
             if (renamePairs != null) {
                 return KafkaJsonDdlParsedResult.renameTable(
@@ -153,5 +161,65 @@ public class KafkaJsonDebeziumDdlParser implements KafkaJsonDdlParser {
         List<TableId> newIds =
                 tableIds.stream().filter(id -> !before.contains(id)).collect(Collectors.toList());
         return newIds.size() == 1 ? newIds.get(0) : null;
+    }
+
+    /**
+     * Returns a {@code CREATE_LIKE} result when the DDL is a {@code CREATE TABLE ... LIKE ...},
+     * or {@code null} otherwise. Detects the statement with Druid — the same three-case source
+     * resolution as {@code KafkaJsonDruidDdlParser#parseCreateLike}.
+     */
+    @Nullable
+    private static KafkaJsonDdlParsedResult parseCreateLike(
+            String database, String ddl, @Nullable TableId tableId) {
+        if (tableId == null) {
+            return null;
+        }
+        SQLStatement statement;
+        try {
+            statement = SQLUtils.parseSingleMysqlStatement(ddl);
+        } catch (Exception e) {
+            return null;
+        }
+        if (!(statement instanceof SQLCreateTableStatement)) {
+            return null;
+        }
+        SQLCreateTableStatement createTableStatement = (SQLCreateTableStatement) statement;
+        if (createTableStatement.getLike() == null) {
+            return null;
+        }
+
+        String likeTableName = unquote(createTableStatement.getLike().getTableName());
+        String likeCatalog = unquote(createTableStatement.getLike().getCatalog());
+        String likeSchema = unquote(createTableStatement.getLike().getSchema());
+
+        boolean likeHasQualifier =
+                (likeCatalog != null && !likeCatalog.isEmpty())
+                        || (likeSchema != null && !likeSchema.isEmpty());
+        boolean tgtHasQualifier =
+                (createTableStatement.getCatalog() != null
+                                && !createTableStatement.getCatalog().isEmpty())
+                        || (createTableStatement.getSchema() != null
+                                && !createTableStatement.getSchema().isEmpty());
+
+        if (likeHasQualifier) {
+            return KafkaJsonDdlParsedResult.createLike(
+                    new TableId(likeCatalog, likeSchema, likeTableName), tableId);
+        }
+        if (tgtHasQualifier) {
+            // LIKE source unqualified, target qualified — the source's database is
+            // ambiguous, signal the handler to read the TARGET table through
+            // JDBC instead of guessing the source's database.
+            return KafkaJsonDdlParsedResult.createLike(null, tableId);
+        }
+        // Both unqualified
+        return KafkaJsonDdlParsedResult.createLike(
+                new TableId(tableId.catalog(), tableId.schema(), likeTableName), tableId);
+    }
+
+    private static String unquote(String name) {
+        if (name != null && name.length() >= 2 && name.startsWith("`") && name.endsWith("`")) {
+            return name.substring(1, name.length() - 1);
+        }
+        return name;
     }
 }

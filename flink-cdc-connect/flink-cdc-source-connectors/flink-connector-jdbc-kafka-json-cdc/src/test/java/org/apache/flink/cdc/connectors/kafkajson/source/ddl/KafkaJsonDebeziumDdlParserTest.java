@@ -64,6 +64,70 @@ class KafkaJsonDebeziumDdlParserTest {
     }
 
     @Test
+    void testParseCreateTableInlinePrimaryKey() {
+        // ANTLR reads inline constraints natively
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        null,
+                        "CREATE TABLE `test`.`users` "
+                                + "(`id` BIGINT NOT NULL PRIMARY KEY, "
+                                + "`name` VARCHAR(255)) ENGINE=InnoDB");
+
+        assertEquals(KafkaJsonTableChangeType.CREATE, result.getType());
+        Table table = result.getNewTable();
+        assertEquals(TABLE_ID, table.id());
+        assertEquals(Collections.singletonList("id"), table.primaryKeyColumnNames());
+    }
+
+    @Test
+    void testParseCreateTableInlineUniqueKeyPromoted() {
+        // no PRIMARY KEY, an inline UNIQUE on `id` — promoted to the keyed identity
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "test",
+                        TABLE_ID,
+                        null,
+                        "CREATE TABLE `test`.`users` "
+                                + "(`id` BIGINT NOT NULL UNIQUE, "
+                                + "`name` VARCHAR(255)) ENGINE=InnoDB");
+
+        assertEquals(KafkaJsonTableChangeType.CREATE, result.getType());
+        Table table = result.getNewTable();
+        assertEquals(Collections.singletonList("id"), table.primaryKeyColumnNames());
+    }
+
+    @Test
+    void testParseCreateTableLike() {
+        // ① both unqualified — same database, resolve the source against it
+        KafkaJsonDdlParsedResult result =
+                parser.parse("test", TABLE_ID, null, "CREATE TABLE `users` LIKE `users2`");
+        assertEquals(KafkaJsonTableChangeType.CREATE_LIKE, result.getType());
+        assertEquals(new TableId("test", null, "users2"), result.getTableId());
+        assertEquals(TABLE_ID, result.getNewTableId());
+
+        // ② source unqualified, target qualified — the source's database is ambiguous
+        // (it belongs to the database the DDL executed in, not the target's)
+        result =
+                parser.parse(
+                        "test",
+                        new TableId("other", null, "users"),
+                        null,
+                        "CREATE TABLE `other`.`users` LIKE `users2`");
+        assertEquals(KafkaJsonTableChangeType.CREATE_LIKE, result.getType());
+        assertNull(result.getTableId());
+        assertEquals(new TableId("other", null, "users"), result.getNewTableId());
+
+        // ③ source qualified — the database is explicit in the SQL
+        result =
+                parser.parse(
+                        "test", TABLE_ID, null, "CREATE TABLE `users` LIKE test.`users2`");
+        assertEquals(KafkaJsonTableChangeType.CREATE_LIKE, result.getType());
+        assertEquals(new TableId("test", null, "users2"), result.getTableId());
+    }
+
+    @Test
     void testParseAlterAddColumn() {
         KafkaJsonDdlParsedResult result =
                 parser.parse(

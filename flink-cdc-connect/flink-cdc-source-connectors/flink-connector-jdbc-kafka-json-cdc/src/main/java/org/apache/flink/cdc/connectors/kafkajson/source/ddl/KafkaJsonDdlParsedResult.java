@@ -104,6 +104,11 @@ public class KafkaJsonDdlParsedResult {
         this.renamePairs = renamePairs != null ? renamePairs : Collections.emptyList();
     }
 
+    public static KafkaJsonDdlParsedResult createLike(TableId likeTableId, TableId newTableId) {
+        return new KafkaJsonDdlParsedResult(
+                KafkaJsonTableChangeType.CREATE_LIKE, likeTableId, newTableId, null, null);
+    }
+
     public static KafkaJsonDdlParsedResult create(TableId tableId, Table newTable) {
         return new KafkaJsonDdlParsedResult(
                 KafkaJsonTableChangeType.CREATE, tableId, null, null, newTable);
