@@ -286,6 +286,98 @@ public class DorisDdlBuilder implements Serializable {
     }
 
     /**
+     * Builds the fallback statements for an {@code AlterColumnTypeEvent} whose direct {@code
+     * MODIFY COLUMN} Doris rejected — a type conversion Doris cannot perform in place (MySQL/TiDB
+     * can, so the source DDL already committed).
+     *
+     * <p>For each column the fallback swaps through a temporary column:
+     * <ol>
+     *   <li>{@code ADD COLUMN col__cdc_tmp NEW_TYPE AFTER col} — the new type appears right
+     *       where the old column was
+     *   <li>{@code UPDATE t SET col__cdc_tmp = CAST(col AS NEW_TYPE)} — existing rows are
+     *       converted; values Doris cannot cast are set to NULL
+     *   <li>{@code DROP COLUMN col} — the old column is removed
+     *   <li>{@code RENAME COLUMN col__cdc_tmp col} — the temp column takes the original name
+     * </ol>
+     *
+     * <p>Columns the safe-reduction check skips (a narrower type Doris should keep as-is) are
+     * skipped here too.
+     */
+    public List<String> buildAlterColumnTypeFallbackSql(
+            AlterColumnTypeEvent event, Optional<Schema> oldSchema) {
+        TableId tableId = event.tableId();
+        List<String> sqls = new ArrayList<>();
+        for (Map.Entry<String, DataType> entry : event.getTypeMapping().entrySet()) {
+            String column = entry.getKey();
+            String temp = column + "__cdc_tmp";
+            DataType newType = entry.getValue();
+            Optional<DataType> oldType =
+                    oldSchema.flatMap(schema -> schema.getColumn(column)).map(Column::getType);
+            if (isSafeReduction(oldType.orElse(null), newType)) {
+                continue;
+            }
+            // Doris can ADD a key column but cannot DROP one: the fallback swaps through a
+            // temporary column (dropping the original), so a key column cannot be converted
+            // this way. Keep the old Doris type — the committed source DDL guarantees the
+            // existing data already fits.
+            if (isKeyColumn(column, oldSchema)) {
+                LOG.warn(
+                        "Skipping fallback on key column `{}` of {}: Doris cannot drop a key "
+                                + "column; keeping the old type {}",
+                        column,
+                        tableId,
+                        oldType.map(Object::toString).orElse("(unknown)"));
+                continue;
+            }
+            String dorisType = convertDataType(newType);
+            // carry the column comment through the swap: the temp column is created with it
+            // so the rename leaves the original comment in place
+            String comment =
+                    oldSchema
+                            .flatMap(schema -> schema.getColumn(column))
+                            .map(Column::getComment)
+                            .orElse(null);
+            sqls.add(
+                    "ALTER TABLE "
+                            + qualified(tableId)
+                            + " ADD COLUMN "
+                            + quote(temp)
+                            + " "
+                            + dorisType
+                            + commentSql(comment)
+                            + " AFTER "
+                            + quote(column));
+            sqls.add(
+                    "UPDATE "
+                            + qualified(tableId)
+                            + " SET "
+                            + quote(temp)
+                            + " = CAST("
+                            + quote(column)
+                            + " AS "
+                            + dorisType
+                            + ")");
+            sqls.add(
+                    "ALTER TABLE " + qualified(tableId) + " DROP COLUMN " + quote(column));
+            sqls.add(
+                    "ALTER TABLE "
+                            + qualified(tableId)
+                            + " RENAME COLUMN "
+                            + quote(temp)
+                            + " "
+                            + quote(column));
+        }
+        return sqls;
+    }
+
+    /** Whether the column is a key column of the pre-change schema. */
+    private static boolean isKeyColumn(String column, Optional<Schema> oldSchema) {
+        return oldSchema
+                .map(schema -> schema.primaryKeys() != null && schema.primaryKeys().contains(column))
+                .orElse(false);
+    }
+
+    /**
      * Builds the DDL of a table rename, one statement per rename — except for a name swap, which is
      * one atomic statement.
      *

@@ -102,11 +102,37 @@ public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMeta
         }
 
         try (DorisHttpClient client = createHttpClient()) {
-            applySqls(event, sqls, client);
-            // MODIFY COLUMN triggers a heavy (asynchronous) schema change in Doris. The DDL
-            // statement returns immediately but the actual change runs in the background. If
-            // data writes resume before the change completes, Doris rejects Group Commit writes.
-            // Poll SHOW ALTER TABLE COLUMN until the job reaches a final state.
+            try {
+                applySqls(event, sqls, client);
+            } catch (SchemaEvolveException e) {
+                // Direct MODIFY COLUMN failed — Doris cannot convert between these types in
+                // place (MySQL/TiDB can, so the source DDL already committed). Fall back to
+                // the temp-column strategy: add, cast, drop, rename. Each DDL is executed
+                // and waited on individually: Doris rejects overlapping ALTER jobs, and
+                // SHOW ALTER TABLE COLUMN only exposes the latest job's state, so issuing
+                // them back-to-back would leave earlier jobs unchecked.
+                List<String> fallbackSqls =
+                        ddlBuilder.buildAlterColumnTypeFallbackSql(event, oldSchema);
+                if (fallbackSqls.isEmpty()) {
+                    throw e;
+                }
+                LOG.warn(
+                        "Direct MODIFY COLUMN failed on {}, falling back to the temp-column strategy: {}",
+                        event.tableId(),
+                        e.getMessage());
+                for (String sql : fallbackSqls) {
+                    try {
+                        LOG.info("Applying fallback Doris DDL [{}]: {}", event.tableId(), sql);
+                        client.executeSql(options.mapDatabase(event.tableId()), sql);
+                    } catch (Exception ex) {
+                        throw new SchemaEvolveException(
+                                event, "Fallback DDL failed: " + ex.getMessage(), ex);
+                    }
+                    // returns immediately for light DDLs (no pending job); a CANCELLED state
+                    // here is a system issue, not a type conversion issue — it fails
+                    schemaChangeMonitor.waitForSchemaChangeCompletion(client, event);
+                }
+            }
             schemaChangeMonitor.waitForSchemaChangeCompletion(client, event);
         } catch (SchemaEvolveException e) {
             // already carries its message in getExceptionMessage() (getMessage() is null);
