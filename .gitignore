@@ -2,6 +2,7 @@
 scalastyle-output.xml
 .classpath
 .idea/*
+.vscode/*
 !.idea/vcs.xml
 .metadata
 .settings
