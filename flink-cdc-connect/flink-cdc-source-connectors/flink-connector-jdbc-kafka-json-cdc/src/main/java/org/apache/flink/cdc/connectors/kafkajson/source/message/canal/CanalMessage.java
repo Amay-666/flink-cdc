@@ -227,12 +227,14 @@ public class CanalMessage extends KafkaJsonMessage {
         }
         switch (type.toUpperCase(Locale.ROOT)) {
             case "INSERT":
+            // Alibaba DTS (data transmission service) emits INIT for its initial snapshot
+            case "INIT":
             case "UPDATE":
             case "DELETE":
-            case "QUERY":
                 return MessageType.DML;
             case "TIDB_WATERMARK":
                 return MessageType.TIDB_WATERMARK;
+            case "QUERY":
             default:
                 return MessageType.UNKNOWN;
         }

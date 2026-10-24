@@ -46,7 +46,8 @@ class KafkaJsonMessageTest {
         assertEquals(MessageType.DML, message("INSERT", false).getMessageType());
         assertEquals(MessageType.DML, message("UPDATE", false).getMessageType());
         assertEquals(MessageType.DML, message("DELETE", false).getMessageType());
-        assertEquals(MessageType.DML, message("QUERY", false).getMessageType());
+        assertEquals(MessageType.DML, message("INIT", false).getMessageType());
+        assertEquals(MessageType.UNKNOWN, message("QUERY", false).getMessageType());
     }
 
     @Test
