@@ -3,3 +3,4 @@
 -- ============================================================
 
 DROP TABLE IF EXISTS `type_matrix_renamed`;
+DROP TABLE IF EXISTS `type_matrix_like`;

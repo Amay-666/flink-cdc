@@ -122,9 +122,11 @@ public class DorisE2ETest extends TestLogger {
 
     private static final String MATRIX_TABLE = "type_matrix";
     private static final String MATRIX_TABLE_RENAMED = "type_matrix_renamed";
+    private static final String MATRIX_TABLE_LIKE = "type_matrix_like";
 
     private static String dorisMatrixTable;
     private static String dorisMatrixTableRenamed;
+    private static String dorisMatrixTableLike;
 
     /** The columns of the {@code type_matrix} table, in declaration order. */
     private static final String[] TYPE_MATRIX_COLUMNS = {
@@ -203,6 +205,7 @@ public class DorisE2ETest extends TestLogger {
 
         dorisMatrixTable = mysqlDb + "_" + MATRIX_TABLE;
         dorisMatrixTableRenamed = mysqlDb + "_" + MATRIX_TABLE_RENAMED;
+        dorisMatrixTableLike = mysqlDb + "_" + MATRIX_TABLE_LIKE;
 
         pollIntervalMs = env.getInt("timing.pollIntervalMs");
         pollTimeoutMs = env.getInt("timing.pollTimeoutMs");
@@ -354,11 +357,57 @@ public class DorisE2ETest extends TestLogger {
                 });
     }
 
-    /** Step 7: RENAME TABLE type_matrix → type_matrix_renamed. */
+    /**
+     * Step 7: CREATE TABLE LIKE + column type change fallback — the DDL text carries no column
+     * definitions, so the handler resolves the schema (in-memory store first, JDBC target
+     * fallback). Row 7000 is written into the new table, verified in Doris, then deleted and
+     * the deletion verified. Row 8000 carries a numeric c_text, then c_text changes from TEXT
+     * to INT — Doris cannot convert STRING to INT in place, so the applier falls back to the
+     * temp-column swap (add, cast, drop, rename); the cast value 12345 must survive.
+     */
     @Test
-    public void test07RenameTable() throws Exception {
-        LOG.info("=== Step 7: RENAME TABLE ===");
-        executeMySql(resource("e2e/step07-rename-table-mysql.sql"));
+    public void test07CreateTableLike() throws Exception {
+        LOG.info("=== Step 7: CREATE TABLE LIKE + fallback ===");
+        executeMySql(resource("e2e/step07-create-like-mysql.sql"));
+        waitForDoris(
+                dorisMatrixTableLike,
+                "SELECT `id`, `c_varchar` FROM `%s` WHERE `id` = 7000",
+                rs -> {
+                    List<Map<String, String>> rows = tryCollectRows(rs, "id", "c_varchar");
+                    assertThat(rows).hasSize(1);
+                    assertThat(rows.get(0)).containsEntry("c_varchar", "like-created");
+                });
+        // the fallback (temp-column swap) must convert c_text to INT with the cast value
+        waitForDoris(
+                dorisMatrixTableLike,
+                "SELECT `id`, `c_text` FROM `%s` WHERE `id` = 8000",
+                rs -> {
+                    List<Map<String, String>> rows = tryCollectRows(rs, "id", "c_text");
+                    assertThat(rows).hasSize(1);
+                    assertThat(rows.get(0)).containsEntry("c_text", "12345");
+                });
+        executeMySql("DELETE FROM `" + MATRIX_TABLE_LIKE + "` WHERE `id` = 7000");
+        executeMySql("DELETE FROM `" + MATRIX_TABLE_LIKE + "` WHERE `id` = 8000");
+        waitForDoris(
+                dorisMatrixTableLike,
+                "SELECT COUNT(*) FROM `%s`",
+                rs -> {
+                    try {
+                        String columnLabel = rs.getMetaData().getColumnLabel(1);
+                        List<Map<String, String>> rows = tryCollectRows(rs, columnLabel);
+                        assertThat(rows).hasSize(1);
+                        assertThat(Integer.parseInt(rows.get(0).get(columnLabel))).isEqualTo(0);
+                    } catch (SQLException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+    }
+
+    /** Step 8: RENAME TABLE type_matrix → type_matrix_renamed. */
+    @Test
+    public void test08RenameTable() throws Exception {
+        LOG.info("=== Step 8: RENAME TABLE ===");
+        executeMySql(resource("e2e/step08-rename-table-mysql.sql"));
         waitForDoris(
                 dorisMatrixTableRenamed,
                 "SELECT `id`, `c_varchar` FROM `%s` WHERE `id` = 5000",
@@ -369,11 +418,11 @@ public class DorisE2ETest extends TestLogger {
                 });
     }
 
-    /** Step 8: DROP COLUMN c_text. */
+    /** Step 9: DROP COLUMN c_text. */
     @Test
-    public void test08DropColumn() throws Exception {
-        LOG.info("=== Step 8: DROP COLUMN ===");
-        executeMySql(resource("e2e/step08-drop-column-mysql.sql"));
+    public void test09DropColumn() throws Exception {
+        LOG.info("=== Step 9: DROP COLUMN ===");
+        executeMySql(resource("e2e/step09-drop-column-mysql.sql"));
         waitForDorisColumnAbsence(dorisMatrixTableRenamed, "c_text");
         waitForDoris(
                 dorisMatrixTableRenamed,
@@ -385,11 +434,11 @@ public class DorisE2ETest extends TestLogger {
                 });
     }
 
-    /** Step 9: TRUNCATE TABLE type_matrix_renamed. */
+    /** Step 10: TRUNCATE TABLE type_matrix_renamed. */
     @Test
-    public void test09TruncateTable() throws Exception {
-        LOG.info("=== Step 9: TRUNCATE TABLE ===");
-        executeMySql(resource("e2e/step09-truncate-mysql.sql"));
+    public void test10TruncateTable() throws Exception {
+        LOG.info("=== Step 10: TRUNCATE TABLE ===");
+        executeMySql(resource("e2e/step10-truncate-mysql.sql"));
         waitForDoris(
                 dorisMatrixTableRenamed,
                 "SELECT COUNT(*) FROM `%s`",
@@ -409,11 +458,11 @@ public class DorisE2ETest extends TestLogger {
                 });
     }
 
-    /** Step 10: DROP TABLE type_matrix_renamed. */
+    /** Step 11: DROP TABLE type_matrix_renamed. */
     @Test
-    public void test10DropTable() throws Exception {
-        LOG.info("=== Step 10: DROP TABLE ===");
-        executeMySql(resource("e2e/step10-cleanup-mysql.sql"));
+    public void test11DropTable() throws Exception {
+        LOG.info("=== Step 11: DROP TABLE ===");
+        executeMySql(resource("e2e/step11-cleanup-mysql.sql"));
         waitForDoris(
                 dorisDb,
                 "SHOW TABLES FROM `%s`",
@@ -573,7 +622,9 @@ public class DorisE2ETest extends TestLogger {
         sourceConfig.password(mysqlPass);
         sourceConfig.databaseList(mysqlDb);
         sourceConfig.tableList(
-                mysqlDb + "." + MATRIX_TABLE + "|" + mysqlDb + "." + MATRIX_TABLE_RENAMED);
+                mysqlDb + "." + MATRIX_TABLE
+                        + "|"  + MATRIX_TABLE_RENAMED
+                        + "|"  + MATRIX_TABLE_LIKE);
         sourceConfig.databaseType(DatabaseType.TIDB);
         sourceConfig.eventTime(EventTime.TIDB_TSO);
         sourceConfig.scanNewlyAddedTableEnabled(true);

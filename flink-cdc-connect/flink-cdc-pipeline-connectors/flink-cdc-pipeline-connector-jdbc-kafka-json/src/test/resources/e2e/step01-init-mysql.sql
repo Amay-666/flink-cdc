@@ -10,6 +10,7 @@
 
 DROP TABLE IF EXISTS `type_matrix`;
 DROP TABLE IF EXISTS `type_matrix_renamed`;
+DROP TABLE IF EXISTS `type_matrix_like`;
 
 CREATE TABLE `type_matrix` (
     `id` BIGINT NOT NULL,
