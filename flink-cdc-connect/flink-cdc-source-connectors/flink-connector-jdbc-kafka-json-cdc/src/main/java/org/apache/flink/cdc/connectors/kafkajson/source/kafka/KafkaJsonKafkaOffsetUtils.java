@@ -67,6 +67,12 @@ public class KafkaJsonKafkaOffsetUtils {
      * javadoc). Returns {@link KafkaJsonOffset#INITIAL_OFFSET} when no message is available yet.
      */
     public static KafkaJsonOffset queryCurrentOffset(KafkaJsonSourceConfig sourceConfig) {
+        if (sourceConfig.getKafkaTopics() == null || sourceConfig.getKafkaTopics().isEmpty()) {
+            // A snapshot-only job without Kafka topics has no stream to sample a watermark from:
+            // the INITIAL offset leaves every split's backfill window empty (and the stream
+            // fetch task completes without reading), so no Kafka connection is opened at all.
+            return KafkaJsonOffset.INITIAL_OFFSET;
+        }
         try (KafkaConsumer<String, String> consumer =
                 new KafkaConsumer<>(buildConsumerProps(sourceConfig))) {
             return queryCurrentOffset(

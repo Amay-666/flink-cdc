@@ -133,9 +133,15 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
         validateDistributionFactorUpper(distributionFactorUpper);
         validateDistributionFactorLower(distributionFactorLower);
 
-        String kafkaBootstrapServers = config.get(KAFKA_BOOTSTRAP_SERVERS);
+        String kafkaBootstrapServers =
+                config.getOptional(KAFKA_BOOTSTRAP_SERVERS).orElse(null);
         String kafkaGroupId = config.getOptional(KAFKA_GROUP_ID).orElse(null);
-        List<String> kafkaTopics = getKafkaTopics(config.get(SCAN_KAFKA_TOPICS));
+        String kafkaTopicsOption = config.getOptional(SCAN_KAFKA_TOPICS).orElse(null);
+        List<String> kafkaTopics =
+                kafkaTopicsOption == null
+                        ? Collections.emptyList()
+                        : getKafkaTopics(kafkaTopicsOption);
+        validateKafkaOptions(startupOptions, kafkaTopics, kafkaBootstrapServers);
         Map<String, String> configMap = config.toMap();
         KafkaJsonSourceOptions.MessageFormat messageFormat =
                 getEnumOption(config, MESSAGE_FORMAT, KafkaJsonSourceOptions.MessageFormat.class);
@@ -216,8 +222,6 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
         options.add(USERNAME);
         options.add(PASSWORD);
         options.add(TABLES);
-        options.add(KAFKA_BOOTSTRAP_SERVERS);
-        options.add(SCAN_KAFKA_TOPICS);
         return options;
     }
 
@@ -247,6 +251,11 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
         // must be registered here, otherwise FactoryHelper.validateExcept rejects it as an
         // unsupported option and createDataSource fails for users setting scan.database.type=tidb
         options.add(DATABASE_TYPE);
+        // Optional so that a snapshot-only pipeline (scan.startup.mode=snapshot) can run as a
+        // pure JDBC dump without Kafka; every other mode must configure both, validated in
+        // createDataSource
+        options.add(KAFKA_BOOTSTRAP_SERVERS);
+        options.add(SCAN_KAFKA_TOPICS);
         return options;
     }
 
@@ -319,6 +328,31 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * The Kafka options are optional only for a snapshot-only pipeline ({@code
+     * scan.startup.mode=snapshot}): it runs as a pure JDBC dump — the watermark probe
+     * short-circuits to the INITIAL offset and the stream fetch task completes its no-op stream
+     * split without opening a Kafka connection. Every other mode consumes the incremental
+     * changes from Kafka, so both the topics and the bootstrap servers are required, and they
+     * must be configured together.
+     */
+    private static void validateKafkaOptions(
+            StartupOptions startupOptions, List<String> topics, String bootstrapServers) {
+        if (topics.isEmpty()) {
+            if (!startupOptions.isSnapshotOnly()) {
+                throw new ValidationException(
+                        "Missing required options: [scan.kafka.topics, "
+                                + "properties.kafka.bootstrap.servers]. Only a snapshot-only "
+                                + "pipeline ('scan.startup.mode'='snapshot') may omit them and "
+                                + "run as a pure JDBC dump.");
+            }
+        } else if (bootstrapServers == null || bootstrapServers.isEmpty()) {
+            throw new ValidationException(
+                    "Incomplete Kafka configuration: 'scan.kafka.topics' is set but "
+                            + "'properties.kafka.bootstrap.servers' is missing; configure both.");
+        }
     }
 
     /**

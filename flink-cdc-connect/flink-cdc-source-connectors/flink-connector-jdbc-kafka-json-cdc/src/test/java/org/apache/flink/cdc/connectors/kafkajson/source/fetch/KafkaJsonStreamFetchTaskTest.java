@@ -17,6 +17,7 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.fetch;
 
+import org.apache.flink.cdc.connectors.base.options.StartupOptions;
 import org.apache.flink.cdc.connectors.base.source.meta.split.FinishedSnapshotSplitInfo;
 import org.apache.flink.cdc.connectors.base.source.meta.split.StreamSplit;
 import org.apache.flink.cdc.connectors.base.source.meta.wartermark.WatermarkEvent;
@@ -151,6 +152,38 @@ class KafkaJsonStreamFetchTaskTest {
         // the DDL inside the window is carried as a schema-change record (see the test above)
         assertTrue(isSchemaChangeRecord(records.get(1)));
         assertTrue(WatermarkEvent.isEndWatermarkEvent(records.get(2)));
+        assertFalse(task.isRunning());
+    }
+
+    @Test
+    void testSnapshotOnlyWithoutKafkaTopicsCompletesWithoutReading() throws Exception {
+        // A snapshot-only job without Kafka topics runs as a pure JDBC dump: the framework still
+        // hands the reader the final stream split (INITIAL -> INITIAL watermarks), which the
+        // task must complete without touching the consumer — previously assignAndSeek failed
+        // with "No Kafka partition found" only after the whole snapshot had run.
+        KafkaJsonSourceConfig config =
+                new KafkaJsonSourceConfigFactory()
+                        .hostname("localhost")
+                        .username("root")
+                        .password("x")
+                        .databaseList("test")
+                        .tableList("test.users")
+                        .serverTimeZone("UTC")
+                        .startupOptions(StartupOptions.snapshot())
+                        .create(0);
+        KafkaJsonSourceFetchTaskContext context =
+                new KafkaJsonSourceFetchTaskContext(config, new KafkaJsonDialect(config));
+        // no consumer is injected: the task must not ask for one
+        StreamSplit split =
+                streamSplit(KafkaJsonOffset.INITIAL_OFFSET, KafkaJsonOffset.INITIAL_OFFSET);
+        KafkaJsonStreamFetchTask task = new KafkaJsonStreamFetchTask(split);
+        context.configure(split);
+
+        task.execute(context);
+
+        // the no-op split emits nothing and is not running afterwards
+        assertTrue(context.getQueue().poll().isEmpty());
+        assertEquals(KafkaJsonOffset.INITIAL_OFFSET, task.getCurrentOffset());
         assertFalse(task.isRunning());
     }
 

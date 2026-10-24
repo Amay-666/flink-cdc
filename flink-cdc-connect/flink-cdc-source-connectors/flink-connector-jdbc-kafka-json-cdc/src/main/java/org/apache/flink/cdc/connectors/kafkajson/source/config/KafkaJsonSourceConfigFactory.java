@@ -107,6 +107,26 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
         props.setProperty("database.port", String.valueOf(port));
         props.setProperty("database.user", checkNotNull(username));
         props.setProperty("database.password", checkNotNull(password));
+        // Fail fast at job setup instead of at the first snapshot split (or worse, after the
+        // whole snapshot): the table/pipeline factories validate the Kafka options for every
+        // non-snapshot mode, but the builder route does not. A snapshot-only job
+        // (scan.startup.mode=snapshot) may omit them entirely: it runs as a pure JDBC dump —
+        // the dialect's watermark probe short-circuits to the INITIAL offset and the stream
+        // fetch task completes its no-op stream split without ever opening a Kafka connection.
+        if (kafkaTopics == null || kafkaTopics.isEmpty()) {
+            if (!startupOptions.isSnapshotOnly()) {
+                throw new IllegalArgumentException(
+                        "No Kafka topic configured for the kafka-json source; only a "
+                                + "snapshot-only job (scan.startup.mode=snapshot) may run "
+                                + "without one, as a pure JDBC dump");
+            }
+        } else if (kafkaBootstrapServers == null || kafkaBootstrapServers.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Incomplete Kafka configuration: topics "
+                            + kafkaTopics
+                            + " are configured without bootstrap servers "
+                            + "(properties.kafka.bootstrap.servers)");
+        }
         if (databaseList != null) {
             props.setProperty("database.include.list", String.join(",", databaseList));
         }

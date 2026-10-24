@@ -48,7 +48,9 @@ public class KafkaJsonSourceOptions extends JdbcSourceOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "Kafka bootstrap servers of the message broker that the external tools (canal) write the incremental changes to.");
+                            "Kafka bootstrap servers of the message broker that the external tools (canal) write the incremental changes to. "
+                                    + "Optional only for a snapshot-only source (scan.startup.mode=snapshot), "
+                                    + "which runs as a pure JDBC dump without Kafka.");
 
     /** Kafka consumer group id. Offsets are not committed by default. */
     public static final ConfigOption<String> KAFKA_GROUP_ID =
@@ -65,7 +67,9 @@ public class KafkaJsonSourceOptions extends JdbcSourceOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "Comma-separated list of Kafka topics (or a regex) that carry the incremental data and DDL messages.");
+                            "Comma-separated list of Kafka topics (or a regex) that carry the incremental data and DDL messages. "
+                                    + "Optional only for a snapshot-only source (scan.startup.mode=snapshot), "
+                                    + "which runs as a pure JDBC dump without Kafka.");
 
     /**
      * The message format of the Kafka messages. Declared as a string (not {@code enumType}) because

@@ -38,6 +38,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.time.ZoneId;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -95,11 +96,17 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
         boolean scanNewlyAddedTableEnabled =
                 config.get(SourceOptions.SCAN_NEWLY_ADDED_TABLE_ENABLED);
 
-        String kafkaBootstrapServers = config.get(KafkaJsonSourceOptions.KAFKA_BOOTSTRAP_SERVERS);
+        String kafkaBootstrapServers =
+                config.getOptional(KafkaJsonSourceOptions.KAFKA_BOOTSTRAP_SERVERS).orElse(null);
         String kafkaGroupId =
                 config.getOptional(KafkaJsonSourceOptions.KAFKA_GROUP_ID).orElse(null);
+        String kafkaTopicsOption =
+                config.getOptional(KafkaJsonSourceOptions.SCAN_KAFKA_TOPICS).orElse(null);
         List<String> kafkaTopics =
-                getKafkaTopics(config.get(KafkaJsonSourceOptions.SCAN_KAFKA_TOPICS));
+                kafkaTopicsOption == null
+                        ? Collections.emptyList()
+                        : getKafkaTopics(kafkaTopicsOption);
+        validateKafkaOptions(startupOptions, kafkaTopics, kafkaBootstrapServers);
         Map<String, String> options = context.getCatalogTable().getOptions();
         KafkaJsonSourceOptions.MessageFormat messageFormat =
                 getEnumOption(
@@ -187,8 +194,6 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
         options.add(JdbcSourceOptions.PASSWORD);
         options.add(JdbcSourceOptions.DATABASE_NAME);
         options.add(JdbcSourceOptions.TABLE_NAME);
-        options.add(KafkaJsonSourceOptions.KAFKA_BOOTSTRAP_SERVERS);
-        options.add(KafkaJsonSourceOptions.SCAN_KAFKA_TOPICS);
         return options;
     }
 
@@ -214,6 +219,11 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
         options.add(KafkaJsonSourceOptions.EVENT_TIME);
         options.add(KafkaJsonSourceOptions.KAFKA_STARTUP_MODE);
         options.add(KafkaJsonSourceOptions.CANAL_DDL_PARSER);
+        // Optional so that a snapshot-only source (scan.startup.mode=snapshot) can run as a
+        // pure JDBC dump without Kafka; every other mode must configure both, validated in
+        // createDynamicTableSource
+        options.add(KafkaJsonSourceOptions.KAFKA_BOOTSTRAP_SERVERS);
+        options.add(KafkaJsonSourceOptions.SCAN_KAFKA_TOPICS);
         return options;
     }
 
@@ -254,6 +264,31 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * The Kafka options are optional only for a snapshot-only source ({@code
+     * scan.startup.mode=snapshot}): it runs as a pure JDBC dump — the watermark probe
+     * short-circuits to the INITIAL offset and the stream fetch task completes its no-op stream
+     * split without opening a Kafka connection. Every other mode consumes the incremental
+     * changes from Kafka, so both the topics and the bootstrap servers are required, and they
+     * must be configured together.
+     */
+    private static void validateKafkaOptions(
+            StartupOptions startupOptions, List<String> topics, String bootstrapServers) {
+        if (topics.isEmpty()) {
+            if (!startupOptions.isSnapshotOnly()) {
+                throw new ValidationException(
+                        "Missing required options: [scan.kafka.topics, "
+                                + "properties.kafka.bootstrap.servers]. Only a snapshot-only "
+                                + "source ('scan.startup.mode'='snapshot') may omit them and run "
+                                + "as a pure JDBC dump.");
+            }
+        } else if (bootstrapServers == null || bootstrapServers.isEmpty()) {
+            throw new ValidationException(
+                    "Incomplete Kafka configuration: 'scan.kafka.topics' is set but "
+                            + "'properties.kafka.bootstrap.servers' is missing; configure both.");
+        }
     }
 
     /**

@@ -17,8 +17,12 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.kafka;
 
+import org.apache.flink.cdc.connectors.base.options.StartupOptions;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.MessageFormat;
+import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 
 import org.junit.jupiter.api.Test;
 
@@ -32,6 +36,26 @@ class KafkaJsonKafkaOffsetUtilsTest {
                     + "\"id\":1,\"isDdl\":false,\"mysqlType\":{},\"old\":null,"
                     + "\"pkNames\":null,\"sql\":\"\",\"sqlType\":{},\"table\":\"users\","
                     + "\"ts\":1598752887000,\"type\":\"INSERT\"}";
+
+    @Test
+    void testEmptyTopicsShortCircuitToInitialOffset() {
+        // A snapshot-only job without Kafka topics has no stream to sample a watermark from: the
+        // query must short-circuit to the INITIAL offset without creating a throw-away consumer
+        // (no bootstrap servers are configured, so building one would fail).
+        KafkaJsonSourceConfig config =
+                new KafkaJsonSourceConfigFactory()
+                        .hostname("localhost")
+                        .username("root")
+                        .password("x")
+                        .databaseList("test")
+                        .tableList("test.users")
+                        .serverTimeZone("UTC")
+                        .startupOptions(StartupOptions.snapshot())
+                        .create(0);
+        assertEquals(
+                KafkaJsonOffset.INITIAL_OFFSET,
+                KafkaJsonKafkaOffsetUtils.queryCurrentOffset(config));
+    }
 
     @Test
     void testExtractExecuteTime() {

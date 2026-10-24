@@ -65,14 +65,35 @@ public class KafkaJsonDataSourceFactoryTest {
                         .map(ConfigOption::key)
                         .sorted()
                         .collect(Collectors.toList());
+        // the Kafka options (scan.kafka.topics, properties.kafka.bootstrap.servers) are
+        // optional: a snapshot-only pipeline may omit them and run as a pure JDBC dump
         assertThat(requireKeys)
-                .containsExactly(
-                        "hostname",
-                        "password",
-                        "properties.kafka.bootstrap.servers",
-                        "scan.kafka.topics",
-                        "tables",
-                        "username");
+                .containsExactly("hostname", "password", "tables", "username");
+    }
+
+    /** Every non-snapshot mode needs the Kafka options: rejected before any JDBC discovery. */
+    @Test
+    public void testNonSnapshotModeWithoutKafkaOptionsIsRejected() {
+        Map<String, String> options = baseOptions();
+        options.remove(SCAN_KAFKA_TOPICS.key());
+        options.remove(KAFKA_BOOTSTRAP_SERVERS.key());
+        Factory.Context context = new MockContext(Configuration.fromMap(options));
+
+        assertThatThrownBy(() -> factory.createDataSource(context))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("scan.kafka.topics");
+    }
+
+    /** Topics without bootstrap servers can never be consumed: rejected at job setup. */
+    @Test
+    public void testTopicsWithoutBootstrapServersIsRejected() {
+        Map<String, String> options = baseOptions();
+        options.remove(KAFKA_BOOTSTRAP_SERVERS.key());
+        Factory.Context context = new MockContext(Configuration.fromMap(options));
+
+        assertThatThrownBy(() -> factory.createDataSource(context))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("Incomplete Kafka configuration");
     }
 
     @Test

@@ -222,4 +222,56 @@ class KafkaJsonSourceConfigFactoryTest {
                 NullPointerException.class,
                 () -> new KafkaJsonSourceConfigFactory().username("u").password("p").create(0));
     }
+
+    /**
+     * The Kafka topics are required even on the builder route (the table/pipeline factories
+     * enforce the option, the builder does not): the config factory fails fast at job setup
+     * instead of letting the snapshot run and the stream phase find nothing to consume.
+     */
+    @Test
+    void testMissingKafkaTopicsFailsFast() {
+        KafkaJsonSourceConfigFactory factory =
+                new KafkaJsonSourceConfigFactory()
+                        .hostname("localhost")
+                        .username("root")
+                        .password("x");
+        IllegalArgumentException e =
+                assertThrows(IllegalArgumentException.class, () -> factory.create(0));
+        assertEquals(true, e.getMessage().contains("No Kafka topic configured"));
+    }
+
+    /**
+     * A snapshot-only job may omit the Kafka options entirely: it runs as a pure JDBC dump — the
+     * watermark probe short-circuits to the INITIAL offset and the stream fetch task completes
+     * its no-op stream split without opening a Kafka connection.
+     */
+    @Test
+    void testSnapshotOnlyJobMayOmitKafka() {
+        KafkaJsonSourceConfig config =
+                new KafkaJsonSourceConfigFactory()
+                        .hostname("localhost")
+                        .username("root")
+                        .password("x")
+                        .databaseList("db1", "db2")
+                        .tableList("db1.t1", "db2.t2")
+                        .startupOptions(StartupOptions.snapshot())
+                        .create(0);
+
+        assertEquals(true, config.getStartupOptions().isSnapshotOnly());
+        assertEquals(true, config.getKafkaTopics() == null || config.getKafkaTopics().isEmpty());
+    }
+
+    /** Topics without bootstrap servers can never be consumed: fail fast at job setup. */
+    @Test
+    void testTopicsWithoutBootstrapServersFailFast() {
+        KafkaJsonSourceConfigFactory factory =
+                new KafkaJsonSourceConfigFactory()
+                        .hostname("localhost")
+                        .username("root")
+                        .password("x")
+                        .kafkaTopics("t");
+        IllegalArgumentException e =
+                assertThrows(IllegalArgumentException.class, () -> factory.create(0));
+        assertEquals(true, e.getMessage().contains("Incomplete Kafka configuration"));
+    }
 }

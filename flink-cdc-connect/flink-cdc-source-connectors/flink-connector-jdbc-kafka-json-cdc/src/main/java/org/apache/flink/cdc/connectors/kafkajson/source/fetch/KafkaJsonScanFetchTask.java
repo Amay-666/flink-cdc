@@ -30,6 +30,7 @@ import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonQueryUtil
 import io.debezium.connector.SnapshotRecord;
 import io.debezium.connector.base.ChangeEventQueue;
 import io.debezium.connector.mysql.MySqlConnectorConfig;
+import io.debezium.connector.mysql.MySqlTopicSelector;
 import io.debezium.data.Envelope;
 import io.debezium.jdbc.JdbcConnection;
 import io.debezium.pipeline.DataChangeEvent;
@@ -167,12 +168,15 @@ public class KafkaJsonScanFetchTask extends AbstractScanFetchTask {
                             snapshotEventTime,
                             snapshotEventTime,
                             SnapshotRecord.TRUE);
-            List<String> kafkaTopics = sourceConfig.getKafkaTopics();
-            if (kafkaTopics.isEmpty()) {
-                throw new IllegalStateException(
-                        "No Kafka topic configured for the kafka-json source");
-            }
-            final String topic = kafkaTopics.get(0);
+            // The snapshot records come from the JDBC read, not from any Kafka topic, so they
+            // carry the logical server name — the same pseudo-topic label the schema-change
+            // records use (MySqlTopicSelector's primary topic). The label is inert metadata: the
+            // record position is the sourceOffset (eventTime/partition/offset, see
+            // KafkaJsonRecordFactory) and the snapshot/backfill merge keys on the row key, so
+            // nothing routes or positions by record topic. The kafka-topics config itself is
+            // validated at job setup, in KafkaJsonSourceConfigFactory.
+            final String topic =
+                    MySqlTopicSelector.defaultSelector(connectorConfig).getPrimaryTopic();
 
             final String selectSql =
                     KafkaJsonQueryUtils.buildSplitScanQuery(

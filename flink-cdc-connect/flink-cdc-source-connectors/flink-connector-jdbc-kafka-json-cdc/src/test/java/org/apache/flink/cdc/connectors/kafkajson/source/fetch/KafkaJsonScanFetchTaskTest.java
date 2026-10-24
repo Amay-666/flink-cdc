@@ -212,7 +212,9 @@ class KafkaJsonScanFetchTaskTest {
         assertEquals("test", source.getString("db"));
         assertEquals("users", source.getString("table"));
         assertEquals("true", source.getString("snapshot"));
-        assertEquals("t", record.topic());
+        // snapshot records are labelled with the logical server name (the pseudo-topic the
+        // schema-change records carry too), not with an entry of the configured Kafka topics
+        assertEquals("kafka_json_cdc_source", record.topic());
         assertEquals(Integer.valueOf(0), record.kafkaPartition());
     }
 
@@ -255,7 +257,8 @@ class KafkaJsonScanFetchTaskTest {
         assertEquals("test", source.getString("db"));
         assertEquals("users", source.getString("table"));
         assertEquals("true", source.getString("snapshot"));
-        assertEquals("t", record.topic());
+        // the logical server name, the pseudo-topic label of every non-Kafka record
+        assertEquals("kafka_json_cdc_source", record.topic());
         assertEquals(Integer.valueOf(0), record.kafkaPartition());
     }
 

@@ -117,7 +117,8 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
             boolean skipSnapshotBackfill,
             boolean closeIdleReaders,
             boolean scanNewlyAddedTableEnabled,
-            String kafkaBootstrapServers,
+            // nullable for a snapshot-only source: it runs as a pure JDBC dump without Kafka
+            @Nullable String kafkaBootstrapServers,
             @Nullable String kafkaGroupId,
             List<String> kafkaTopics,
             KafkaJsonSourceOptions.MessageFormat messageFormat,
@@ -146,7 +147,9 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
         this.skipSnapshotBackfill = skipSnapshotBackfill;
         this.closeIdleReaders = closeIdleReaders;
         this.scanNewlyAddedTableEnabled = scanNewlyAddedTableEnabled;
-        this.kafkaBootstrapServers = checkNotNull(kafkaBootstrapServers);
+        // nullable for a snapshot-only source running as a pure JDBC dump without Kafka; the
+        // mode-aware validation of the factory guarantees the combination
+        this.kafkaBootstrapServers = kafkaBootstrapServers;
         this.kafkaGroupId = kafkaGroupId;
         this.kafkaTopics = checkNotNull(kafkaTopics);
         this.messageFormat = messageFormat;

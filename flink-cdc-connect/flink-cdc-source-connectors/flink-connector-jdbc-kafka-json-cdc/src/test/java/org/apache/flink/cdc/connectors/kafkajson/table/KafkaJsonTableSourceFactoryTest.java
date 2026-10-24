@@ -184,6 +184,29 @@ class KafkaJsonTableSourceFactoryTest {
         assertEquals(StartupOptions.snapshot(), source.getStartupOptions());
     }
 
+    /** A snapshot-only source may omit the Kafka options and run as a pure JDBC dump. */
+    @Test
+    void testSnapshotOnlySourceMayOmitKafkaOptions() {
+        Map<String, String> options = getAllOptions();
+        options.put("scan.startup.mode", "snapshot");
+        options.remove("scan.kafka.topics");
+        options.remove("properties.kafka.bootstrap.servers");
+
+        KafkaJsonTableSource source = (KafkaJsonTableSource) createTableSource(options);
+        assertEquals(StartupOptions.snapshot(), source.getStartupOptions());
+    }
+
+    /** Topics without bootstrap servers can never be consumed: rejected at job setup. */
+    @Test
+    void testTopicsWithoutBootstrapServersIsRejected() {
+        Map<String, String> options = getAllOptions();
+        options.remove("properties.kafka.bootstrap.servers");
+
+        ValidationException e =
+                assertThrows(ValidationException.class, () -> createTableSource(options));
+        assertTrue(getRootCauseMessage(e).contains("Incomplete Kafka configuration"));
+    }
+
     @Test
     void testLatestStartupMode() {
         Map<String, String> options = getAllOptions();
@@ -216,6 +239,9 @@ class KafkaJsonTableSourceFactoryTest {
 
     @Test
     void testMissingRequiredOptions() {
+        // The Kafka options are optional now: with the default 'initial' startup mode their
+        // absence is rejected by the mode-aware validation instead of the missing-required
+        // check, with an equally explicit message.
         Map<String, String> options = getAllOptions();
         options.remove("scan.kafka.topics");
 
