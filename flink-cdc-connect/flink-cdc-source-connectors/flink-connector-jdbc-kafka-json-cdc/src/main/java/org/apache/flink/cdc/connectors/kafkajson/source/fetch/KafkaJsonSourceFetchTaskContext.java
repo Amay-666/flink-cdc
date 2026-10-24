@@ -19,6 +19,7 @@ package org.apache.flink.cdc.connectors.kafkajson.source.fetch;
 
 import org.apache.flink.cdc.common.annotation.VisibleForTesting;
 import org.apache.flink.cdc.connectors.base.config.JdbcSourceConfig;
+import org.apache.flink.cdc.connectors.base.dialect.JdbcDataSourceDialect;
 import org.apache.flink.cdc.connectors.base.relational.JdbcSourceEventDispatcher;
 import org.apache.flink.cdc.connectors.base.source.meta.offset.Offset;
 import org.apache.flink.cdc.connectors.base.source.meta.split.SourceSplitBase;
@@ -80,6 +81,9 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
 
     private final KafkaJsonSourceConfig kafkaJsonSourceConfig;
 
+    /** The concrete shared dialect this context was built with (the base keeps the same one). */
+    private final KafkaJsonDialect kafkaJsonDialect;
+
     // stateful objects built once per reader lifetime
     private KafkaJsonRecordFactory recordFactory;
     private KafkaJsonRecordConverter recordConverter;
@@ -87,6 +91,8 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
     @Nullable private KafkaConsumer<String, String> kafkaConsumer;
     @Nullable private KafkaJsonOffsetSupplier offsetSupplier;
     @Nullable private JdbcConnection jdbcConnection;
+    /** The per-reader probing view handed out by {@link #getDataSourceDialect()}. */
+    @Nullable private volatile KafkaJsonOffsetProbingDialect offsetProbingDialect;
 
     // per-split objects rebuilt on every configure()
     private ChangeEventQueue<DataChangeEvent> queue;
@@ -99,6 +105,7 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
             JdbcSourceConfig sourceConfig, KafkaJsonDialect dataSourceDialect) {
         super(sourceConfig, dataSourceDialect);
         this.kafkaJsonSourceConfig = (KafkaJsonSourceConfig) sourceConfig;
+        this.kafkaJsonDialect = dataSourceDialect;
     }
 
     @Override
@@ -219,6 +226,32 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
             offsetSupplier = new KafkaJsonOffsetSupplier(kafkaJsonSourceConfig);
         }
         return offsetSupplier;
+    }
+
+    /**
+     * Returns (creating on first use) the per-reader probing view of the shared dialect.
+     *
+     * <p>The base scan fetch task asks the context for its dialect and calls {@code
+     * displayCurrentOffset} on the returned object once per split. The view routes those probes
+     * (the MySQL, Kafka-sampled boundary) through this reader's reusable {@link
+     * KafkaJsonOffsetSupplier} — the shared dialect itself would open a throw-away {@code
+     * KafkaConsumer} per probe — while everything else delegates to the shared dialect
+     * unchanged. Built lazily on the fetch thread; the volatile field makes a benign duplicate
+     * view harmless if another thread ever races the creation.
+     */
+    @Override
+    public JdbcDataSourceDialect getDataSourceDialect() {
+        KafkaJsonOffsetProbingDialect view = offsetProbingDialect;
+        if (view == null) {
+            view = new KafkaJsonOffsetProbingDialect(kafkaJsonDialect, this::probeCurrentOffset);
+            offsetProbingDialect = view;
+        }
+        return view;
+    }
+
+    /** The probe behind {@link #getDataSourceDialect()}: the reader's reusable consumer. */
+    private KafkaJsonOffset probeCurrentOffset() {
+        return getOffsetSupplier().current();
     }
 
     /** Returns the {@link KafkaJsonRecordFactory} shared by the schema and the record converter. */

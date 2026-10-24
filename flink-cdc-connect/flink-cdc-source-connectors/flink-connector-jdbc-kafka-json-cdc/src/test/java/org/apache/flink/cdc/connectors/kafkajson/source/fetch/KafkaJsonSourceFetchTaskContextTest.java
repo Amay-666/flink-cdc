@@ -17,6 +17,7 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.fetch;
 
+import org.apache.flink.cdc.connectors.base.dialect.JdbcDataSourceDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.dialect.KafkaJsonDialect;
@@ -25,7 +26,9 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The streaming Kafka consumer is the only one that commits offsets to the consumer group (on
@@ -52,6 +55,21 @@ class KafkaJsonSourceFetchTaskContextTest {
         try (KafkaConsumer<String, String> consumer = context.getKafkaConsumer()) {
             assertEquals("test-group", consumer.groupMetadata().groupId());
         }
+    }
+
+    @Test
+    void testGetDataSourceDialectReturnsAReusedProbingView() {
+        KafkaJsonSourceConfig config = config(null);
+        KafkaJsonSourceFetchTaskContext context =
+                new KafkaJsonSourceFetchTaskContext(config, new KafkaJsonDialect(config));
+
+        // The base scan fetch task probes the low/high watermark through this getter: the view
+        // routes the MySQL (Kafka-sampled) probes to this reader's reusable offset supplier
+        // instead of the shared dialect's throw-away consumers, and stays the same instance on
+        // every call so the supplier (and its consumer) is reused for the whole reader lifetime.
+        JdbcDataSourceDialect view = context.getDataSourceDialect();
+        assertTrue(view instanceof KafkaJsonOffsetProbingDialect);
+        assertSame(view, context.getDataSourceDialect());
     }
 
     private static KafkaJsonSourceConfig config(String groupId) {
