@@ -25,14 +25,17 @@ import org.apache.flink.cdc.connectors.base.dialect.JdbcDataSourceDialect;
 import org.apache.flink.cdc.connectors.base.source.jdbc.JdbcIncrementalSource;
 import org.apache.flink.cdc.connectors.base.source.meta.offset.OffsetFactory;
 import org.apache.flink.cdc.connectors.base.source.meta.split.SourceRecords;
+import org.apache.flink.cdc.connectors.base.source.meta.split.SourceSplitBase;
 import org.apache.flink.cdc.connectors.base.source.metrics.SourceReaderMetrics;
 import org.apache.flink.cdc.connectors.base.source.reader.IncrementalSourceReaderContext;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.reader.KafkaJsonSourceReader;
 import org.apache.flink.cdc.connectors.kafkajson.source.reader.external.KafkaJsonIncrementalSourceSplitReader;
+import org.apache.flink.cdc.connectors.kafkajson.source.split.KafkaJsonSplitSerializer;
 import org.apache.flink.cdc.debezium.DebeziumDeserializationSchema;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
+import org.apache.flink.core.io.SimpleVersionedSerializer;
 
 import java.util.function.Supplier;
 
@@ -51,12 +54,31 @@ import java.util.function.Supplier;
 @Experimental
 public class KafkaJsonSource<T> extends JdbcIncrementalSource<T> {
 
+    /**
+     * The split serializer used for the reader's checkpointed splits, the split-assignment RPC
+     * and the enumerator state. It replaces the anonymous base serializer to avoid its
+     * quadratic full-buffer copies per finished split info (FLINK-38184); the byte format is
+     * identical, so checkpoints of either serializer restore through the same read path.
+     */
+    private final KafkaJsonSplitSerializer kafkaJsonSplitSerializer;
+
     public KafkaJsonSource(
             JdbcSourceConfigFactory configFactory,
             DebeziumDeserializationSchema<T> deserializationSchema,
             OffsetFactory offsetFactory,
             JdbcDataSourceDialect dataSourceDialect) {
         super(configFactory, deserializationSchema, offsetFactory, dataSourceDialect);
+        this.kafkaJsonSplitSerializer = new KafkaJsonSplitSerializer(offsetFactory);
+    }
+
+    /**
+     * Routes the split-assignment RPC and the enumerator checkpoint serializer through the
+     * copy-free serializer; the base's implementation returns the anonymous serializer built in
+     * the {@code IncrementalSource} constructor.
+     */
+    @Override
+    public SimpleVersionedSerializer<SourceSplitBase> getSplitSerializer() {
+        return kafkaJsonSplitSerializer;
     }
 
     @Override
@@ -88,7 +110,7 @@ public class KafkaJsonSource<T> extends JdbcIncrementalSource<T> {
                 readerContext.getConfiguration(),
                 incrementalSourceReaderContext,
                 sourceConfig,
-                sourceSplitSerializer,
+                kafkaJsonSplitSerializer,
                 dataSourceDialect);
     }
 }
