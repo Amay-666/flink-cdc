@@ -18,6 +18,7 @@
 package org.apache.flink.cdc.connectors.kafkajson.factory;
 
 import org.apache.flink.cdc.common.annotation.Internal;
+import org.apache.flink.cdc.common.annotation.VisibleForTesting;
 import org.apache.flink.cdc.common.configuration.ConfigOption;
 import org.apache.flink.cdc.common.configuration.Configuration;
 import org.apache.flink.cdc.common.event.TableId;
@@ -40,7 +41,9 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.time.ZoneId;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -188,19 +191,7 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
             throw new IllegalArgumentException(
                     "Cannot find any table by the option 'tables' = " + tables);
         }
-        Set<String> databases =
-                capturedTables.stream()
-                        .map(table -> table.substring(0, table.indexOf('.')))
-                        .collect(Collectors.toSet());
-        if (databases.size() != 1) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "The jdbc-kafka-json pipeline connector supports a single database, but "
-                                    + "the option 'tables' = %s captured tables from the databases %s.",
-                            tables, databases));
-        }
-        configFactory.databaseList(databases.iterator().next());
-        configFactory.tableList(capturedTables.toArray(new String[0]));
+        configureCapturedTables(configFactory, capturedTables);
 
         LOG.info(
                 "Properties for the jdbc-kafka-json data source: "
@@ -302,6 +293,25 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
                 .filter(selectors::isMatch)
                 .map(TableId::toString)
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Wires the captured tables (in {@code database.table} form, as returned by {@link
+     * #getTableList}) into the source config factory. The tables may span multiple databases:
+     * every distinct database is forwarded to {@code databaseList} — the snapshot discovery walks
+     * all of them and the comma-joined {@code database.include.list} filters the stream phase. The
+     * databases keep the discovery order (a {@link LinkedHashSet}), so the split enumeration is
+     * deterministic across job submissions.
+     */
+    @VisibleForTesting
+    public static void configureCapturedTables(
+            KafkaJsonSourceConfigFactory configFactory, List<String> capturedTables) {
+        Set<String> databases =
+                capturedTables.stream()
+                        .map(table -> table.substring(0, table.indexOf('.')))
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+        configFactory.databaseList(databases.toArray(new String[0]));
+        configFactory.tableList(capturedTables.toArray(new String[0]));
     }
 
     private static List<String> getKafkaTopics(String topics) {

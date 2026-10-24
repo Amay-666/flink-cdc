@@ -21,10 +21,13 @@ import org.apache.flink.cdc.common.configuration.ConfigOption;
 import org.apache.flink.cdc.common.configuration.Configuration;
 import org.apache.flink.cdc.common.factories.Factory;
 import org.apache.flink.cdc.connectors.kafkajson.factory.KafkaJsonDataSourceFactory;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
+import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
 import org.apache.flink.table.api.ValidationException;
 
 import org.junit.Test;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -164,6 +167,32 @@ public class KafkaJsonDataSourceFactoryTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(
                         "The value of option 'scan.incremental.snapshot.chunk.size' must larger than 1");
+    }
+
+    /**
+     * Tables may span multiple databases: the factory no longer rejects them — every distinct
+     * database is forwarded to databaseList (the source's snapshot discovery walks all of them),
+     * not just the first, and the include lists carry the full set into the stream phase.
+     */
+    @Test
+    public void testCapturedTablesMaySpanMultipleDatabases() {
+        KafkaJsonSourceConfigFactory configFactory =
+                new KafkaJsonSourceConfigFactory()
+                        .hostname("localhost")
+                        .username("root")
+                        .password("x")
+                        .kafkaBootstrapServers("localhost:9092")
+                        .kafkaTopics("topic");
+
+        KafkaJsonDataSourceFactory.configureCapturedTables(
+                configFactory, Arrays.asList("db1.orders", "db1.users", "db2.shipments"));
+
+        KafkaJsonSourceConfig config = configFactory.create(0);
+        assertThat(config.getDatabaseList()).containsExactly("db1", "db2");
+        assertThat(config.getTableList())
+                .containsExactly("db1.orders", "db1.users", "db2.shipments");
+        assertThat(config.getDbzConfiguration().getString("database.include.list"))
+                .isEqualTo("db1,db2");
     }
 
     private static Map<String, String> baseOptions() {

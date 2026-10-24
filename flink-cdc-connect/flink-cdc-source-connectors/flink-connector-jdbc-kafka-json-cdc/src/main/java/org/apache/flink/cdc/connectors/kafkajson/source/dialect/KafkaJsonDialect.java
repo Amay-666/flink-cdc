@@ -48,6 +48,7 @@ import io.debezium.relational.history.TableChanges.TableChange;
 import javax.annotation.Nullable;
 
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -146,8 +147,13 @@ public class KafkaJsonDialect implements JdbcDataSourceDialect {
             return Collections.emptyList();
         }
         try (JdbcConnection jdbc = openJdbcConnection(sourceConfig)) {
-            return KafkaJsonTableDiscoveryUtils.listTables(
-                    sourceConfig.getDatabaseList().get(0), jdbc, sourceConfig.getTableFilters());
+            List<TableId> capturedTables = new ArrayList<>();
+            for (String database : sourceConfig.getDatabaseList()) {
+                capturedTables.addAll(
+                        KafkaJsonTableDiscoveryUtils.listTables(
+                                database, jdbc, sourceConfig.getTableFilters()));
+            }
+            return capturedTables;
         } catch (SQLException e) {
             throw new FlinkRuntimeException("Error to discover tables: " + e.getMessage(), e);
         }

@@ -132,11 +132,16 @@ public class KafkaJsonPipelineRecordEmitter extends IncrementalSourceRecordEmitt
     private List<CreateTableEvent> generateCreateTableEvent(KafkaJsonSourceConfig sourceConfig) {
         try (JdbcConnection jdbc = dialect.openJdbcConnection(sourceConfig)) {
             List<CreateTableEvent> createTableEventCache = new ArrayList<>();
-            List<io.debezium.relational.TableId> capturedTableIds =
-                    KafkaJsonTableDiscoveryUtils.listTables(
-                            sourceConfig.getDatabaseList().get(0),
-                            jdbc,
-                            sourceConfig.getTableFilters());
+            // The captured tables may span multiple databases: walk every configured one — the
+            // same discovery the dialect's discoverDataCollections uses — so the cache (and with
+            // it the stream-only "emit all schemas at once" path and the INITIAL snapshot-to-
+            // stream transition backstop) covers them all.
+            List<io.debezium.relational.TableId> capturedTableIds = new ArrayList<>();
+            for (String database : sourceConfig.getDatabaseList()) {
+                capturedTableIds.addAll(
+                        KafkaJsonTableDiscoveryUtils.listTables(
+                                database, jdbc, sourceConfig.getTableFilters()));
+            }
             for (io.debezium.relational.TableId tableId : capturedTableIds) {
                 TableId commonTableId = KafkaJsonSchemaUtils.toCommonTableId(tableId);
                 createTableEventCache.add(

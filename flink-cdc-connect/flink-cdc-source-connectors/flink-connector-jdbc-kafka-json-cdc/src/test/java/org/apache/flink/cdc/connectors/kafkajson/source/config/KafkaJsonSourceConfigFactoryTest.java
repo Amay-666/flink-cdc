@@ -22,6 +22,7 @@ import org.apache.flink.cdc.connectors.base.options.StartupOptions;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Properties;
 
@@ -66,6 +67,29 @@ class KafkaJsonSourceConfigFactoryTest {
                 KafkaJsonSourceOptions.KafkaStartupMode.EARLIEST, config.getKafkaStartupMode());
         assertEquals(KafkaJsonSourceOptions.DdlParser.DRUID, config.getDdlParser());
         assertEquals("com.mysql.cj.jdbc.Driver", config.getDriverClassName());
+    }
+
+    /**
+     * A job may capture multiple databases at once: the varargs databaseList/tableList must keep
+     * the full lists (the dialect's snapshot discovery walks every entry) and join them into the
+     * comma-separated database.include.list/table.include.list that filter the stream phase.
+     */
+    @Test
+    void testMultipleDatabasesAreJoinedIntoIncludeLists() {
+        KafkaJsonSourceConfig config =
+                buildFactory()
+                        .databaseList("db1", "db2")
+                        .tableList("db1.orders", "db1.users", "db2.shipments")
+                        .create(0);
+
+        assertEquals(Arrays.asList("db1", "db2"), config.getDatabaseList());
+        assertEquals(
+                Arrays.asList("db1.orders", "db1.users", "db2.shipments"),
+                config.getTableList());
+        assertEquals("db1,db2", config.getDbzConfiguration().getString("database.include.list"));
+        assertEquals(
+                "db1.orders,db1.users,db2.shipments",
+                config.getDbzConfiguration().getString("table.include.list"));
     }
 
     @Test
