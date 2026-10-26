@@ -360,10 +360,10 @@ public class DorisE2ETest extends TestLogger {
     /**
      * Step 7: CREATE TABLE LIKE + column type change fallback — the DDL text carries no column
      * definitions, so the handler resolves the schema (in-memory store first, JDBC target
-     * fallback). Row 7000 is written into the new table, verified in Doris, then deleted and
-     * the deletion verified. Row 8000 carries a numeric c_text, then c_text changes from TEXT
-     * to INT — Doris cannot convert STRING to INT in place, so the applier falls back to the
-     * temp-column swap (add, cast, drop, rename); the cast value 12345 must survive.
+     * fallback). Row 7000 is written into the new table, verified in Doris, then deleted and the
+     * deletion verified. Row 8000 carries a numeric c_text, then c_text changes from TEXT to INT —
+     * Doris cannot convert STRING to INT in place, so the applier falls back to the temp-column
+     * swap (add, cast, drop, rename); the cast value 12345 must survive.
      */
     @Test
     public void test07CreateTableLike() throws Exception {
@@ -475,7 +475,10 @@ public class DorisE2ETest extends TestLogger {
                                         .map(row -> row.get(columnLabel))
                                         .collect(Collectors.toList());
                         assertThat(tables)
-                                .doesNotContain(dorisMatrixTable, dorisMatrixTableRenamed);
+                                .doesNotContain(
+                                        dorisMatrixTable,
+                                        dorisMatrixTableRenamed,
+                                        dorisMatrixTableLike);
                     } catch (SQLException e) {
                         throw new RuntimeException(e);
                     }
@@ -622,9 +625,13 @@ public class DorisE2ETest extends TestLogger {
         sourceConfig.password(mysqlPass);
         sourceConfig.databaseList(mysqlDb);
         sourceConfig.tableList(
-                mysqlDb + "." + MATRIX_TABLE
-                        + "|"  + MATRIX_TABLE_RENAMED
-                        + "|"  + MATRIX_TABLE_LIKE);
+                mysqlDb
+                        + "."
+                        + MATRIX_TABLE
+                        + "|"
+                        + MATRIX_TABLE_RENAMED
+                        + "|"
+                        + MATRIX_TABLE_LIKE);
         sourceConfig.databaseType(DatabaseType.TIDB);
         sourceConfig.eventTime(EventTime.TIDB_TSO);
         sourceConfig.scanNewlyAddedTableEnabled(true);
