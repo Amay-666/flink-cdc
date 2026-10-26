@@ -219,6 +219,15 @@ public class KafkaJsonSourceBuilder<T> {
         return this;
     }
 
+    /**
+     * Whether to emit all CreateTableEvents together at job startup instead of one per table
+     * interleaved with the data stream (FLINK-40102). Recommended for hundreds+ tables.
+     */
+    public KafkaJsonSourceBuilder<T> batchEmitCreateTableEvents(boolean enabled) {
+        this.configFactory.batchEmitCreateTableEvents(enabled);
+        return this;
+    }
+
     /** The Debezium connector properties (e.g. from the {@code debezium.} SQL option prefix). */
     public KafkaJsonSourceBuilder<T> debeziumProperties(Properties debeziumProperties) {
         this.configFactory.debeziumProperties(debeziumProperties);

@@ -69,6 +69,7 @@ import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSour
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_INCREMENTAL_CLOSE_IDLE_READER_ENABLED;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_INCREMENTAL_SNAPSHOT_CHUNK_KEY_COLUMN;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_INCREMENTAL_SNAPSHOT_CHUNK_SIZE;
+import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_INCREMENTAL_SNAPSHOT_EMIT_CREATE_TABLE_EVENTS_BATCH_ENABLED;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_INCREMENTAL_SNAPSHOT_METADATA_RELEASE_ENABLED;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_KAFKA_TOPICS;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_NEWLY_ADDED_TABLE_ENABLED;
@@ -134,6 +135,8 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
                             + " newly-added-table flow needs the snapshot split metadata that"
                             + " would be released.");
         }
+        boolean batchEmitCreateTableEventsEnabled =
+                config.get(SCAN_INCREMENTAL_SNAPSHOT_EMIT_CREATE_TABLE_EVENTS_BATCH_ENABLED);
 
         validateIntegerOption(SCAN_INCREMENTAL_SNAPSHOT_CHUNK_SIZE, splitSize, 1);
         validateIntegerOption(CHUNK_META_GROUP_SIZE, splitMetaGroupSize, 1);
@@ -194,7 +197,8 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
                         .kafkaStartupMode(kafkaStartupMode)
                         .ddlParser(ddlParser)
                         .kafkaProperties(kafkaProperties)
-                        .releaseSnapshotMetadata(releaseSnapshotMetadataEnabled);
+                        .releaseSnapshotMetadata(releaseSnapshotMetadataEnabled)
+                        .batchEmitCreateTableEvents(batchEmitCreateTableEventsEnabled);
 
         String chunkKeyColumn = config.get(SCAN_INCREMENTAL_SNAPSHOT_CHUNK_KEY_COLUMN);
         if (chunkKeyColumn != null) {
@@ -254,6 +258,7 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
         options.add(SCAN_INCREMENTAL_CLOSE_IDLE_READER_ENABLED);
         options.add(SCAN_NEWLY_ADDED_TABLE_ENABLED);
         options.add(SCAN_INCREMENTAL_SNAPSHOT_METADATA_RELEASE_ENABLED);
+        options.add(SCAN_INCREMENTAL_SNAPSHOT_EMIT_CREATE_TABLE_EVENTS_BATCH_ENABLED);
         options.add(KAFKA_GROUP_ID);
         options.add(MESSAGE_FORMAT);
         options.add(EVENT_TIME);

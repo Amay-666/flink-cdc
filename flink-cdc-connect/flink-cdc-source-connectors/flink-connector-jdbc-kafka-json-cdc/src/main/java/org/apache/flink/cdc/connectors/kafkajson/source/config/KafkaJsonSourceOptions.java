@@ -166,6 +166,32 @@ public class KafkaJsonSourceOptions extends JdbcSourceOptions {
     }
 
     /**
+     * Whether to emit all CreateTableEvents together at job startup (before any DataChangeEvent)
+     * instead of one per table interleaved with the data stream. Each per-table CreateTableEvent
+     * triggers a downstream FlushEvent that flushes currently buffered data — with thousands of
+     * tables that produces thousands of tiny files and interrupts the data stream thousands of
+     * times. In batch mode the flushes hit an empty buffer, so no data files are produced and the
+     * data stream is not interrupted (FLINK-40102, MySQL connector PR #4466).
+     */
+    public static final ConfigOption<Boolean>
+            SCAN_INCREMENTAL_SNAPSHOT_EMIT_CREATE_TABLE_EVENTS_BATCH_ENABLED =
+                    ConfigOptions.key(
+                                    "scan.incremental.snapshot.emit-create-table-events.batch"
+                                            + ".enabled")
+                            .booleanType()
+                            .defaultValue(false)
+                            .withDescription(
+                                    "Whether to emit all CreateTableEvents together at job startup"
+                                            + " (before any DataChangeEvent) instead of one per"
+                                            + " table interleaved with the data stream. Recommended"
+                                            + " for jobs with hundreds or more tables: each"
+                                            + " per-table CreateTableEvent triggers a downstream"
+                                            + " FlushEvent that flushes buffered data, producing"
+                                            + " tiny files and interrupting throughput. In batch"
+                                            + " mode the flushes hit an empty buffer (no data has"
+                                            + " flowed yet), so no data files are produced.");
+
+    /**
      * Whether to release the snapshot split metadata (assigned splits, finished offsets and table
      * schemas) held by the source coordinator once the source has entered the stream (incremental)
      * phase, to reduce JobManager memory pressure on jobs with a very large number of snapshot

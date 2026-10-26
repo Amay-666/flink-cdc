@@ -49,6 +49,12 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
      */
     private final boolean releaseSnapshotMetadataEnabled;
 
+    /**
+     * Whether to emit all CreateTableEvents together at job startup instead of one per table
+     * interleaved with the data stream (FLINK-40102). Recommended for hundreds+ tables.
+     */
+    private final boolean batchEmitCreateTableEventsEnabled;
+
     public KafkaJsonSourceConfig(
             int subtaskId,
             StartupOptions startupOptions,
@@ -85,7 +91,8 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
             KafkaJsonSourceOptions.KafkaStartupMode kafkaStartupMode,
             KafkaJsonSourceOptions.DdlParser ddlParser,
             Properties kafkaProperties,
-            boolean releaseSnapshotMetadataEnabled) {
+            boolean releaseSnapshotMetadataEnabled,
+            boolean batchEmitCreateTableEventsEnabled) {
         super(
                 startupOptions,
                 databaseList,
@@ -123,6 +130,7 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
         this.ddlParser = ddlParser;
         this.kafkaProperties = kafkaProperties;
         this.releaseSnapshotMetadataEnabled = releaseSnapshotMetadataEnabled;
+        this.batchEmitCreateTableEventsEnabled = batchEmitCreateTableEventsEnabled;
     }
 
     /**
@@ -196,6 +204,15 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
      */
     public boolean isReleaseSnapshotMetadataEnabled() {
         return releaseSnapshotMetadataEnabled;
+    }
+
+    /**
+     * Whether to emit all CreateTableEvents together at job startup (before any DataChangeEvent)
+     * instead of one per table interleaved with the data stream (FLINK-40102). Recommended for jobs
+     * with hundreds or more tables.
+     */
+    public boolean isBatchEmitCreateTableEventsEnabled() {
+        return batchEmitCreateTableEventsEnabled;
     }
 
     /**

@@ -281,4 +281,29 @@ public class KafkaJsonDataSourceOptions {
                                     + " snapshot splits. Disabled by default. The release happens only after"
                                     + " a checkpoint completes, so it has no effect without checkpointing."
                                     + " Cannot be enabled together with scan.newly-added-table.enabled.");
+
+    /**
+     * Whether to emit all CreateTableEvents together at job startup (before any DataChangeEvent)
+     * instead of one per table interleaved with the data stream (FLINK-40102). Recommended for
+     * hundreds+ tables: each per-table CreateTableEvent triggers a downstream FlushEvent that
+     * flushes buffered data, producing tiny files; in batch mode the flushes hit an empty buffer.
+     */
+    @Experimental
+    public static final ConfigOption<Boolean>
+            SCAN_INCREMENTAL_SNAPSHOT_EMIT_CREATE_TABLE_EVENTS_BATCH_ENABLED =
+                    ConfigOptions.key(
+                                    "scan.incremental.snapshot.emit-create-table-events.batch"
+                                            + ".enabled")
+                            .booleanType()
+                            .defaultValue(false)
+                            .withDescription(
+                                    "Whether to emit all CreateTableEvents together at job startup"
+                                            + " (before any DataChangeEvent) instead of one per"
+                                            + " table interleaved with the data stream. Recommended"
+                                            + " for jobs with hundreds or more tables: each"
+                                            + " per-table CreateTableEvent triggers a downstream"
+                                            + " FlushEvent that flushes buffered data, producing"
+                                            + " tiny files and interrupting throughput. In batch"
+                                            + " mode the flushes hit an empty buffer (no data has"
+                                            + " flowed yet), so no data files are produced.");
 }

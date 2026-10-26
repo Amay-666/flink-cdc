@@ -644,6 +644,7 @@ public class DorisE2ETest extends TestLogger {
         sourceConfig.ddlParser(DdlParser.DRUID);
         sourceConfig.releaseSnapshotMetadata(true);
         sourceConfig.scanNewlyAddedTableEnabled(false);
+        sourceConfig.batchEmitCreateTableEvents(true);
         return sourceConfig;
     }
 

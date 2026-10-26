@@ -22,7 +22,6 @@ import org.apache.flink.cdc.common.event.CreateTableEvent;
 import org.apache.flink.cdc.common.event.Event;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.schema.Schema;
-import org.apache.flink.cdc.connectors.base.options.StartupMode;
 import org.apache.flink.cdc.connectors.base.source.meta.split.SourceSplitState;
 import org.apache.flink.cdc.connectors.base.source.metrics.SourceReaderMetrics;
 import org.apache.flink.cdc.connectors.base.source.reader.IncrementalSourceRecordEmitter;
@@ -73,6 +72,17 @@ public class KafkaJsonPipelineRecordEmitter extends IncrementalSourceRecordEmitt
     private boolean alreadySendCreateTableForStreamSplit = false;
     private final List<CreateTableEvent> createTableEventCache;
 
+    /**
+     * FLINK-40102: when enabled, all CreateTableEvents are emitted together on the first record
+     * (before any DataChangeEvent) instead of one per table interleaved with the data stream. Each
+     * per-table event triggers a downstream FlushEvent that flushes buffered data; in batch mode
+     * the flushes hit an empty buffer, so no data files are produced and the data stream is not
+     * interrupted. Recommended for hundreds+ tables.
+     */
+    private final boolean batchEmitCreateTableEventsEnabled;
+
+    private boolean batchEmitted = false;
+
     public KafkaJsonPipelineRecordEmitter(
             DebeziumDeserializationSchema<Event> debeziumDeserializationSchema,
             SourceReaderMetrics sourceReaderMetrics,
@@ -86,15 +96,28 @@ public class KafkaJsonPipelineRecordEmitter extends IncrementalSourceRecordEmitt
         this.dialect = new KafkaJsonDialect(sourceConfig);
         this.alreadySendCreateTableTables = new HashSet<>();
         this.createTableEventCache = generateCreateTableEvent(sourceConfig);
+        this.batchEmitCreateTableEventsEnabled = sourceConfig.isBatchEmitCreateTableEventsEnabled();
     }
 
     @Override
     protected void processElement(
             SourceRecord element, SourceOutput<Event> output, SourceSplitState splitState)
             throws Exception {
+        // FLINK-40102 batch mode: emit all CreateTableEvents together on the first record, before
+        // any DataChangeEvent. Each per-table event would trigger a downstream FlushEvent that
+        // flushes buffered data; in batch mode the flushes hit an empty buffer (no data has flowed
+        // yet), so no data files are produced and the data stream is not interrupted.
+        if (batchEmitCreateTableEventsEnabled && !batchEmitted) {
+            createTableEventCache.forEach(output::collect);
+            createTableEventCache.forEach(
+                    event -> alreadySendCreateTableTables.add(event.tableId()));
+            batchEmitted = true;
+        }
+
         if (isLowWatermarkEvent(element) && splitState.isSnapshotSplitState()) {
             // In Snapshot phase of INITIAL startup mode, we lazily send CreateTableEvent to
-            // downstream to avoid checkpoint timeout.
+            // downstream to avoid checkpoint timeout. In batch mode, all events have already been
+            // sent upfront, so the alreadySendCreateTableTables check skips the per-table emission.
             io.debezium.relational.TableId tableId =
                     splitState.asSnapshotSplitState().toSourceSplit().getTableId();
             TableId commonTableId = KafkaJsonSchemaUtils.toCommonTableId(tableId);
@@ -106,19 +129,15 @@ public class KafkaJsonPipelineRecordEmitter extends IncrementalSourceRecordEmitt
             }
         } else if (splitState.isStreamSplitState() && !alreadySendCreateTableForStreamSplit) {
             alreadySendCreateTableForStreamSplit = true;
-            if (sourceConfig.getStartupOptions().startupMode.equals(StartupMode.INITIAL)) {
-                // In Snapshot -> Binlog transition of INITIAL startup mode, ensure all table
-                // schemas have been sent to downstream. We use previously cached schema instead of
-                // re-request latest schema because there might be some pending schema change events
-                // in the queue, and that may accidentally emit evolved schema before corresponding
-                // schema change events.
-                createTableEventCache.stream()
-                        .filter(event -> !alreadySendCreateTableTables.contains(event.tableId()))
-                        .forEach(output::collect);
-            } else {
-                // In stream-only mode, we simply emit all schemas at once.
-                createTableEventCache.forEach(output::collect);
-            }
+            // Emit any schemas not already sent — either per-table during the snapshot phase
+            // (INITIAL) or by the upfront batch emission (FLINK-40102). We use the previously
+            // cached schemas instead of re-requesting the latest ones because there might be
+            // pending schema change events in the queue, and re-requesting could accidentally
+            // emit evolved schemas before the corresponding schema change events. In non-batch
+            // stream-only mode the set is empty, so everything is emitted.
+            createTableEventCache.stream()
+                    .filter(event -> !alreadySendCreateTableTables.contains(event.tableId()))
+                    .forEach(output::collect);
         }
         super.processElement(element, output, splitState);
     }

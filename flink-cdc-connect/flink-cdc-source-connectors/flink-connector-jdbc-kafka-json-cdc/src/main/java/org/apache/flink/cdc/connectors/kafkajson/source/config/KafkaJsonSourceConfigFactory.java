@@ -68,6 +68,12 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
     private boolean releaseSnapshotMetadataEnabled = false;
 
     /**
+     * Whether to emit all CreateTableEvents together at job startup instead of one per table
+     * interleaved with the data stream (FLINK-40102). Recommended for hundreds+ tables.
+     */
+    private boolean batchEmitCreateTableEventsEnabled = false;
+
+    /**
      * Resolves the kebab-case default value of a {@code stringType()} connector option into its
      * enum. Keeps the config option default and the field default in sync.
      */
@@ -190,7 +196,8 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
                 kafkaStartupMode,
                 ddlParser,
                 kafkaProperties,
-                releaseSnapshotMetadataEnabled);
+                releaseSnapshotMetadataEnabled,
+                batchEmitCreateTableEventsEnabled);
     }
 
     /** The Kafka bootstrap servers that external tools (canal) write the messages to. */
@@ -206,6 +213,17 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
      */
     public KafkaJsonSourceConfigFactory releaseSnapshotMetadata(boolean enabled) {
         this.releaseSnapshotMetadataEnabled = enabled;
+        return this;
+    }
+
+    /**
+     * Whether to emit all CreateTableEvents together at job startup (before any DataChangeEvent)
+     * instead of one per table interleaved with the data stream (FLINK-40102). Recommended for
+     * hundreds+ tables: each per-table CreateTableEvent triggers a downstream FlushEvent that
+     * flushes buffered data, producing tiny files; in batch mode the flushes hit an empty buffer.
+     */
+    public KafkaJsonSourceConfigFactory batchEmitCreateTableEvents(boolean enabled) {
+        this.batchEmitCreateTableEventsEnabled = enabled;
         return this;
     }
 
