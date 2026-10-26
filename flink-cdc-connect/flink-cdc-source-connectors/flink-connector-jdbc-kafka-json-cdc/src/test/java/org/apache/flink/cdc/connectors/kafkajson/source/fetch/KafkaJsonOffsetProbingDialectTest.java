@@ -76,8 +76,7 @@ class KafkaJsonOffsetProbingDialectTest {
         KafkaJsonSourceConfig config = config(DatabaseType.MYSQL);
         KafkaJsonDialect delegate = new KafkaJsonDialect(config);
         KafkaJsonOffsetProbingDialect view =
-                new KafkaJsonOffsetProbingDialect(
-                        delegate, () -> KafkaJsonOffset.INITIAL_OFFSET);
+                new KafkaJsonOffsetProbingDialect(delegate, () -> KafkaJsonOffset.INITIAL_OFFSET);
 
         assertEquals(delegate.getName(), view.getName());
         assertTrue(view.isIncludeDataCollection(config, TableId.parse("test.users")));

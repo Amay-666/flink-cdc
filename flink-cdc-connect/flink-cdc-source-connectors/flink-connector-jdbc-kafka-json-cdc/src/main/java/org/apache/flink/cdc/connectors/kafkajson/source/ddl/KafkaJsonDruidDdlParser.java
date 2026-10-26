@@ -113,9 +113,7 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
             // carry one for a Debezium schema-change record, and deriving it from the statement
             // would
             // build a schema under a name the sink's table mapping has not seen.
-            return tableId == null
-                    ? null
-                    : parseCreate(createTableStatement, tableId);
+            return tableId == null ? null : parseCreate(createTableStatement, tableId);
         }
         if (statement instanceof MySqlRenameTableStatement) {
             return parseRenameTable(
@@ -144,10 +142,10 @@ public class KafkaJsonDruidDdlParser implements KafkaJsonDdlParser {
 
         boolean likeHasQualifier =
                 !StringUtils.isNullOrWhitespaceOnly(likeCatalog)
-                || !StringUtils.isNullOrWhitespaceOnly(likeSchema);
+                        || !StringUtils.isNullOrWhitespaceOnly(likeSchema);
         boolean tgtHasQualifier =
                 !StringUtils.isNullOrWhitespaceOnly(statement.getCatalog())
-                || !StringUtils.isNullOrWhitespaceOnly(statement.getSchema());
+                        || !StringUtils.isNullOrWhitespaceOnly(statement.getSchema());
 
         if (likeHasQualifier) {
             return KafkaJsonDdlParsedResult.createLike(

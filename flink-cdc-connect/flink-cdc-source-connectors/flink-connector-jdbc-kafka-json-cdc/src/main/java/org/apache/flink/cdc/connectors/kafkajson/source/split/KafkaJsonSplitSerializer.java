@@ -33,24 +33,24 @@ import java.util.List;
  * The split serializer of the jdbc-kafka-json source, a drop-in replacement for the anonymous
  * {@link SourceSplitSerializer} that {@code IncrementalSource} builds by default.
  *
- * <p>Why a copy of the base's serialize logic: the base's {@code writeFinishedSplitsInfo}
- * delegates to {@code FinishedSnapshotSplitInfo#serialize(out)}, whose trailing {@code
- * getCopyOfBuffer()} returns a copy of the <b>whole accumulated buffer</b> per finished split
- * (FLINK-38184). The stream split of a billion-row source carries ~120k finished split infos,
- * so one checkpoint paid gigabytes of discarded copies — minutes of blocked reading. The loop
- * is inlined here writing the very same fields (byte-identical format, see the base's {@code
- * readFinishedSplitsInfo}) without the per-entry copies; MySqlSplitSerializer of the MySQL
- * connector is the precedent for a connector owning its split serializer.
+ * <p>Why a copy of the base's serialize logic: the base's {@code writeFinishedSplitsInfo} delegates
+ * to {@code FinishedSnapshotSplitInfo#serialize(out)}, whose trailing {@code getCopyOfBuffer()}
+ * returns a copy of the <b>whole accumulated buffer</b> per finished split (FLINK-38184). The
+ * stream split of a billion-row source carries ~120k finished split infos, so one checkpoint paid
+ * gigabytes of discarded copies — minutes of blocked reading. The loop is inlined here writing the
+ * very same fields (byte-identical format, see the base's {@code readFinishedSplitsInfo}) without
+ * the per-entry copies; MySqlSplitSerializer of the MySQL connector is the precedent for a
+ * connector owning its split serializer.
  *
- * <p>Byte-compatibility contract: {@link #serialize(SourceSplitBase)} produces exactly the
- * bytes the base's serializer produces for the same split (same version, same field order), so
+ * <p>Byte-compatibility contract: {@link #serialize(SourceSplitBase)} produces exactly the bytes
+ * the base's serializer produces for the same split (same version, same field order), so
  * checkpoints written by either serializer deserialize through the inherited read path — old
  * checkpoints restore unchanged, and mixed versions during a rolling restart are safe.
  *
  * <p>The base's {@code serializedFormCache} optimization (a package-private field on the split
  * classes) cannot be used from this package; skipping it only costs re-serializing the current
- * in-flight split per checkpoint — a few hundred bytes for a snapshot split, the linear size of
- * the stream split, which is the unavoidable state size anyway.
+ * in-flight split per checkpoint — a few hundred bytes for a snapshot split, the linear size of the
+ * stream split, which is the unavoidable state size anyway.
  */
 public class KafkaJsonSplitSerializer extends SourceSplitSerializer {
 
@@ -113,8 +113,8 @@ public class KafkaJsonSplitSerializer extends SourceSplitSerializer {
     }
 
     /**
-     * Writes the finished split infos of the stream split with the field order of the base's
-     * {@code readFinishedSplitsInfo}: tableId, splitId, splitStart, splitEnd, offsetFactory,
+     * Writes the finished split infos of the stream split with the field order of the base's {@code
+     * readFinishedSplitsInfo}: tableId, splitId, splitStart, splitEnd, offsetFactory,
      * highWatermark, useCatalogBeforeSchema. The base's version delegates to {@code
      * FinishedSnapshotSplitInfo#serialize(out)} and pays a full-buffer copy per entry (the
      * discarded return value); the writes here are byte-identical but copy-free.
@@ -131,8 +131,7 @@ public class KafkaJsonSplitSerializer extends SourceSplitSerializer {
             out.writeUTF(SerializerUtils.rowToSerializedString(splitInfo.getSplitEnd()));
             out.writeUTF(SerializerUtils.rowToSerializedString(splitInfo.getOffsetFactory()));
             writeOffsetPosition(splitInfo.getHighWatermark(), out);
-            out.writeBoolean(
-                    SerializerUtils.shouldUseCatalogBeforeSchema(splitInfo.getTableId()));
+            out.writeBoolean(SerializerUtils.shouldUseCatalogBeforeSchema(splitInfo.getTableId()));
         }
     }
 }

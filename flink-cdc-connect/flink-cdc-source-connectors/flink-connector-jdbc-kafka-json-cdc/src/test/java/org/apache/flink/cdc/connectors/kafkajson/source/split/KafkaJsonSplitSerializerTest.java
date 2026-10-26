@@ -49,10 +49,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The byte-format contract of {@link KafkaJsonSplitSerializer}: its output must be identical to
- * the serializer the base framework would build, so checkpoints of either serializer restore
- * through the shared read path. The custom write path exists only to drop the quadratic
- * full-buffer copies the base pays per finished split info (FLINK-38184).
+ * The byte-format contract of {@link KafkaJsonSplitSerializer}: its output must be identical to the
+ * serializer the base framework would build, so checkpoints of either serializer restore through
+ * the shared read path. The custom write path exists only to drop the quadratic full-buffer copies
+ * the base pays per finished split info (FLINK-38184).
  */
 class KafkaJsonSplitSerializerTest {
 

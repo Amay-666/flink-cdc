@@ -120,9 +120,7 @@ class KafkaJsonDebeziumDdlParserTest {
         assertEquals(new TableId("other", null, "users"), result.getNewTableId());
 
         // ③ source qualified — the database is explicit in the SQL
-        result =
-                parser.parse(
-                        "test", TABLE_ID, null, "CREATE TABLE `users` LIKE test.`users2`");
+        result = parser.parse("test", TABLE_ID, null, "CREATE TABLE `users` LIKE test.`users2`");
         assertEquals(KafkaJsonTableChangeType.CREATE_LIKE, result.getType());
         assertEquals(new TableId("test", null, "users2"), result.getTableId());
     }

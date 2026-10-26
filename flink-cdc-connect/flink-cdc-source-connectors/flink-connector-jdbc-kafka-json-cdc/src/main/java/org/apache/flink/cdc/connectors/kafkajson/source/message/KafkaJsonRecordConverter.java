@@ -164,7 +164,7 @@ public class KafkaJsonRecordConverter {
         String op = message.getType() == null ? "" : message.getType().toUpperCase(Locale.ROOT);
         switch (op) {
             case "INSERT":
-            // Alibaba DTS (data transmission service) emits INIT for its initial snapshot
+                // Alibaba DTS (data transmission service) emits INIT for its initial snapshot
             case "INIT":
                 return convertCanalRows(
                         message, topic, partition, kafkaOffset, Envelope.Operation.CREATE);
@@ -280,8 +280,10 @@ public class KafkaJsonRecordConverter {
 
         List<Map<String, String>> data = message.getData();
         List<Map<String, String>> old = message.getOld();
-        Preconditions.checkArgument(data != null && !data.isEmpty(),
-                "Canal DML message must not contain data rows for %s operation", op);
+        Preconditions.checkArgument(
+                data != null && !data.isEmpty(),
+                "Canal DML message must not contain data rows for %s operation",
+                op);
         List<SourceRecord> records = new ArrayList<>(data.size());
         for (int i = 0; i < data.size(); i++) {
             Map<String, String> afterRow = data.get(i);
