@@ -634,7 +634,6 @@ public class DorisE2ETest extends TestLogger {
                         + MATRIX_TABLE_LIKE);
         sourceConfig.databaseType(DatabaseType.TIDB);
         sourceConfig.eventTime(EventTime.TIDB_TSO);
-        sourceConfig.scanNewlyAddedTableEnabled(true);
         sourceConfig.includeSchemaChanges(true);
         sourceConfig.kafkaBootstrapServers(kafkaServers);
         sourceConfig.kafkaGroupId(kafkaGroup);
@@ -643,6 +642,8 @@ public class DorisE2ETest extends TestLogger {
         sourceConfig.serverTimeZone("Asia/Shanghai");
         sourceConfig.messageFormat(MessageFormat.CANAL);
         sourceConfig.ddlParser(DdlParser.DRUID);
+        sourceConfig.releaseSnapshotMetadata(true);
+        sourceConfig.scanNewlyAddedTableEnabled(false);
         return sourceConfig;
     }
 

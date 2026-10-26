@@ -109,7 +109,8 @@ class KafkaJsonTableSourceFactoryTest {
                         KafkaJsonSourceOptions.EventTime.ES,
                         KafkaJsonSourceOptions.KafkaStartupMode.EARLIEST,
                         KafkaJsonSourceOptions.DdlParser.DRUID,
-                        new Properties());
+                        new Properties(),
+                        false);
 
         assertEquals(expectedSource, actualSource);
     }
@@ -170,7 +171,8 @@ class KafkaJsonTableSourceFactoryTest {
                         KafkaJsonSourceOptions.EventTime.TS,
                         KafkaJsonSourceOptions.KafkaStartupMode.LATEST,
                         KafkaJsonSourceOptions.DdlParser.DEBEZIUM,
-                        kafkaProperties);
+                        kafkaProperties,
+                        false);
 
         assertEquals(expectedSource, actualSource);
     }

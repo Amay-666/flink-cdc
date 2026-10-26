@@ -63,6 +63,11 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
     private Properties kafkaProperties = new Properties();
 
     /**
+     * Whether to release the snapshot split metadata after the stream phase starts (FLINK-40697).
+     */
+    private boolean releaseSnapshotMetadataEnabled = false;
+
+    /**
      * Resolves the kebab-case default value of a {@code stringType()} connector option into its
      * enum. Keeps the config option default and the field default in sync.
      */
@@ -96,6 +101,14 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
                     "scan.database.type="
                             + databaseType
                             + " is declared but not implemented; only 'mysql' and 'tidb' are supported in this version.");
+        }
+        // The newly-added-table flow needs the snapshot metadata that the release would drop,
+        // so the two options are mutually exclusive (checked at job setup, per FLINK-40697).
+        if (releaseSnapshotMetadataEnabled && scanNewlyAddedTableEnabled) {
+            throw new IllegalArgumentException(
+                    "scan.incremental.snapshot.metadata.release.enabled cannot be enabled together"
+                            + " with scan.newly-added-table.enabled: the newly-added-table flow"
+                            + " needs the snapshot split metadata that would be released.");
         }
         Properties props = new Properties();
         // Debezium MySQL connector config is only used as a light carrier for logical name /
@@ -176,12 +189,23 @@ public class KafkaJsonSourceConfigFactory extends JdbcSourceConfigFactory {
                 eventTime,
                 kafkaStartupMode,
                 ddlParser,
-                kafkaProperties);
+                kafkaProperties,
+                releaseSnapshotMetadataEnabled);
     }
 
     /** The Kafka bootstrap servers that external tools (canal) write the messages to. */
     public KafkaJsonSourceConfigFactory kafkaBootstrapServers(String bootstrapServers) {
         this.kafkaBootstrapServers = bootstrapServers;
+        return this;
+    }
+
+    /**
+     * Whether to release the snapshot split metadata after the stream phase starts (FLINK-40697).
+     * Must not be combined with {@code scanNewlyAddedTableEnabled} (the newly-added-table flow
+     * needs the metadata that would be released).
+     */
+    public KafkaJsonSourceConfigFactory releaseSnapshotMetadata(boolean enabled) {
+        this.releaseSnapshotMetadataEnabled = enabled;
         return this;
     }
 

@@ -44,6 +44,10 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
     private final KafkaJsonSourceOptions.KafkaStartupMode kafkaStartupMode;
     private final KafkaJsonSourceOptions.DdlParser ddlParser;
     private final Properties kafkaProperties;
+    /**
+     * Whether to release the snapshot split metadata after the stream phase starts (FLINK-40697).
+     */
+    private final boolean releaseSnapshotMetadataEnabled;
 
     public KafkaJsonSourceConfig(
             int subtaskId,
@@ -80,7 +84,8 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
             KafkaJsonSourceOptions.EventTime eventTime,
             KafkaJsonSourceOptions.KafkaStartupMode kafkaStartupMode,
             KafkaJsonSourceOptions.DdlParser ddlParser,
-            Properties kafkaProperties) {
+            Properties kafkaProperties,
+            boolean releaseSnapshotMetadataEnabled) {
         super(
                 startupOptions,
                 databaseList,
@@ -117,6 +122,7 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
         this.kafkaStartupMode = kafkaStartupMode;
         this.ddlParser = ddlParser;
         this.kafkaProperties = kafkaProperties;
+        this.releaseSnapshotMetadataEnabled = releaseSnapshotMetadataEnabled;
     }
 
     /**
@@ -180,6 +186,16 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
     public boolean isSkipSnapshotBackfill() {
         return super.isSkipSnapshotBackfill()
                 || databaseType == KafkaJsonSourceOptions.DatabaseType.MYSQL;
+    }
+
+    /**
+     * Whether to release the snapshot-split metadata (assigned splits, finished offsets and table
+     * schemas) held by the coordinator once the source has entered the stream phase (FLINK-40697).
+     * The release happens only after a checkpoint completes, so it has no effect without
+     * checkpointing.
+     */
+    public boolean isReleaseSnapshotMetadataEnabled() {
+        return releaseSnapshotMetadataEnabled;
     }
 
     /**

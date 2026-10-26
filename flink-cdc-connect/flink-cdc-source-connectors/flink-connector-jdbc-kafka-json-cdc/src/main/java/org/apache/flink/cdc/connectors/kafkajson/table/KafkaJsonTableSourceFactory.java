@@ -95,6 +95,15 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
                 config.get(SourceOptions.SCAN_INCREMENTAL_CLOSE_IDLE_READER_ENABLED);
         boolean scanNewlyAddedTableEnabled =
                 config.get(SourceOptions.SCAN_NEWLY_ADDED_TABLE_ENABLED);
+        boolean releaseSnapshotMetadataEnabled =
+                config.get(
+                        KafkaJsonSourceOptions.SCAN_INCREMENTAL_SNAPSHOT_METADATA_RELEASE_ENABLED);
+        if (releaseSnapshotMetadataEnabled && scanNewlyAddedTableEnabled) {
+            throw new ValidationException(
+                    "scan.incremental.snapshot.metadata.release.enabled cannot be enabled together"
+                            + " with scan.newly-added-table.enabled: the newly-added-table flow"
+                            + " needs the snapshot split metadata that would be released.");
+        }
 
         String kafkaBootstrapServers =
                 config.getOptional(KafkaJsonSourceOptions.KAFKA_BOOTSTRAP_SERVERS).orElse(null);
@@ -178,7 +187,8 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
                 eventTime,
                 kafkaStartupMode,
                 ddlParser,
-                kafkaProperties);
+                kafkaProperties,
+                releaseSnapshotMetadataEnabled);
     }
 
     @Override
@@ -213,6 +223,7 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
         options.add(SourceOptions.SCAN_INCREMENTAL_SNAPSHOT_BACKFILL_SKIP);
         options.add(SourceOptions.SCAN_INCREMENTAL_CLOSE_IDLE_READER_ENABLED);
         options.add(SourceOptions.SCAN_NEWLY_ADDED_TABLE_ENABLED);
+        options.add(KafkaJsonSourceOptions.SCAN_INCREMENTAL_SNAPSHOT_METADATA_RELEASE_ENABLED);
         options.add(KafkaJsonSourceOptions.KAFKA_GROUP_ID);
         options.add(KafkaJsonSourceOptions.MESSAGE_FORMAT);
         options.add(KafkaJsonSourceOptions.DATABASE_TYPE);
@@ -270,9 +281,9 @@ public class KafkaJsonTableSourceFactory implements DynamicTableSourceFactory {
      * The Kafka options are optional only for a snapshot-only source ({@code
      * scan.startup.mode=snapshot}): it runs as a pure JDBC dump — the watermark probe
      * short-circuits to the INITIAL offset and the stream fetch task completes its no-op stream
-     * split without opening a Kafka connection. Every other mode consumes the incremental
-     * changes from Kafka, so both the topics and the bootstrap servers are required, and they
-     * must be configured together.
+     * split without opening a Kafka connection. Every other mode consumes the incremental changes
+     * from Kafka, so both the topics and the bootstrap servers are required, and they must be
+     * configured together.
      */
     private static void validateKafkaOptions(
             StartupOptions startupOptions, List<String> topics, String bootstrapServers) {

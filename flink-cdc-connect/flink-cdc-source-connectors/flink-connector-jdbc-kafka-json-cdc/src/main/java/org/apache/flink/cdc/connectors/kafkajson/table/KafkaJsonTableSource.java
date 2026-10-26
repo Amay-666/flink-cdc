@@ -86,6 +86,11 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
     private final KafkaJsonSourceOptions.DdlParser ddlParser;
     private final Properties kafkaProperties;
 
+    /**
+     * Whether to release the snapshot split metadata after the stream phase starts (FLINK-40697).
+     */
+    private final boolean releaseSnapshotMetadataEnabled;
+
     // --------------------------------------------------------------------------------------------
     // Mutable attributes
     // --------------------------------------------------------------------------------------------
@@ -126,7 +131,8 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
             KafkaJsonSourceOptions.EventTime eventTime,
             KafkaJsonSourceOptions.KafkaStartupMode kafkaStartupMode,
             KafkaJsonSourceOptions.DdlParser ddlParser,
-            Properties kafkaProperties) {
+            Properties kafkaProperties,
+            boolean releaseSnapshotMetadataEnabled) {
         this.physicalSchema = physicalSchema;
         this.port = port;
         this.hostname = checkNotNull(hostname);
@@ -158,6 +164,7 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
         this.kafkaStartupMode = kafkaStartupMode;
         this.ddlParser = ddlParser;
         this.kafkaProperties = kafkaProperties;
+        this.releaseSnapshotMetadataEnabled = releaseSnapshotMetadataEnabled;
         // Mutable attributes
         this.producedDataType = physicalSchema.toPhysicalRowDataType();
         this.metadataKeys = Collections.emptyList();
@@ -222,6 +229,7 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
                         .kafkaStartupMode(kafkaStartupMode)
                         .ddlParser(ddlParser)
                         .kafkaProperties(kafkaProperties)
+                        .releaseSnapshotMetadata(releaseSnapshotMetadataEnabled)
                         .debeziumProperties(dbzProperties)
                         .deserializer(deserializer)
                         .build();
@@ -294,7 +302,8 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
                         eventTime,
                         kafkaStartupMode,
                         ddlParser,
-                        kafkaProperties);
+                        kafkaProperties,
+                        releaseSnapshotMetadataEnabled);
         source.metadataKeys = metadataKeys;
         source.producedDataType = producedDataType;
         return source;
@@ -337,6 +346,7 @@ public class KafkaJsonTableSource implements ScanTableSource, SupportsReadingMet
                 && kafkaStartupMode == that.kafkaStartupMode
                 && ddlParser == that.ddlParser
                 && Objects.equals(kafkaProperties, that.kafkaProperties)
+                && releaseSnapshotMetadataEnabled == that.releaseSnapshotMetadataEnabled
                 && Objects.equals(producedDataType, that.producedDataType)
                 && Objects.equals(metadataKeys, that.metadataKeys);
     }

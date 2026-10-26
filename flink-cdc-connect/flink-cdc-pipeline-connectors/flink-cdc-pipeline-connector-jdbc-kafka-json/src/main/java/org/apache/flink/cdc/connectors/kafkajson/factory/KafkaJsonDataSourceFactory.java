@@ -69,6 +69,7 @@ import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSour
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_INCREMENTAL_CLOSE_IDLE_READER_ENABLED;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_INCREMENTAL_SNAPSHOT_CHUNK_KEY_COLUMN;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_INCREMENTAL_SNAPSHOT_CHUNK_SIZE;
+import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_INCREMENTAL_SNAPSHOT_METADATA_RELEASE_ENABLED;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_KAFKA_TOPICS;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_NEWLY_ADDED_TABLE_ENABLED;
 import static org.apache.flink.cdc.connectors.kafkajson.source.KafkaJsonDataSourceOptions.SCAN_SNAPSHOT_FETCH_SIZE;
@@ -124,6 +125,15 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
         int connectMaxRetries = config.get(CONNECT_MAX_RETRIES);
         int connectionPoolSize = config.get(CONNECTION_POOL_SIZE);
         boolean scanNewlyAddedTableEnabled = config.get(SCAN_NEWLY_ADDED_TABLE_ENABLED);
+        boolean releaseSnapshotMetadataEnabled =
+                config.get(SCAN_INCREMENTAL_SNAPSHOT_METADATA_RELEASE_ENABLED);
+        if (releaseSnapshotMetadataEnabled && scanNewlyAddedTableEnabled) {
+            throw new ValidationException(
+                    "scan.incremental.snapshot.metadata.release.enabled cannot be enabled"
+                            + " together with scan.newly-added-table.enabled: the"
+                            + " newly-added-table flow needs the snapshot split metadata that"
+                            + " would be released.");
+        }
 
         validateIntegerOption(SCAN_INCREMENTAL_SNAPSHOT_CHUNK_SIZE, splitSize, 1);
         validateIntegerOption(CHUNK_META_GROUP_SIZE, splitMetaGroupSize, 1);
@@ -133,8 +143,7 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
         validateDistributionFactorUpper(distributionFactorUpper);
         validateDistributionFactorLower(distributionFactorLower);
 
-        String kafkaBootstrapServers =
-                config.getOptional(KAFKA_BOOTSTRAP_SERVERS).orElse(null);
+        String kafkaBootstrapServers = config.getOptional(KAFKA_BOOTSTRAP_SERVERS).orElse(null);
         String kafkaGroupId = config.getOptional(KAFKA_GROUP_ID).orElse(null);
         String kafkaTopicsOption = config.getOptional(SCAN_KAFKA_TOPICS).orElse(null);
         List<String> kafkaTopics =
@@ -184,7 +193,8 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
                         .eventTime(eventTime)
                         .kafkaStartupMode(kafkaStartupMode)
                         .ddlParser(ddlParser)
-                        .kafkaProperties(kafkaProperties);
+                        .kafkaProperties(kafkaProperties)
+                        .releaseSnapshotMetadata(releaseSnapshotMetadataEnabled);
 
         String chunkKeyColumn = config.get(SCAN_INCREMENTAL_SNAPSHOT_CHUNK_KEY_COLUMN);
         if (chunkKeyColumn != null) {
@@ -243,6 +253,7 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
         options.add(CONNECTION_POOL_SIZE);
         options.add(SCAN_INCREMENTAL_CLOSE_IDLE_READER_ENABLED);
         options.add(SCAN_NEWLY_ADDED_TABLE_ENABLED);
+        options.add(SCAN_INCREMENTAL_SNAPSHOT_METADATA_RELEASE_ENABLED);
         options.add(KAFKA_GROUP_ID);
         options.add(MESSAGE_FORMAT);
         options.add(EVENT_TIME);
@@ -306,9 +317,9 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
 
     /**
      * Wires the captured tables (in {@code database.table} form, as returned by {@link
-     * #getTableList}) into the source config factory. The tables may span multiple databases:
-     * every distinct database is forwarded to {@code databaseList} — the snapshot discovery walks
-     * all of them and the comma-joined {@code database.include.list} filters the stream phase. The
+     * #getTableList}) into the source config factory. The tables may span multiple databases: every
+     * distinct database is forwarded to {@code databaseList} — the snapshot discovery walks all of
+     * them and the comma-joined {@code database.include.list} filters the stream phase. The
      * databases keep the discovery order (a {@link LinkedHashSet}), so the split enumeration is
      * deterministic across job submissions.
      */
@@ -334,9 +345,9 @@ public class KafkaJsonDataSourceFactory implements DataSourceFactory {
      * The Kafka options are optional only for a snapshot-only pipeline ({@code
      * scan.startup.mode=snapshot}): it runs as a pure JDBC dump — the watermark probe
      * short-circuits to the INITIAL offset and the stream fetch task completes its no-op stream
-     * split without opening a Kafka connection. Every other mode consumes the incremental
-     * changes from Kafka, so both the topics and the bootstrap servers are required, and they
-     * must be configured together.
+     * split without opening a Kafka connection. Every other mode consumes the incremental changes
+     * from Kafka, so both the topics and the bootstrap servers are required, and they must be
+     * configured together.
      */
     private static void validateKafkaOptions(
             StartupOptions startupOptions, List<String> topics, String bootstrapServers) {

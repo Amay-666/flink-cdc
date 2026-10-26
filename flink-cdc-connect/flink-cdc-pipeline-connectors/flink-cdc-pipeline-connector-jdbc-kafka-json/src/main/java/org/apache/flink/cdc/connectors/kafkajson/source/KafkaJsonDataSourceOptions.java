@@ -261,5 +261,24 @@ public class KafkaJsonDataSourceOptions {
                     .withDescription(
                             "Whether send schema change events, by default is true. If set to false, the schema changes will not be sent.");
 
-    private KafkaJsonDataSourceOptions() {}
+    /**
+     * Whether to release the snapshot split metadata (assigned splits, finished offsets and table
+     * schemas) held by the source coordinator once the source has entered the stream (incremental)
+     * phase (FLINK-40697). Disabled by default. The release happens only after a checkpoint
+     * completes, so it has no effect without checkpointing. Cannot be enabled together with {@code
+     * scan.newly-added-table.enabled}, since that flow needs the metadata that would be released.
+     */
+    @Experimental
+    public static final ConfigOption<Boolean> SCAN_INCREMENTAL_SNAPSHOT_METADATA_RELEASE_ENABLED =
+            ConfigOptions.key("scan.incremental.snapshot.metadata.release.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to release the snapshot split metadata (assigned splits, finished"
+                                    + " offsets and table schemas) held by the source coordinator once the"
+                                    + " source has entered the stream (incremental) phase, to reduce"
+                                    + " JobManager memory pressure on jobs with a very large number of"
+                                    + " snapshot splits. Disabled by default. The release happens only after"
+                                    + " a checkpoint completes, so it has no effect without checkpointing."
+                                    + " Cannot be enabled together with scan.newly-added-table.enabled.");
 }

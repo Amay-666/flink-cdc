@@ -210,6 +210,15 @@ public class KafkaJsonSourceBuilder<T> {
         return this;
     }
 
+    /**
+     * Whether to release the snapshot split metadata after the stream phase starts (FLINK-40697).
+     * Must not be combined with {@code scanNewlyAddedTableEnabled}.
+     */
+    public KafkaJsonSourceBuilder<T> releaseSnapshotMetadata(boolean enabled) {
+        this.configFactory.releaseSnapshotMetadata(enabled);
+        return this;
+    }
+
     /** The Debezium connector properties (e.g. from the {@code debezium.} SQL option prefix). */
     public KafkaJsonSourceBuilder<T> debeziumProperties(Properties debeziumProperties) {
         this.configFactory.debeziumProperties(debeziumProperties);
