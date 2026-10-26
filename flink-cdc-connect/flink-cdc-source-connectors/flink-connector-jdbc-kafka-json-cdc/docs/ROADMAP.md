@@ -18,10 +18,10 @@ limitations under the License.
 # Roadmap / 优先级规划
 
 > 分支：`feature/3.2.1-jdbc-kafka-json`
-> 状态：2026-08-13 排定；Phase 11 集成测试已全绿（f48f1e8d）。
+> 状态：2026-08-13 排定；Phase 11 集成测试已全绿（f48f1e8d）；2026-10-23 增补 P5（性能/规模化）。
 > 总原则（用户拍板）：**先保证数据 exactly-once，再保证数据转换正确性；Debezium 相关不急。**
 
-优先级：P0 = exactly-once 正确性（阻塞性）｜P1 = 数据转换正确性｜P2 = TiDB 链路补强｜P3 = 健壮性 / DDL 扩展｜P4 = Debezium（低优先）
+优先级：P0 = exactly-once 正确性（阻塞性）｜P1 = 数据转换正确性｜P2 = TiDB 链路补强｜P3 = 健壮性 / DDL 扩展｜P4 = Debezium（低优先）｜P5 = 性能 / 规模化（吞吐与状态成本）
 
 **状态图例**：⬜ 待办｜✅ 已落地｜⏸️ 维持结论（不需修）
 
@@ -261,11 +261,115 @@ MySQL + Debezium 覆盖 schema change；等 ticdc 9.0 发布后再补 TiDB 侧�
 
 ---
 
+## P5 — 性能 / 规模化（2026-10-23 排定）
+
+> 背景：「单作业全库 `initial` 模式同步」瓶颈评估的落地项。量化基线：1 万表 / 100 亿行（~10 TB）/
+> 快照 36h / 8 并行 / 默认 chunkSize 8096 → **约 123 万 split**。
+> 前提说明：MySQL 路径 `KafkaJsonSourceConfig.isSkipSnapshotBackfill()` 已**强制跳过回填**，
+> 评估中「回填读放大 ~5× 流量」对 MySQL 不适用；以下三项是快照期真正剩余的成本大头。
+
+### P5-1 快照期 LW 水印探针复用 ⬜（性价比最高）
+
+**问题**：MySQL 路径下 `KafkaJsonDialect.displayCurrentOffset` 每次调用都走
+`KafkaJsonKafkaOffsetUtils.queryCurrentOffset`：**新建一个一次性 KafkaConsumer**（无 group、
+用完即弃）→ `endOffsets` → 逐分区串行 `assign + seek + poll(3000ms 硬编码)`。快照期
+**每个 split 探一次 LW**（MySQL 强制跳过回填后 HW=LW，不再探测）：
+
+- 每次探针 ≈ consumer 建连+元数据（~200ms）+ 分区串行 poll（~300-800ms）≈ **0.5–1.5s**
+- 123 万 split × ~1s / 8 并行 ≈ **40h+ 纯探针开销**；broker 侧还要承受 123 万次一次性连接 churn
+- TiDB 路径无此问题（水印走 `SELECT TIDB_CURRENT_TSO()`，JDBC 毫秒级）
+
+**方案**：把 `KafkaJsonOffsetSupplier`（`source/kafka/`，**已写好但未接线**——生产路径从未引用）
+接入 `KafkaJsonDialect.displayCurrentOffset`，dialect 持有一个懒初始化、可复用的 consumer，
+随 dialect 生命周期关闭。约束：`KafkaConsumer` 非线程安全，探针全部发生在 fetch task 线程，
+复用实例要么绑定单线程、要么同步。进阶（可选）：同一 reader 的一批并发 split 共享一次探测
+（min-LW 略变老，at-least-once 语义不受影响，重放窗口略宽）。
+
+**验收**：单测断言 `displayCurrentOffset` 多次调用只建一个 consumer；ITCase 对比快照期 broker
+连接数（1 次/split → 1 次/reader 量级）；快照总时长下降。
+
+### P5-2 分块规划移出 enumerator 主线程 ⬜
+
+**问题**：`JdbcSourceChunkSplitter.generateSplits` 在 `SnapshotSplitAssigner.getNext` 里**内联
+执行**，而 `getNext` 跑在 enumerator 的 mailbox 主线程（`handleSplitRequest → assignSplits`）。
+规划一张大表 = min/max + `information_schema.TABLE_ROWS` + 不均匀分块的逐 chunk 边界查询
+（每 chunk 一条 + 每 10 条 sleep 100ms）——期间**整个作业的 split 分发停摆**（head-of-line
+blocking）。1 万张表逐张串行规划，作业启动后的前几十分钟基本都耗在这。
+
+**方案**：后台线程预生成（为表 N+1 规划的同时分发表 N 的 split），或逐表异步生成 + assigner 内
+"splits pending"状态。约束：
+
+- `SnapshotPendingSplitsState` 必须能在生成中途被 checkpoint（当前内存中的 pending 列表）
+- 保持表的确定性顺序（分块顺序影响分发顺序与可复现性）
+- 实现位置：`SnapshotSplitAssigner` 属 flink-cdc-base（与 MySQL 连接器共享）——优先做
+  kafkajson 侧覆写/组合，避免改 base 语义
+
+**验收**：mock 一个规划耗时数秒的大表，断言其后小表的 split 分发不被阻塞（秒级内）；现有
+单测/ITCase 不回归。
+
+### P5-3 快照完成后的协调者状态瘦身 ⬜（上游已修：FLINK-40697，本库走路线②连接器侧移植）
+
+**问题**：`SnapshotSplitAssigner` 在 JobManager 内存维护**单调增长**的 `assignedSplits`（从不
+收缩）、`splitFinishedOffsets`、`remainingSplits`、`tableSchemas`、`alreadyProcessedTables`；
+快照结束后 `HybridPendingSplitsState` **永久**包裹这份状态 → **每次 checkpoint 全量重序列化**：
+
+- 每 split 序列化 ~0.5–1.2KB（hex 编码 chunk 边界为主），一个 split 最多出现在状态里 3 处
+- 123 万 split ≈ **0.6–1.5GB/次 checkpoint，终身背着**；36h 快照 × 30s interval ≈ 4.3TB 累计
+  序列化流量
+- 连锁反应：快照→流式的**阶段切换必须等一次成功 checkpoint**（notifyCheckpointComplete 翻转
+  assigner 状态）→ 状态越大 checkpoint 越慢，切换被拖长甚至无法完成；另有 JM 堆/OOM 风险
+
+**上游对齐（2026-10-26 调研）**：FLINK-40697 已把该修复泛化进 flink-cdc-base（MySQL 先行版为
+FLINK-39775），机制与本项原方案一致，并补了四个设计细节：释放挂在「完成的 checkpoint」两步上
+（arm → complete）、代数守卫防 failover reader 迟到上报、与 `scan.newly-added-table.enabled`
+互斥 fail-fast、条件序列化器版本（默认关 = 老格式可恢复）。上游 patch 已存
+`D:\Users\zhao.fulin\Desktop\4555.diff`——**基于 3.7.0 形状**（其序列化器 VERSION 8 vs 本库 6、
+有本库不存在的 `splitFinishedCheckpointIds`），不能直接 apply，需手动适配。
+
+**决策（2026-10-26，用户拍板）：base 保持原生不动**，即使官方 backport 也不进 base，走
+**路线② = 连接器侧接管（MySQL 模式，同 FLINK-39775 先例）**：
+
+| 部分 | 行数 | 性质 |
+|---|---|---|
+| `SnapshotSplitAssigner`(461)/`HybridSplitAssigner`(277)/状态类(181)/`PendingSplitsStateSerializer`(410) | ~1330 | **复制**进 kafkajson（assigner 的释放字段是 base 的 private final，子类够不着只能整份接管）；逐文件与 base diff 校验等价性（应只剩 package/import 差异） |
+| 枚举器**子类**（base 类 public 可子类化，357 行不复制） | ~180 纯新 | 代数守卫 + 两步释放，对着 4555.diff 适配 3.2.1 形状 |
+| 自有 assembled 事件类 + `KafkaJsonSourceReader` 子类钩子 + option 管线 | ~150 新 | reader 覆写 `handleSourceEvent` 检测收齐后上报（meta 事件 public 字段够用，base reader 零改动） |
+| 测试 | ~300 | 从 4555.diff 的 release 测试适配 |
+
+注入点均已核实：`createEnumerator`/`restoreEnumerator`/`getEnumeratorCheckpointSerializer` 可覆写，
+`SplitAssigner` 是接口，条件版本号自定为 **6/7**（对应上游 8/9）。`KafkaJsonSplitSerializer` 的
+字节等价校验法同样适用于复制部分。
+
+**前置门槛（先做一行配置再决定投入）**：先调 `scan.incremental.snapshot.chunk.size`（8096 →
+20 万+）观察真实规模——2 万 split ≈ 15–25MB/checkpoint 属可接受；**仍 GB 级再开工本项**。
+
+**方案**：快照阶段完成 + 流式 split 已下发后，assigner 状态收缩为流式真正需要的最小集
+（assignerStatus / `alreadyProcessedTables`（仅表名）/ 新增表发现所需的 `tableSchemas`），丢弃
+`assignedSplits` / `splitFinishedOffsets` 的逐 split 明细。**正确性关键**：restore 路径
+（`HybridSplitAssigner` 从 checkpoint 重建）必须靠收缩后的状态仍能得出「快照已全部完成、永远
+不再下发快照 split」的结论（assignerStatus + isStreamSplitAssigned 足以判定），否则重启会
+重发已完成的 split。TM 侧 stream split 状态（`finishedSnapshotSplitInfos` ~300B×split +
+tableSchemas）是 `shouldEmit` 去重判据的一部分，**不在本项范围**（其压缩表示作为后续可选项）。
+
+**验收**：快照结束后的 checkpoint 序列化字节数降到 MB 量级（断言）；故障重启用例——快照完成后
+kill/restore → 不重发快照 split、流式衔接点不变。
+
+### P5-4 流式阶段按分区拆 split ⏸️（不适配当前环境）
+
+流式 split 的有效并行度 = 1（单消费者、单线程 manual assign 全部分区）是架构天花板，按 Kafka
+分区拆 stream split 是根本解。**当前全部 topic 为单分区，拆分无收益**，维持现状；topic 分区数
+变化后重估。
+
+---
+
 ## 建议执行顺序
 
 1. **P0** 三项互相纠缠（边界、去重、并发模型），已按一个工作单元推进完毕。
 2. **P1** 转换正确性 + **P2** TiDB 链路已落地。
 3. **P3-1** 时钟工具类（待办）可与下一步 DDL 扩展一起做。
 4. **P4** Debezium 已上提执行（S1-S4 全绿）；TiDB 侧 DDL 等 ticdc 9.0。
+5. **P5** 性能/规模化按 P5-1 → P5-2 → P5-3 排期：P5-1 性价比最高、改动最小；P5-2 动 base
+   前先评估 kafkajson 侧覆写的可行性；P5-3 状态收益立竿见影但正确性敏感，需完整的故障重启
+   验收。P5-4 环境不适用，维持 ⏸️。
 
 > 依赖注记：P1-1 与 P1-2 同为转换正确性；P2-1 是 P2-2 的前置调研点（已完成）。
