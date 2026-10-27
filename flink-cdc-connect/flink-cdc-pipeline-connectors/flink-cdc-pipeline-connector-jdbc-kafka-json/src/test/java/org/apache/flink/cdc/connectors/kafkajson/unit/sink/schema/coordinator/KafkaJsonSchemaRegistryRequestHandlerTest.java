@@ -25,6 +25,7 @@ import org.apache.flink.cdc.common.pipeline.SchemaChangeBehavior;
 import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.common.sink.MetadataApplier;
 import org.apache.flink.cdc.common.types.DataTypes;
+import org.apache.flink.cdc.connectors.kafkajson.event.BatchCreateTableEvents;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonSchemaChangeRequest;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonSchemaChangeResultRequest;
@@ -44,6 +45,7 @@ import org.apache.flink.runtime.operators.coordination.OperatorCoordinator;
 import org.junit.Test;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -230,6 +232,88 @@ public class KafkaJsonSchemaRegistryRequestHandlerTest {
                     .hasValueSatisfying(
                             column ->
                                     assertThat(column.getType()).isEqualTo(DataTypes.VARCHAR(100)));
+            assertThat(context.failures).isEmpty();
+        }
+    }
+
+    @Test
+    public void testCreateTableBatchAppliesEveryTableInOneRound() throws Exception {
+        RecordingMetadataApplier applier = new RecordingMetadataApplier();
+        try (KafkaJsonSchemaRegistryRequestHandler handler = handler(applier)) {
+            handler.registerSinkWriter(0);
+
+            CreateTableEvent orders = new CreateTableEvent(ORDERS, SCHEMA);
+            CreateTableEvent ordersV2 = new CreateTableEvent(ORDERS_V2, SCHEMA);
+            BatchCreateTableEvents batch =
+                    new BatchCreateTableEvents(Arrays.asList(orders, ordersV2));
+
+            // One flush acknowledges the whole batch, not one per table.
+            long nonce = nextNonce();
+            handler.flushSuccess(0, nonce);
+            SchemaChangeResponse response =
+                    send(
+                            handler,
+                            new KafkaJsonSchemaChangeRequest(
+                                    BatchCreateTableEvents.BATCH_TABLE_ID, batch, 0, nonce));
+            assertThat(response.isAccepted()).isTrue();
+            assertThat(response.getSchemaChangeEvents()).containsExactly(orders, ordersV2);
+
+            SchemaChangeResultResponse result = awaitResult(handler, nonce);
+            assertThat(result.getFinishedSchemaChangeEvents()).containsExactly(orders, ordersV2);
+            assertThat(applier.applied).containsExactly(orders, ordersV2);
+            assertThat(manager.getLatestOriginalSchema(ORDERS)).contains(SCHEMA);
+            assertThat(manager.getLatestEvolvedSchema(ORDERS_V2)).contains(SCHEMA);
+            assertThat(context.failures).isEmpty();
+        }
+    }
+
+    @Test
+    public void testCreateTableBatchOnReplayAppliesOnlyMissingTables() throws Exception {
+        RecordingMetadataApplier applier = new RecordingMetadataApplier();
+        try (KafkaJsonSchemaRegistryRequestHandler handler = handler(applier)) {
+            handler.registerSinkWriter(0);
+
+            CreateTableEvent orders = new CreateTableEvent(ORDERS, SCHEMA);
+            CreateTableEvent ordersV2 = new CreateTableEvent(ORDERS_V2, SCHEMA);
+
+            // The first table is created on its own — the state a restart replaying a half-applied
+            // batch would find.
+            long createNonce = nextNonce();
+            handler.flushSuccess(0, createNonce);
+            send(handler, new KafkaJsonSchemaChangeRequest(ORDERS, orders, 0, createNonce));
+            awaitResult(handler, createNonce);
+
+            // The replayed batch is still one request; only the table the coordinator has not seen
+            // yet is applied and reported back.
+            long batchNonce = nextNonce();
+            handler.flushSuccess(0, batchNonce);
+            SchemaChangeResponse replay =
+                    send(
+                            handler,
+                            new KafkaJsonSchemaChangeRequest(
+                                    BatchCreateTableEvents.BATCH_TABLE_ID,
+                                    new BatchCreateTableEvents(Arrays.asList(orders, ordersV2)),
+                                    0,
+                                    batchNonce));
+            assertThat(replay.isAccepted()).isTrue();
+            assertThat(replay.getSchemaChangeEvents()).containsExactly(ordersV2);
+            SchemaChangeResultResponse result = awaitResult(handler, batchNonce);
+            assertThat(result.getFinishedSchemaChangeEvents()).containsExactly(ordersV2);
+            assertThat(applier.applied).containsExactly(orders, ordersV2);
+
+            // A batch whose tables are all known is answered without applying anything.
+            long knownNonce = nextNonce();
+            handler.flushSuccess(0, knownNonce);
+            SchemaChangeResponse onlyKnown =
+                    send(
+                            handler,
+                            new KafkaJsonSchemaChangeRequest(
+                                    BatchCreateTableEvents.BATCH_TABLE_ID,
+                                    new BatchCreateTableEvents(Arrays.asList(orders, ordersV2)),
+                                    0,
+                                    knownNonce));
+            assertThat(onlyKnown.isDuplicate()).isTrue();
+            assertThat(applier.applied).containsExactly(orders, ordersV2);
             assertThat(context.failures).isEmpty();
         }
     }

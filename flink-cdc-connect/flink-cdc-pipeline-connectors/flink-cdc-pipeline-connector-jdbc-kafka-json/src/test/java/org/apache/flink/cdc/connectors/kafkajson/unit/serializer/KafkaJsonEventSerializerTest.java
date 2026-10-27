@@ -19,6 +19,7 @@ package org.apache.flink.cdc.connectors.kafkajson.unit.serializer;
 
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.cdc.common.event.CreateTableEvent;
 import org.apache.flink.cdc.common.event.Event;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.schema.Column;
@@ -26,6 +27,7 @@ import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.common.types.DataTypes;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterTableCommentEvent;
+import org.apache.flink.cdc.connectors.kafkajson.event.BatchCreateTableEvents;
 import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
@@ -112,6 +114,25 @@ public class KafkaJsonEventSerializerTest {
         // the pairs travel as a whole and in order, so a swap can be detected downstream
         assertThat(((RenameTableEvent) restored).getPairs())
                 .containsExactlyElementsOf(original.getPairs());
+        assertThat(restored).isEqualTo(original);
+    }
+
+    @Test
+    public void testBatchCreateTableEventsRoundTrip() throws Exception {
+        CreateTableEvent users = new CreateTableEvent(TableId.tableId("test", "users"), schema());
+        CreateTableEvent orders = new CreateTableEvent(TableId.tableId("test", "orders"), schema());
+        BatchCreateTableEvents original = new BatchCreateTableEvents(Arrays.asList(users, orders));
+
+        Event restored = roundTrip(original);
+
+        // The batch must come back as a batch, not as one of its creates: the serializer
+        // dispatches on instanceof and the released CreateTableEvent branch would encode a single
+        // table.
+        assertThat(restored).isInstanceOf(BatchCreateTableEvents.class);
+        // Order and every table survive: the coordinator unfolds the batch, so a dropped table
+        // would silently go uncreated.
+        assertThat(((BatchCreateTableEvents) restored).getCreateTableEvents())
+                .containsExactly(users, orders);
         assertThat(restored).isEqualTo(original);
     }
 

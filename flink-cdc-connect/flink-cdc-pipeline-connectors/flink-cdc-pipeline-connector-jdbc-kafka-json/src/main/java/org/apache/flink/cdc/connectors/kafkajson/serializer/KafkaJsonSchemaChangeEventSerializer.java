@@ -29,6 +29,7 @@ import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterTableCommentEvent;
+import org.apache.flink.cdc.connectors.kafkajson.event.BatchCreateTableEvents;
 import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
@@ -47,7 +48,8 @@ import java.io.IOException;
 /**
  * A {@link TypeSerializer} for {@link SchemaChangeEvent} that additionally handles the connector's
  * custom event types ({@link RenameTableEvent}, {@link TruncateTableEvent}, {@link DropTableEvent},
- * {@link AlterTableCommentEvent} and {@link AlterColumnCommentEvent}).
+ * {@link AlterTableCommentEvent}, {@link AlterColumnCommentEvent} and {@link
+ * BatchCreateTableEvents}).
  *
  * <p>This is the connector-local copy of the released {@code SchemaChangeEventSerializer}, with the
  * discriminator replaced by the connector's own {@link KafkaJsonSchemaChangeTag} so that the custom
@@ -90,7 +92,11 @@ public final class KafkaJsonSchemaChangeEventSerializer
 
     @Override
     public SchemaChangeEvent copy(SchemaChangeEvent from) {
-        if (from instanceof AlterColumnTypeEvent) {
+        // Checked first: it carries many tables and must never reach a single-table branch.
+        if (from instanceof BatchCreateTableEvents) {
+            return KafkaJsonBatchCreateTableEventsSerializer.INSTANCE.copy(
+                    (BatchCreateTableEvents) from);
+        } else if (from instanceof AlterColumnTypeEvent) {
             return AlterColumnTypeEventSerializer.INSTANCE.copy((AlterColumnTypeEvent) from);
         } else if (from instanceof CreateTableEvent) {
             return CreateTableEventSerializer.INSTANCE.copy((CreateTableEvent) from);
@@ -129,7 +135,12 @@ public final class KafkaJsonSchemaChangeEventSerializer
 
     @Override
     public void serialize(SchemaChangeEvent record, DataOutputView target) throws IOException {
-        if (record instanceof AlterColumnTypeEvent) {
+        // Checked first: it carries many tables and must never reach a single-table branch.
+        if (record instanceof BatchCreateTableEvents) {
+            enumSerializer.serialize(KafkaJsonSchemaChangeTag.CREATE_TABLE_BATCH, target);
+            KafkaJsonBatchCreateTableEventsSerializer.INSTANCE.serialize(
+                    (BatchCreateTableEvents) record, target);
+        } else if (record instanceof AlterColumnTypeEvent) {
             enumSerializer.serialize(KafkaJsonSchemaChangeTag.ALTER_COLUMN_TYPE, target);
             AlterColumnTypeEventSerializer.INSTANCE.serialize(
                     (AlterColumnTypeEvent) record, target);
@@ -193,6 +204,8 @@ public final class KafkaJsonSchemaChangeEventSerializer
                 return KafkaJsonAlterTableCommentEventSerializer.INSTANCE.deserialize(source);
             case ALTER_COLUMN_COMMENT:
                 return KafkaJsonAlterColumnCommentEventSerializer.INSTANCE.deserialize(source);
+            case CREATE_TABLE_BATCH:
+                return KafkaJsonBatchCreateTableEventsSerializer.INSTANCE.deserialize(source);
             default:
                 throw new IllegalArgumentException("Unknown schema change event class: " + tag);
         }
@@ -230,7 +243,8 @@ public final class KafkaJsonSchemaChangeEventSerializer
      * <p>The ordinals are part of the serialized format: new tags are appended, never reordered or
      * removed. {@code RENAME_TABLE}/{@code TRUNCATE_TABLE}/{@code DROP_TABLE}/{@code
      * ALTER_TABLE_COMMENT}/{@code ALTER_COLUMN_COMMENT} are the connector's own tags for the event
-     * types the released {@code SchemaChangeEventType} enum has no values for.
+     * types the released {@code SchemaChangeEventType} enum has no values for, and {@code
+     * CREATE_TABLE_BATCH} tags the connector's own batch of {@code CREATE_TABLE} events.
      */
     enum KafkaJsonSchemaChangeTag {
         ADD_COLUMN,
@@ -242,6 +256,7 @@ public final class KafkaJsonSchemaChangeEventSerializer
         TRUNCATE_TABLE,
         ALTER_COLUMN_COMMENT,
         DROP_TABLE,
-        ALTER_TABLE_COMMENT
+        ALTER_TABLE_COMMENT,
+        CREATE_TABLE_BATCH
     }
 }

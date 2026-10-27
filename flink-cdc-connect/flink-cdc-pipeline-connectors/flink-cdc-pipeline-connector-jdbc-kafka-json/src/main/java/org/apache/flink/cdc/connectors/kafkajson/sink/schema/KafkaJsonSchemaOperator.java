@@ -26,6 +26,7 @@ import org.apache.flink.cdc.common.data.RecordData;
 import org.apache.flink.cdc.common.data.StringData;
 import org.apache.flink.cdc.common.data.TimestampData;
 import org.apache.flink.cdc.common.data.ZonedTimestampData;
+import org.apache.flink.cdc.common.event.CreateTableEvent;
 import org.apache.flink.cdc.common.event.DataChangeEvent;
 import org.apache.flink.cdc.common.event.Event;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
@@ -41,6 +42,7 @@ import org.apache.flink.cdc.common.types.DataTypeFamily;
 import org.apache.flink.cdc.common.types.DataTypeRoot;
 import org.apache.flink.cdc.common.types.DecimalType;
 import org.apache.flink.cdc.common.utils.ChangeEventUtils;
+import org.apache.flink.cdc.connectors.kafkajson.event.BatchCreateTableEvents;
 import org.apache.flink.cdc.connectors.kafkajson.event.FlushEvent;
 import org.apache.flink.cdc.connectors.kafkajson.sink.SchemaEvolutionClient;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonSchemaChangeRequest;
@@ -271,7 +273,19 @@ public class KafkaJsonSchemaOperator extends AbstractStreamOperator<Event>
                 tableId,
                 event);
         handleSchemaChangeEvent(tableId, event);
-        // Update caches
+        // Update caches. A create-table batch covers many tables; each of them gets the same
+        // refresh a single-table event would trigger.
+        if (event instanceof BatchCreateTableEvents) {
+            for (CreateTableEvent create :
+                    ((BatchCreateTableEvents) event).getCreateTableEvents()) {
+                refreshSchemaCaches(create.tableId());
+            }
+        } else {
+            refreshSchemaCaches(tableId);
+        }
+    }
+
+    private void refreshSchemaCaches(TableId tableId) throws ExecutionException {
         originalSchema.put(tableId, getLatestOriginalSchema(tableId));
         schemaDivergesMap.put(tableId, checkSchemaDiverges(tableId));
 

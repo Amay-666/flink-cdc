@@ -287,6 +287,8 @@ public class KafkaJsonDataSourceOptions {
      * instead of one per table interleaved with the data stream (FLINK-40102). Recommended for
      * hundreds+ tables: each per-table CreateTableEvent triggers a downstream FlushEvent that
      * flushes buffered data, producing tiny files; in batch mode the flushes hit an empty buffer.
+     * The events travel in chunks of up to 100 tables (or 1 MiB of encoded schema, whichever comes
+     * first), one schema-change round per chunk.
      */
     @Experimental
     public static final ConfigOption<Boolean>
@@ -304,6 +306,9 @@ public class KafkaJsonDataSourceOptions {
                                             + " per-table CreateTableEvent triggers a downstream"
                                             + " FlushEvent that flushes buffered data, producing"
                                             + " tiny files and interrupting throughput. In batch"
-                                            + " mode the flushes hit an empty buffer (no data has"
-                                            + " flowed yet), so no data files are produced.");
+                                            + " mode the events travel in chunks of up to 100"
+                                            + " tables or 1 MiB of encoded schema, and each"
+                                            + " chunk triggers a single schema-change round whose"
+                                            + " flush hits an empty buffer (no data has flowed"
+                                            + " yet), so no data files are produced.");
 }

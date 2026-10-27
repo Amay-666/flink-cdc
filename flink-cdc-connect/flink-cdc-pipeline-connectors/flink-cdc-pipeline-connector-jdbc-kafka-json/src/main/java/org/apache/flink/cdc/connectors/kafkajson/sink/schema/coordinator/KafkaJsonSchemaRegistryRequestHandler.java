@@ -26,6 +26,7 @@ import org.apache.flink.cdc.common.pipeline.SchemaChangeBehavior;
 import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.common.sink.MetadataApplier;
 import org.apache.flink.cdc.common.utils.Preconditions;
+import org.apache.flink.cdc.connectors.kafkajson.event.BatchCreateTableEvents;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonSchemaChangeRequest;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonSchemaChangeResultRequest;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.SchemaChangeResponse;
@@ -39,6 +40,7 @@ import org.slf4j.LoggerFactory;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -145,8 +147,29 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
 
                 SchemaChangeEvent event = request.getSchemaChangeEvent();
 
-                // If this schema change event has been requested by another subTask, ignore it.
-                if (schemaManager.isOriginalSchemaChangeEventRedundant(event)) {
+                // A create-table batch is one request and one flush, but every table is applied
+                // individually. A restart can replay a batch whose tables were partially created
+                // already, so the redundant tables are dropped here, one at a time.
+                List<CreateTableEvent> batchCreates = new ArrayList<>();
+                if (event instanceof BatchCreateTableEvents) {
+                    Set<TableId> seenTables = new HashSet<>();
+                    for (CreateTableEvent create :
+                            ((BatchCreateTableEvents) event).getCreateTableEvents()) {
+                        if (seenTables.add(create.tableId())
+                                && !schemaManager.isOriginalSchemaChangeEventRedundant(create)) {
+                            batchCreates.add(create);
+                        }
+                    }
+                    if (batchCreates.isEmpty()) {
+                        LOG.info(
+                                "All tables of create-table batch {} have been addressed before, ignoring it.",
+                                event);
+                        clearCurrentSchemaChangeRequest(nonce);
+                        response.complete(wrap(SchemaChangeResponse.duplicate()));
+                        return;
+                    }
+                } else if (schemaManager.isOriginalSchemaChangeEventRedundant(event)) {
+                    // If this schema change event has been requested by another subTask, ignore it.
                     LOG.info("Event {} has been addressed before, ignoring it.", event);
                     clearCurrentSchemaChangeRequest(nonce);
                     LOG.info(
@@ -175,9 +198,16 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                     return;
                 }
 
-                schemaManager.applyOriginalSchemaChange(event);
-                List<SchemaChangeEvent> derivedSchemaChangeEvents =
-                        calculateDerivedSchemaChangeEvents(request.getSchemaChangeEvent());
+                List<SchemaChangeEvent> derivedSchemaChangeEvents;
+                if (event instanceof BatchCreateTableEvents) {
+                    // The batch's own derivation is the pass-through of the whole batch, which has
+                    // no meaning downstream: unfold it into the creates it carries instead.
+                    batchCreates.forEach(schemaManager::applyOriginalSchemaChange);
+                    derivedSchemaChangeEvents = new ArrayList<>(batchCreates);
+                } else {
+                    schemaManager.applyOriginalSchemaChange(event);
+                    derivedSchemaChangeEvents = calculateDerivedSchemaChangeEvents(event);
+                }
 
                 // A guard rather than a live path: this connector's derivation always returns the
                 // event itself (no LENIENT mode, no route rules — see KafkaJsonSchemaDerivation).
