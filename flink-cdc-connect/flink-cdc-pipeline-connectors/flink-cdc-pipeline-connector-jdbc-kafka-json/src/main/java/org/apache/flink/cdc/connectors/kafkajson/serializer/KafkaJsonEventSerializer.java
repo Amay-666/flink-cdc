@@ -22,8 +22,8 @@ import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.cdc.common.event.DataChangeEvent;
 import org.apache.flink.cdc.common.event.Event;
-import org.apache.flink.cdc.common.event.FlushEvent;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
+import org.apache.flink.cdc.connectors.kafkajson.event.FlushEvent;
 import org.apache.flink.cdc.runtime.serializer.EnumSerializer;
 import org.apache.flink.cdc.runtime.serializer.TableIdSerializer;
 import org.apache.flink.cdc.runtime.serializer.TypeSerializerSingleton;
@@ -70,7 +70,9 @@ public final class KafkaJsonEventSerializer extends TypeSerializerSingleton<Even
     @Override
     public Event copy(Event from) {
         if (from instanceof FlushEvent) {
-            return new FlushEvent(tableIdSerializer.copy(((FlushEvent) from).getTableId()));
+            return new FlushEvent(
+                    tableIdSerializer.copy(((FlushEvent) from).getTableId()),
+                    ((FlushEvent) from).getNonce());
         } else if (from instanceof SchemaChangeEvent) {
             return schemaChangeEventSerializer.copy((SchemaChangeEvent) from);
         } else if (from instanceof DataChangeEvent) {
@@ -94,6 +96,7 @@ public final class KafkaJsonEventSerializer extends TypeSerializerSingleton<Even
         if (record instanceof FlushEvent) {
             enumSerializer.serialize(EventClass.FLUSH_EVENT, target);
             tableIdSerializer.serialize(((FlushEvent) record).getTableId(), target);
+            target.writeLong(((FlushEvent) record).getNonce());
         } else if (record instanceof SchemaChangeEvent) {
             enumSerializer.serialize(EventClass.SCHEME_CHANGE_EVENT, target);
             schemaChangeEventSerializer.serialize((SchemaChangeEvent) record, target);
@@ -110,7 +113,7 @@ public final class KafkaJsonEventSerializer extends TypeSerializerSingleton<Even
         EventClass eventClass = enumSerializer.deserialize(source);
         switch (eventClass) {
             case FLUSH_EVENT:
-                return new FlushEvent(tableIdSerializer.deserialize(source));
+                return new FlushEvent(tableIdSerializer.deserialize(source), source.readLong());
             case DATA_CHANGE_EVENT:
                 return dataChangeEventSerializer.deserialize(source);
             case SCHEME_CHANGE_EVENT:

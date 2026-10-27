@@ -25,16 +25,16 @@ import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.common.sink.MetadataApplier;
 import org.apache.flink.cdc.common.types.DataTypes;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonFlushSuccessEvent;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonSchemaChangeRequest;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonSchemaChangeResultRequest;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.SchemaChangeResponse;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordinator.KafkaJsonSchemaRegistry;
 import org.apache.flink.cdc.runtime.operators.schema.event.CoordinationResponseUtils;
-import org.apache.flink.cdc.runtime.operators.schema.event.FlushSuccessEvent;
 import org.apache.flink.cdc.runtime.operators.schema.event.GetEvolvedSchemaRequest;
 import org.apache.flink.cdc.runtime.operators.schema.event.GetEvolvedSchemaResponse;
 import org.apache.flink.cdc.runtime.operators.schema.event.GetOriginalSchemaRequest;
 import org.apache.flink.cdc.runtime.operators.schema.event.GetOriginalSchemaResponse;
-import org.apache.flink.cdc.runtime.operators.schema.event.SchemaChangeRequest;
-import org.apache.flink.cdc.runtime.operators.schema.event.SchemaChangeResponse;
-import org.apache.flink.cdc.runtime.operators.schema.event.SchemaChangeResultRequest;
 import org.apache.flink.cdc.runtime.operators.schema.event.SchemaChangeResultResponse;
 import org.apache.flink.cdc.runtime.operators.schema.event.SinkWriterRegisterEvent;
 import org.apache.flink.metrics.groups.OperatorCoordinatorMetricGroup;
@@ -52,6 +52,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -74,6 +75,7 @@ public class KafkaJsonSchemaRegistryTest {
     private final TestCoordinatorContext twoSubtaskContext = new TestCoordinatorContext(2);
     private final RecordingMetadataApplier applier = new RecordingMetadataApplier();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final AtomicLong nonceCounter = new AtomicLong(0);
 
     @Test
     public void testCreateTableBlocksUntilAllSubtaskFlush() throws Exception {
@@ -82,20 +84,21 @@ public class KafkaJsonSchemaRegistryTest {
             register(registry, 0);
             register(registry, 1);
 
-            SchemaChangeResponse response =
-                    send(
-                            registry,
-                            new SchemaChangeRequest(
-                                    ORDERS, new CreateTableEvent(ORDERS, SCHEMA), 0));
-            assertThat(response.isAccepted()).isTrue();
-
-            // One flush is not enough: the DDL stays blocked.
-            flush(registry, 0);
+            // Flushes are matched to the request by its nonce, and must arrive before it.
+            long nonce = nextNonce();
+            KafkaJsonSchemaChangeRequest createRequest =
+                    new KafkaJsonSchemaChangeRequest(
+                            ORDERS, new CreateTableEvent(ORDERS, SCHEMA), 0, nonce);
+            flush(registry, 0, nonce);
+            SchemaChangeResponse partialFlushResponse = send(registry, createRequest);
+            assertThat(partialFlushResponse.isWaitingForFlush()).isTrue();
             assertThat(applier.applied).isEmpty();
 
             // The last flush unlocks the DDL.
-            flush(registry, 1);
-            SchemaChangeResultResponse result = pollResult(registry);
+            flush(registry, 1, nonce);
+            SchemaChangeResponse response = send(registry, createRequest);
+            assertThat(response.isAccepted()).isTrue();
+            SchemaChangeResultResponse result = pollResult(registry, nonce);
             assertThat(result.getFinishedSchemaChangeEvents())
                     .containsExactly(new CreateTableEvent(ORDERS, SCHEMA));
             assertThat(applier.applied).containsExactly(new CreateTableEvent(ORDERS, SCHEMA));
@@ -124,23 +127,29 @@ public class KafkaJsonSchemaRegistryTest {
             registry.start();
             register(registry, 0);
 
+            long createNonce = nextNonce();
+            flush(registry, 0, createNonce);
             send(
                     registry,
-                    new SchemaChangeRequest(ORDERS, new CreateTableEvent(ORDERS, SCHEMA), 0));
-            flush(registry, 0);
-            SchemaChangeResultResponse createResult = pollResult(registry);
+                    new KafkaJsonSchemaChangeRequest(
+                            ORDERS, new CreateTableEvent(ORDERS, SCHEMA), 0, createNonce));
+            SchemaChangeResultResponse createResult = pollResult(registry, createNonce);
             assertThat(createResult.getFinishedSchemaChangeEvents())
                     .containsExactly(new CreateTableEvent(ORDERS, SCHEMA));
 
             // The custom rename event survives the registry dispatch and is applied.
+            long renameNonce = nextNonce();
+            flush(registry, 0, renameNonce);
             SchemaChangeResponse renameResponse =
                     send(
                             registry,
-                            new SchemaChangeRequest(
-                                    ORDERS, new RenameTableEvent(ORDERS, ORDERS_V2, SCHEMA), 0));
+                            new KafkaJsonSchemaChangeRequest(
+                                    ORDERS,
+                                    new RenameTableEvent(ORDERS, ORDERS_V2, SCHEMA),
+                                    0,
+                                    renameNonce));
             assertThat(renameResponse.isAccepted()).isTrue();
-            flush(registry, 0);
-            SchemaChangeResultResponse renameResult = pollResult(registry);
+            SchemaChangeResultResponse renameResult = pollResult(registry, renameNonce);
             assertThat(renameResult.getFinishedSchemaChangeEvents())
                     .containsExactly(new RenameTableEvent(ORDERS, ORDERS_V2, SCHEMA));
             assertThat(applier.applied)
@@ -160,11 +169,13 @@ public class KafkaJsonSchemaRegistryTest {
             registry.start();
             register(registry, 0);
 
+            long nonce = nextNonce();
+            flush(registry, 0, nonce);
             send(
                     registry,
-                    new SchemaChangeRequest(ORDERS, new CreateTableEvent(ORDERS, SCHEMA), 0));
-            flush(registry, 0);
-            pollResult(registry);
+                    new KafkaJsonSchemaChangeRequest(
+                            ORDERS, new CreateTableEvent(ORDERS, SCHEMA), 0, nonce));
+            pollResult(registry, nonce);
 
             CompletableFuture<byte[]> result = new CompletableFuture<>();
             registry.checkpointCoordinator(1L, result);
@@ -188,8 +199,8 @@ public class KafkaJsonSchemaRegistryTest {
             SchemaChangeResponse response =
                     send(
                             restored,
-                            new SchemaChangeRequest(
-                                    ORDERS, new CreateTableEvent(ORDERS, SCHEMA), 0));
+                            new KafkaJsonSchemaChangeRequest(
+                                    ORDERS, new CreateTableEvent(ORDERS, SCHEMA), 0, nextNonce()));
             assertThat(response.isDuplicate()).isTrue();
         }
     }
@@ -204,8 +215,13 @@ public class KafkaJsonSchemaRegistryTest {
         barrier();
     }
 
-    private void flush(KafkaJsonSchemaRegistry registry, int subtask) throws Exception {
-        registry.handleEventFromOperator(subtask, 0, new FlushSuccessEvent(subtask, ORDERS));
+    private long nextNonce() {
+        return nonceCounter.incrementAndGet();
+    }
+
+    private void flush(KafkaJsonSchemaRegistry registry, int subtask, long nonce) throws Exception {
+        registry.handleEventFromOperator(
+                subtask, 0, new KafkaJsonFlushSuccessEvent(subtask, ORDERS, nonce));
         barrier();
     }
 
@@ -222,12 +238,13 @@ public class KafkaJsonSchemaRegistryTest {
     }
 
     /** Polls the registry until the schema change result arrives. */
-    private static SchemaChangeResultResponse pollResult(KafkaJsonSchemaRegistry registry)
-            throws Exception {
+    private static SchemaChangeResultResponse pollResult(
+            KafkaJsonSchemaRegistry registry, long nonce) throws Exception {
         long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(10);
         while (System.currentTimeMillis() < deadline) {
             CompletableFuture<CoordinationResponse> future =
-                    registry.handleCoordinationRequest(new SchemaChangeResultRequest());
+                    registry.handleCoordinationRequest(
+                            new KafkaJsonSchemaChangeResultRequest(nonce));
             CoordinationResponse response =
                     CoordinationResponseUtils.unwrap(future.get(10, TimeUnit.SECONDS));
             if (response instanceof SchemaChangeResultResponse) {

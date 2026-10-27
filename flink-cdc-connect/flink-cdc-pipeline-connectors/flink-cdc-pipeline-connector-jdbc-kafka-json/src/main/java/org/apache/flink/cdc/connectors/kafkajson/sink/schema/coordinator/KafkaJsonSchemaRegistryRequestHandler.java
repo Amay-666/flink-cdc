@@ -26,10 +26,10 @@ import org.apache.flink.cdc.common.pipeline.SchemaChangeBehavior;
 import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.common.sink.MetadataApplier;
 import org.apache.flink.cdc.common.utils.Preconditions;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonSchemaChangeRequest;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonSchemaChangeResultRequest;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.SchemaChangeResponse;
 import org.apache.flink.cdc.runtime.operators.schema.event.SchemaChangeProcessingResponse;
-import org.apache.flink.cdc.runtime.operators.schema.event.SchemaChangeRequest;
-import org.apache.flink.cdc.runtime.operators.schema.event.SchemaChangeResponse;
-import org.apache.flink.cdc.runtime.operators.schema.event.SchemaChangeResultResponse;
 import org.apache.flink.runtime.operators.coordination.CoordinationResponse;
 import org.apache.flink.runtime.operators.coordination.OperatorCoordinator;
 
@@ -81,16 +81,14 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
      */
     private volatile RequestStatus schemaChangeStatus;
 
-    private final List<Integer> pendingSubTaskIds;
     private final Object schemaChangeRequestLock;
 
     private volatile Throwable currentChangeException;
-    private volatile List<SchemaChangeEvent> currentDerivedSchemaChangeEvents;
     private volatile List<SchemaChangeEvent> currentFinishedSchemaChanges;
     private volatile List<SchemaChangeEvent> currentIgnoredSchemaChanges;
 
     /** Sink writers which have sent flush success events for the request. */
-    private final Set<Integer> flushedSinkWriters;
+    private final ConcurrentHashMap<Long, Set<Integer>> flushedSinkWriters;
 
     /** Executor service to execute schema change. */
     private final ExecutorService schemaChangeThreadPool;
@@ -98,6 +96,8 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
     private final SchemaChangeBehavior schemaChangeBehavior;
 
     private final OperatorCoordinator.Context context;
+
+    private final int parallelism;
 
     public KafkaJsonSchemaRegistryRequestHandler(
             MetadataApplier metadataApplier,
@@ -112,73 +112,69 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
         this.context = context;
 
         this.activeSinkWriters = ConcurrentHashMap.newKeySet();
-        this.flushedSinkWriters = ConcurrentHashMap.newKeySet();
+        this.flushedSinkWriters = new ConcurrentHashMap<>();
         this.schemaChangeThreadPool = Executors.newSingleThreadExecutor();
 
-        this.currentDerivedSchemaChangeEvents = new ArrayList<>();
         this.currentFinishedSchemaChanges = new ArrayList<>();
         this.currentIgnoredSchemaChanges = new ArrayList<>();
 
         this.schemaChangeStatus = RequestStatus.IDLE;
-        this.pendingSubTaskIds = new ArrayList<>();
         this.schemaChangeRequestLock = new Object();
+
+        // This check is meant to allow migration test pass since we don't have a valid
+        // `OperatorCoordinator.Context` in mocked environment.
+        this.parallelism = context != null ? context.currentParallelism() : 0;
     }
 
     /**
-     * Handle the {@link SchemaChangeRequest} and wait for all sink subtasks flushing.
+     * Handle the {@link KafkaJsonSchemaChangeRequest} and wait for all sink subtasks flushing.
      *
-     * @param request the received SchemaChangeRequest
+     * @param request the received KafkaJsonSchemaChangeRequest
      */
     public void handleSchemaChangeRequest(
-            SchemaChangeRequest request, CompletableFuture<CoordinationResponse> response) {
+            KafkaJsonSchemaChangeRequest request,
+            CompletableFuture<CoordinationResponse> response) {
 
-        // We use requester subTask ID as the pending ticket, because there will be at most 1 schema
-        // change requests simultaneously from each subTask
-        int requestSubTaskId = request.getSubTaskId();
+        // We use nonce to identify each schema change request
+        long nonce = request.getNonce();
 
         synchronized (schemaChangeRequestLock) {
             // Make sure we handle the first request in the pending list to avoid out-of-order
             // waiting and blocks checkpointing mechanism.
             if (schemaChangeStatus == RequestStatus.IDLE) {
-                if (pendingSubTaskIds.isEmpty()) {
-                    LOG.info(
-                            "Received schema change event request {} from table {} from subTask {}. Pending list is empty, handling this.",
-                            request.getSchemaChangeEvent(),
-                            request.getTableId().toString(),
-                            requestSubTaskId);
-                } else if (pendingSubTaskIds.get(0) == requestSubTaskId) {
-                    LOG.info(
-                            "Received schema change event request {} from table {} from subTask {}. It is on the first of the pending list, handling this.",
-                            request.getSchemaChangeEvent(),
-                            request.getTableId().toString(),
-                            requestSubTaskId);
-                    pendingSubTaskIds.remove(0);
-                } else {
-                    LOG.info(
-                            "Received schema change event request {} from table {} from subTask {}. It is not the first of the pending list ({}).",
-                            request.getSchemaChangeEvent(),
-                            request.getTableId().toString(),
-                            requestSubTaskId,
-                            pendingSubTaskIds);
-                    if (!pendingSubTaskIds.contains(requestSubTaskId)) {
-                        pendingSubTaskIds.add(requestSubTaskId);
-                    }
-                    response.complete(wrap(SchemaChangeResponse.busy()));
-                    return;
-                }
 
                 SchemaChangeEvent event = request.getSchemaChangeEvent();
 
                 // If this schema change event has been requested by another subTask, ignore it.
                 if (schemaManager.isOriginalSchemaChangeEventRedundant(event)) {
                     LOG.info("Event {} has been addressed before, ignoring it.", event);
-                    clearCurrentSchemaChangeRequest();
+                    clearCurrentSchemaChangeRequest(nonce);
                     LOG.info(
                             "SchemaChangeStatus switched from WAITING_FOR_FLUSH to IDLE for request {} due to duplicated request.",
                             request);
                     response.complete(wrap(SchemaChangeResponse.duplicate()));
                     return;
                 }
+
+                if (activeSinkWriters.size() < parallelism) {
+                    LOG.info(
+                            "Not all active sink writers have been registered. Current {}, expected {}.",
+                            activeSinkWriters.size(),
+                            parallelism);
+                    response.complete(wrap(SchemaChangeResponse.waitingForFlush()));
+                    return;
+                }
+
+                if (!activeSinkWriters.equals(flushedSinkWriters.get(nonce))) {
+                    LOG.info(
+                            "Not all active sink writers have completed flush (nonce: {}). Flushed writers: {}, expected: {}.",
+                            nonce,
+                            flushedSinkWriters.get(nonce),
+                            activeSinkWriters);
+                    response.complete(wrap(SchemaChangeResponse.waitingForFlush()));
+                    return;
+                }
+
                 schemaManager.applyOriginalSchemaChange(event);
                 List<SchemaChangeEvent> derivedSchemaChangeEvents =
                         calculateDerivedSchemaChangeEvents(request.getSchemaChangeEvent());
@@ -189,7 +185,7 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                 // and does handle SchemaChangeResponse.ignored().
                 if (derivedSchemaChangeEvents.isEmpty()) {
                     LOG.info("Event {} is omitted from sending to downstream, ignoring it.", event);
-                    clearCurrentSchemaChangeRequest();
+                    clearCurrentSchemaChangeRequest(nonce);
                     LOG.info(
                             "SchemaChangeStatus switched from WAITING_FOR_FLUSH to IDLE for request {} due to ignored request.",
                             request);
@@ -199,21 +195,19 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                 }
 
                 LOG.info(
-                        "SchemaChangeStatus switched from IDLE to WAITING_FOR_FLUSH, other requests will be blocked.");
+                        "SchemaChangeStatus switched from IDLE to APPLYING, other requests will be blocked.");
                 // This request has been accepted.
-                schemaChangeStatus = RequestStatus.WAITING_FOR_FLUSH;
-                currentDerivedSchemaChangeEvents = new ArrayList<>(derivedSchemaChangeEvents);
+                schemaChangeStatus = RequestStatus.APPLYING;
 
                 response.complete(wrap(SchemaChangeResponse.accepted(derivedSchemaChangeEvents)));
-            } else {
+
                 LOG.info(
-                        "Schema Registry is busy processing a schema change request, could not handle request {} for now. Added {} to pending list ({}).",
-                        request,
-                        requestSubTaskId,
-                        pendingSubTaskIds);
-                if (!pendingSubTaskIds.contains(requestSubTaskId)) {
-                    pendingSubTaskIds.add(requestSubTaskId);
-                }
+                        "All sink subtask have flushed for table {}. Start to apply schema change request {}.",
+                        request.getTableId().toString(),
+                        request);
+                schemaChangeThreadPool.submit(
+                        () -> applySchemaChange(request.getTableId(), derivedSchemaChangeEvents));
+            } else {
                 response.complete(wrap(SchemaChangeResponse.busy()));
             }
         }
@@ -273,9 +267,7 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                 "Illegal schemaChangeStatus state: should be APPLYING before applySchemaChange finishes, not "
                         + schemaChangeStatus);
         schemaChangeStatus = RequestStatus.FINISHED;
-        LOG.info(
-                "SchemaChangeStatus switched from APPLYING to FINISHED for request {}.",
-                currentDerivedSchemaChangeEvents);
+        LOG.info("SchemaChangeStatus switched from APPLYING to FINISHED.");
     }
 
     /**
@@ -291,47 +283,36 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
     /**
      * Record flushed sink subtasks after receiving FlushSuccessEvent.
      *
-     * @param tableId the subtask in SchemaOperator and table that the FlushEvent is about
      * @param sinkSubtask the sink subtask succeed flushing
      */
-    public void flushSuccess(TableId tableId, int sinkSubtask, int parallelism) {
-        flushedSinkWriters.add(sinkSubtask);
-        if (activeSinkWriters.size() < parallelism) {
-            LOG.info(
-                    "Not all active sink writers have been registered. Current {}, expected {}.",
-                    activeSinkWriters.size(),
-                    parallelism);
-            return;
-        }
-        if (flushedSinkWriters.equals(activeSinkWriters)) {
-            Preconditions.checkState(
-                    schemaChangeStatus == RequestStatus.WAITING_FOR_FLUSH,
-                    "Illegal schemaChangeStatus state: should be WAITING_FOR_FLUSH before collecting enough FlushEvents, not "
-                            + schemaChangeStatus);
-
-            schemaChangeStatus = RequestStatus.APPLYING;
-            LOG.info(
-                    "All sink subtask have flushed for table {}. Start to apply schema change.",
-                    tableId.toString());
-            schemaChangeThreadPool.submit(
-                    () -> applySchemaChange(tableId, currentDerivedSchemaChangeEvents));
+    public void flushSuccess(int sinkSubtask, long nonce) {
+        synchronized (schemaChangeRequestLock) {
+            if (!flushedSinkWriters.containsKey(nonce)) {
+                flushedSinkWriters.put(nonce, ConcurrentHashMap.newKeySet());
+            }
+            flushedSinkWriters.get(nonce).add(sinkSubtask);
         }
     }
 
-    public void getSchemaChangeResult(CompletableFuture<CoordinationResponse> response) {
+    public void getSchemaChangeResult(
+            KafkaJsonSchemaChangeResultRequest request,
+            CompletableFuture<CoordinationResponse> response) {
         Preconditions.checkState(
                 schemaChangeStatus != RequestStatus.IDLE,
                 "Illegal schemaChangeStatus: should not be IDLE before getting schema change request results.");
         if (schemaChangeStatus == RequestStatus.FINISHED) {
             schemaChangeStatus = RequestStatus.IDLE;
             LOG.info(
-                    "SchemaChangeStatus switched from FINISHED to IDLE for request {}",
-                    currentDerivedSchemaChangeEvents);
+                    "SchemaChangeStatus switched from FINISHED to IDLE. (nonce: {})",
+                    request.getNonce());
 
             // This request has been finished, return it and prepare for the next request
-            List<SchemaChangeEvent> finishedEvents = clearCurrentSchemaChangeRequest();
-            SchemaChangeResultResponse resultResponse =
-                    new SchemaChangeResultResponse(finishedEvents);
+            List<SchemaChangeEvent> finishedEvents =
+                    clearCurrentSchemaChangeRequest(request.getNonce());
+            org.apache.flink.cdc.runtime.operators.schema.event.SchemaChangeResultResponse
+                    resultResponse =
+                            new org.apache.flink.cdc.runtime.operators.schema.event
+                                    .SchemaChangeResultResponse(finishedEvents);
             response.complete(wrap(resultResponse));
         } else {
             // Still working on schema change request, waiting it
@@ -361,15 +342,13 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                 && (schemaChangeBehavior == SchemaChangeBehavior.TRY_EVOLVE);
     }
 
-    private List<SchemaChangeEvent> clearCurrentSchemaChangeRequest() {
+    private List<SchemaChangeEvent> clearCurrentSchemaChangeRequest(long nonce) {
         if (currentChangeException != null) {
             context.failJob(
                     new RuntimeException("Failed to apply schema change.", currentChangeException));
         }
         List<SchemaChangeEvent> finishedSchemaChanges =
                 new ArrayList<>(currentFinishedSchemaChanges);
-        flushedSinkWriters.clear();
-        currentDerivedSchemaChangeEvents.clear();
         currentFinishedSchemaChanges.clear();
         currentIgnoredSchemaChanges.clear();
         currentChangeException = null;
@@ -378,30 +357,23 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
 
     // Schema change event state could transfer in the following way:
     //
-    //      -------- B --------
-    //      |                 |
-    //      v                 |
-    //  --------           ---------------------
-    //  | IDLE | --- A --> | WAITING_FOR_FLUSH |
-    //  --------           ---------------------
+    //  --------
+    //  | IDLE | -------------------A
+    //  --------                    |
     //     ^                        |
-    //      E                       C
+    //      C                       |
     //       \                      v
     //  ------------          ------------
-    //  | FINISHED | <-- D -- | APPLYING |
+    //  | FINISHED | <-- B -- | APPLYING |
     //  ------------          ------------
     //
-    //  A: When a request came to an idling request handler.
-    //  B: When current request is duplicate or ignored by LENIENT / routed table merging
-    // strategies.
-    //  C: When schema registry collected enough flush success events, and actually started to apply
-    // schema changes.
-    //  D: When schema change application finishes (successfully or with exceptions)
-    //  E: When current schema change request result has been retrieved by SchemaOperator, and ready
-    // for the next request.
+    //  A: When a request came to an idling request handler. Only possible when registry is IDLE,
+    // and it has collected all FlushEvents from sink writers.
+    //  B: When schema change application finishes (successfully or with exceptions)
+    //  C: When current schema change request result has been retrieved by SchemaOperator, and be
+    // ready for the next request.
     private enum RequestStatus {
         IDLE,
-        WAITING_FOR_FLUSH,
         APPLYING,
         FINISHED
     }

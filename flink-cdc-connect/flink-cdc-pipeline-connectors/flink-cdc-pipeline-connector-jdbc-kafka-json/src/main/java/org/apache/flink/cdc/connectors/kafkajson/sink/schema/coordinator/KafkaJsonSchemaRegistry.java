@@ -22,13 +22,13 @@ import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.pipeline.SchemaChangeBehavior;
 import org.apache.flink.cdc.common.sink.MetadataApplier;
-import org.apache.flink.cdc.runtime.operators.schema.event.FlushSuccessEvent;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonFlushSuccessEvent;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonSchemaChangeRequest;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonSchemaChangeResultRequest;
 import org.apache.flink.cdc.runtime.operators.schema.event.GetEvolvedSchemaRequest;
 import org.apache.flink.cdc.runtime.operators.schema.event.GetEvolvedSchemaResponse;
 import org.apache.flink.cdc.runtime.operators.schema.event.GetOriginalSchemaRequest;
 import org.apache.flink.cdc.runtime.operators.schema.event.GetOriginalSchemaResponse;
-import org.apache.flink.cdc.runtime.operators.schema.event.SchemaChangeRequest;
-import org.apache.flink.cdc.runtime.operators.schema.event.SchemaChangeResultRequest;
 import org.apache.flink.cdc.runtime.operators.schema.event.SinkWriterRegisterEvent;
 import org.apache.flink.runtime.operators.coordination.CoordinationRequest;
 import org.apache.flink.runtime.operators.coordination.CoordinationRequestHandler;
@@ -152,16 +152,16 @@ public class KafkaJsonSchemaRegistry implements OperatorCoordinator, Coordinatio
         runInEventLoop(
                 () -> {
                     try {
-                        if (event instanceof FlushSuccessEvent) {
-                            FlushSuccessEvent flushSuccessEvent = (FlushSuccessEvent) event;
+                        if (event instanceof KafkaJsonFlushSuccessEvent) {
+                            KafkaJsonFlushSuccessEvent flushSuccessEvent =
+                                    (KafkaJsonFlushSuccessEvent) event;
                             LOG.info(
-                                    "Sink subtask {} succeed flushing for table {}.",
+                                    "Sink subtask {} succeed flushing for table {} (nonce: {}).",
                                     flushSuccessEvent.getSubtask(),
-                                    flushSuccessEvent.getTableId().toString());
+                                    flushSuccessEvent.getTableId().toString(),
+                                    flushSuccessEvent.getNonce());
                             requestHandler.flushSuccess(
-                                    flushSuccessEvent.getTableId(),
-                                    flushSuccessEvent.getSubtask(),
-                                    currentParallelism);
+                                    flushSuccessEvent.getSubtask(), flushSuccessEvent.getNonce());
                         } else if (event instanceof SinkWriterRegisterEvent) {
                             requestHandler.registerSinkWriter(
                                     ((SinkWriterRegisterEvent) event).getSubtask());
@@ -244,12 +244,14 @@ public class KafkaJsonSchemaRegistry implements OperatorCoordinator, Coordinatio
         runInEventLoop(
                 () -> {
                     try {
-                        if (request instanceof SchemaChangeRequest) {
-                            SchemaChangeRequest schemaChangeRequest = (SchemaChangeRequest) request;
+                        if (request instanceof KafkaJsonSchemaChangeRequest) {
+                            KafkaJsonSchemaChangeRequest schemaChangeRequest =
+                                    (KafkaJsonSchemaChangeRequest) request;
                             requestHandler.handleSchemaChangeRequest(
                                     schemaChangeRequest, responseFuture);
-                        } else if (request instanceof SchemaChangeResultRequest) {
-                            requestHandler.getSchemaChangeResult(responseFuture);
+                        } else if (request instanceof KafkaJsonSchemaChangeResultRequest) {
+                            requestHandler.getSchemaChangeResult(
+                                    (KafkaJsonSchemaChangeResultRequest) request, responseFuture);
                         } else if (request instanceof GetEvolvedSchemaRequest) {
                             handleGetEvolvedSchemaRequest(
                                     ((GetEvolvedSchemaRequest) request), responseFuture);

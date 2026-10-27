@@ -28,7 +28,7 @@ import org.apache.flink.cdc.connectors.kafkajson.sink.dialect.KafkaJsonDataSinkD
 import org.apache.flink.cdc.connectors.kafkajson.sink.partitioning.KafkaJsonPartitioningEventTypeInfo;
 import org.apache.flink.cdc.connectors.kafkajson.sink.partitioning.KafkaJsonPrePartitionOperator;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.KafkaJsonSchemaOperatorFactory;
-import org.apache.flink.cdc.runtime.operators.sink.DataSinkWriterOperatorFactory;
+import org.apache.flink.cdc.connectors.kafkajson.sink.writer.DataSinkWriterOperatorFactory;
 import org.apache.flink.cdc.runtime.partitioning.EventPartitioner;
 import org.apache.flink.cdc.runtime.partitioning.PartitioningEventKeySelector;
 import org.apache.flink.cdc.runtime.partitioning.PostPartitionProcessor;

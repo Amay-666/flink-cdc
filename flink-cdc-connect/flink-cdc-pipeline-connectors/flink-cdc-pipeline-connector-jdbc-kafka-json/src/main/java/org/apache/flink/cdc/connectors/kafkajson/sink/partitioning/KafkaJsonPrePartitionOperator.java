@@ -19,14 +19,14 @@ package org.apache.flink.cdc.connectors.kafkajson.sink.partitioning;
 
 import org.apache.flink.cdc.common.event.DataChangeEvent;
 import org.apache.flink.cdc.common.event.Event;
-import org.apache.flink.cdc.common.event.FlushEvent;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.function.HashFunction;
 import org.apache.flink.cdc.common.function.HashFunctionProvider;
 import org.apache.flink.cdc.common.schema.Schema;
+import org.apache.flink.cdc.connectors.kafkajson.event.FlushEvent;
 import org.apache.flink.cdc.connectors.kafkajson.serializer.KafkaJsonEventSerializer;
-import org.apache.flink.cdc.runtime.operators.sink.SchemaEvolutionClient;
+import org.apache.flink.cdc.connectors.kafkajson.sink.SchemaEvolutionClient;
 import org.apache.flink.cdc.runtime.partitioning.PartitioningEvent;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.MetricGroup;
