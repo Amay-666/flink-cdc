@@ -256,11 +256,11 @@ public class KafkaJsonSchemaChangeHandler {
     /**
      * Resolves the schema of a {@code CREATE TABLE ... LIKE ...} result into a regular {@code
      * CREATE} result: the DDL text carries no column definitions, so the schema is read from the
-     * in-memory store (by the LIKE source) or, when the source is not registered or its database
-     * is ambiguous, from the target table through JDBC (the DDL already executed on the server,
-     * the target exists with the source's structure). The resolved table flows through the
-     * regular CREATE path — {@code applySchemaChange} registers it and {@code
-     * buildTableChanges} emits the CreateTableEvent.
+     * in-memory store (by the LIKE source) or, when the source is not registered or its database is
+     * ambiguous, from the target table through JDBC (the DDL already executed on the server, the
+     * target exists with the source's structure). The resolved table flows through the regular
+     * CREATE path — {@code applySchemaChange} registers it and {@code buildTableChanges} emits the
+     * CreateTableEvent.
      */
     private static KafkaJsonDdlParsedResult resolveCreateLike(
             KafkaJsonSourceFetchTaskContext context, KafkaJsonDdlParsedResult result) {

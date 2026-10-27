@@ -84,8 +84,7 @@ class KafkaJsonSourceConfigFactoryTest {
 
         assertEquals(Arrays.asList("db1", "db2"), config.getDatabaseList());
         assertEquals(
-                Arrays.asList("db1.orders", "db1.users", "db2.shipments"),
-                config.getTableList());
+                Arrays.asList("db1.orders", "db1.users", "db2.shipments"), config.getTableList());
         assertEquals("db1,db2", config.getDbzConfiguration().getString("database.include.list"));
         assertEquals(
                 "db1.orders,db1.users,db2.shipments",
@@ -224,9 +223,9 @@ class KafkaJsonSourceConfigFactoryTest {
     }
 
     /**
-     * The Kafka topics are required even on the builder route (the table/pipeline factories
-     * enforce the option, the builder does not): the config factory fails fast at job setup
-     * instead of letting the snapshot run and the stream phase find nothing to consume.
+     * The Kafka topics are required even on the builder route (the table/pipeline factories enforce
+     * the option, the builder does not): the config factory fails fast at job setup instead of
+     * letting the snapshot run and the stream phase find nothing to consume.
      */
     @Test
     void testMissingKafkaTopicsFailsFast() {
@@ -242,8 +241,8 @@ class KafkaJsonSourceConfigFactoryTest {
 
     /**
      * A snapshot-only job may omit the Kafka options entirely: it runs as a pure JDBC dump — the
-     * watermark probe short-circuits to the INITIAL offset and the stream fetch task completes
-     * its no-op stream split without opening a Kafka connection.
+     * watermark probe short-circuits to the INITIAL offset and the stream fetch task completes its
+     * no-op stream split without opening a Kafka connection.
      */
     @Test
     void testSnapshotOnlyJobMayOmitKafka() {

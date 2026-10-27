@@ -41,31 +41,29 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
  * A per-reader view of the shared {@link KafkaJsonDialect} that answers the snapshot phase's
- * low/high watermark probes ({@link #displayCurrentOffset}) through this reader's reusable
- * {@code KafkaJsonOffsetSupplier} instead of the throw-away {@code KafkaConsumer} that
- * {@code KafkaJsonKafkaOffsetUtils#queryCurrentOffset} opens per probe.
+ * low/high watermark probes ({@link #displayCurrentOffset}) through this reader's reusable {@code
+ * KafkaJsonOffsetSupplier} instead of the throw-away {@code KafkaConsumer} that {@code
+ * KafkaJsonKafkaOffsetUtils#queryCurrentOffset} opens per probe.
  *
  * <p>The base scan fetch task ({@code AbstractScanFetchTask#execute}) asks the {@code
- * FetchTask.Context} for its dialect and calls {@code displayCurrentOffset} once per split
- * (twice when the backfill is enabled). The context hands out this view so that every probe of a
- * reader lands on the reader's own, single-threaded consumer: the dialect itself is one shared
- * instance per source (it also serves the enumerator), so a per-reader supplier could not be
- * stored on it — readers of a parallelism &gt; 1 job would overwrite each other's field and funnel
- * their probes through one {@code KafkaConsumer} from several fetch threads, which is not
- * thread-safe.
+ * FetchTask.Context} for its dialect and calls {@code displayCurrentOffset} once per split (twice
+ * when the backfill is enabled). The context hands out this view so that every probe of a reader
+ * lands on the reader's own, single-threaded consumer: the dialect itself is one shared instance
+ * per source (it also serves the enumerator), so a per-reader supplier could not be stored on it —
+ * readers of a parallelism &gt; 1 job would overwrite each other's field and funnel their probes
+ * through one {@code KafkaConsumer} from several fetch threads, which is not thread-safe.
  *
  * <p>Only the Kafka-sampled boundary benefits from the reuse: a {@code tidb} source queries the
- * current TSO on the database instead, so those calls (and any test seam installed on the
- * delegate) keep going through the delegate. Everything else delegates to the shared dialect
- * unchanged.
+ * current TSO on the database instead, so those calls (and any test seam installed on the delegate)
+ * keep going through the delegate. Everything else delegates to the shared dialect unchanged.
  */
 public class KafkaJsonOffsetProbingDialect implements JdbcDataSourceDialect {
 
     private final KafkaJsonDialect delegate;
 
     /**
-     * Supplies the current stream position on the reader's fetch thread; in production this is
-     * the owning context's {@code getOffsetSupplier().current()}.
+     * Supplies the current stream position on the reader's fetch thread; in production this is the
+     * owning context's {@code getOffsetSupplier().current()}.
      */
     private final Supplier<KafkaJsonOffset> probe;
 
@@ -98,8 +96,7 @@ public class KafkaJsonOffsetProbingDialect implements JdbcDataSourceDialect {
     }
 
     @Override
-    public Map<TableId, TableChange> discoverDataCollectionSchemas(
-            JdbcSourceConfig sourceConfig) {
+    public Map<TableId, TableChange> discoverDataCollectionSchemas(JdbcSourceConfig sourceConfig) {
         return delegate.discoverDataCollectionSchemas(sourceConfig);
     }
 
@@ -129,8 +126,7 @@ public class KafkaJsonOffsetProbingDialect implements JdbcDataSourceDialect {
     }
 
     @Override
-    public boolean isIncludeDataCollection(
-            JdbcSourceConfig sourceConfig, TableId tableId) {
+    public boolean isIncludeDataCollection(JdbcSourceConfig sourceConfig, TableId tableId) {
         return delegate.isIncludeDataCollection(sourceConfig, tableId);
     }
 

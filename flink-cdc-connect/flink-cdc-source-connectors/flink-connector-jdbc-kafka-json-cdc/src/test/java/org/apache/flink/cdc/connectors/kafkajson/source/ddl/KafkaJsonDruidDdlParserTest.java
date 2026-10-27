@@ -78,8 +78,8 @@ class KafkaJsonDruidDdlParserTest {
                         TABLE_ID,
                         null,
                         "CREATE TABLE `test`.`users` "
-                        + "(`id` bigint(20) NOT NULL PRIMARY KEY, `name` varchar(255) DEFAULT NULL) "
-                        + "ENGINE=InnoDB");
+                                + "(`id` bigint(20) NOT NULL PRIMARY KEY, `name` varchar(255) DEFAULT NULL) "
+                                + "ENGINE=InnoDB");
 
         assertEquals(KafkaJsonTableChangeType.CREATE, result.getType());
         Table table = result.getNewTable();
@@ -97,8 +97,8 @@ class KafkaJsonDruidDdlParserTest {
                         TABLE_ID,
                         null,
                         "CREATE TABLE `test`.`users` "
-                        + "(`id` bigint(20) NOT NULL UNIQUE, `name` varchar(255) DEFAULT NULL) "
-                        + "ENGINE=InnoDB");
+                                + "(`id` bigint(20) NOT NULL UNIQUE, `name` varchar(255) DEFAULT NULL) "
+                                + "ENGINE=InnoDB");
 
         assertEquals(KafkaJsonTableChangeType.CREATE, result.getType());
         Table table = result.getNewTable();
@@ -127,9 +127,7 @@ class KafkaJsonDruidDdlParserTest {
         assertEquals(new TableId("other", null, "users"), result.getNewTableId());
 
         // ③ source qualified — the database is explicit in the SQL
-        result =
-                parser.parse(
-                        "test", TABLE_ID, null, "CREATE TABLE `users` LIKE test.`users2`");
+        result = parser.parse("test", TABLE_ID, null, "CREATE TABLE `users` LIKE test.`users2`");
         assertEquals(KafkaJsonTableChangeType.CREATE_LIKE, result.getType());
         assertEquals(new TableId("test", null, "users2"), result.getTableId());
     }

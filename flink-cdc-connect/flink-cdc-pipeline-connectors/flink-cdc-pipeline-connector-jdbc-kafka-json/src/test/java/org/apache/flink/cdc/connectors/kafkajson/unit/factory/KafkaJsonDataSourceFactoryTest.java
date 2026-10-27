@@ -67,8 +67,7 @@ public class KafkaJsonDataSourceFactoryTest {
                         .collect(Collectors.toList());
         // the Kafka options (scan.kafka.topics, properties.kafka.bootstrap.servers) are
         // optional: a snapshot-only pipeline may omit them and run as a pure JDBC dump
-        assertThat(requireKeys)
-                .containsExactly("hostname", "password", "tables", "username");
+        assertThat(requireKeys).containsExactly("hostname", "password", "tables", "username");
     }
 
     /** Every non-snapshot mode needs the Kafka options: rejected before any JDBC discovery. */

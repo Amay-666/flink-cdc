@@ -227,7 +227,7 @@ public class CanalMessage extends KafkaJsonMessage {
         }
         switch (type.toUpperCase(Locale.ROOT)) {
             case "INSERT":
-            // Alibaba DTS (data transmission service) emits INIT for its initial snapshot
+                // Alibaba DTS (data transmission service) emits INIT for its initial snapshot
             case "INIT":
             case "UPDATE":
             case "DELETE":

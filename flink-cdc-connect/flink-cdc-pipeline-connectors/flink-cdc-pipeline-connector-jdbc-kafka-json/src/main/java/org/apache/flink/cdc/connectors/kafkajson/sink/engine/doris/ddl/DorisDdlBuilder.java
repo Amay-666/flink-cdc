@@ -286,14 +286,15 @@ public class DorisDdlBuilder implements Serializable {
     }
 
     /**
-     * Builds the fallback statements for an {@code AlterColumnTypeEvent} whose direct {@code
-     * MODIFY COLUMN} Doris rejected — a type conversion Doris cannot perform in place (MySQL/TiDB
-     * can, so the source DDL already committed).
+     * Builds the fallback statements for an {@code AlterColumnTypeEvent} whose direct {@code MODIFY
+     * COLUMN} Doris rejected — a type conversion Doris cannot perform in place (MySQL/TiDB can, so
+     * the source DDL already committed).
      *
      * <p>For each column the fallback swaps through a temporary column:
+     *
      * <ol>
-     *   <li>{@code ADD COLUMN col__cdc_tmp NEW_TYPE AFTER col} — the new type appears right
-     *       where the old column was
+     *   <li>{@code ADD COLUMN col__cdc_tmp NEW_TYPE AFTER col} — the new type appears right where
+     *       the old column was
      *   <li>{@code UPDATE t SET col__cdc_tmp = CAST(col AS NEW_TYPE)} — existing rows are
      *       converted; values Doris cannot cast are set to NULL
      *   <li>{@code DROP COLUMN col} — the old column is removed
@@ -357,8 +358,7 @@ public class DorisDdlBuilder implements Serializable {
                             + " AS "
                             + dorisType
                             + ")");
-            sqls.add(
-                    "ALTER TABLE " + qualified(tableId) + " DROP COLUMN " + quote(column));
+            sqls.add("ALTER TABLE " + qualified(tableId) + " DROP COLUMN " + quote(column));
             sqls.add(
                     "ALTER TABLE "
                             + qualified(tableId)
@@ -373,7 +373,10 @@ public class DorisDdlBuilder implements Serializable {
     /** Whether the column is a key column of the pre-change schema. */
     private static boolean isKeyColumn(String column, Optional<Schema> oldSchema) {
         return oldSchema
-                .map(schema -> schema.primaryKeys() != null && schema.primaryKeys().contains(column))
+                .map(
+                        schema ->
+                                schema.primaryKeys() != null
+                                        && schema.primaryKeys().contains(column))
                 .orElse(false);
     }
 

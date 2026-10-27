@@ -164,8 +164,8 @@ public class KafkaJsonDebeziumDdlParser implements KafkaJsonDdlParser {
     }
 
     /**
-     * Returns a {@code CREATE_LIKE} result when the DDL is a {@code CREATE TABLE ... LIKE ...},
-     * or {@code null} otherwise. Detects the statement with Druid — the same three-case source
+     * Returns a {@code CREATE_LIKE} result when the DDL is a {@code CREATE TABLE ... LIKE ...}, or
+     * {@code null} otherwise. Detects the statement with Druid — the same three-case source
      * resolution as {@code KafkaJsonDruidDdlParser#parseCreateLike}.
      */
     @Nullable

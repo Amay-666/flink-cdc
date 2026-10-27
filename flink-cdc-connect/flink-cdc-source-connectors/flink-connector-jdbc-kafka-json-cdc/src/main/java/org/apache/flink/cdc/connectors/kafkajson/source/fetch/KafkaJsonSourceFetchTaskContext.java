@@ -235,9 +235,9 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
      * displayCurrentOffset} on the returned object once per split. The view routes those probes
      * (the MySQL, Kafka-sampled boundary) through this reader's reusable {@link
      * KafkaJsonOffsetSupplier} — the shared dialect itself would open a throw-away {@code
-     * KafkaConsumer} per probe — while everything else delegates to the shared dialect
-     * unchanged. Built lazily on the fetch thread; the volatile field makes a benign duplicate
-     * view harmless if another thread ever races the creation.
+     * KafkaConsumer} per probe — while everything else delegates to the shared dialect unchanged.
+     * Built lazily on the fetch thread; the volatile field makes a benign duplicate view harmless
+     * if another thread ever races the creation.
      */
     @Override
     public JdbcDataSourceDialect getDataSourceDialect() {
