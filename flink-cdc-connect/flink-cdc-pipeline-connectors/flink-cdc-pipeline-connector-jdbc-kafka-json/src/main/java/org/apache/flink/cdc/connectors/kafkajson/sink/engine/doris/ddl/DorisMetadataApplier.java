@@ -47,10 +47,10 @@ import java.util.Optional;
  *
  * <p>Runs on the JobManager inside the schema-evolution coordinator. Every event — the five
  * standard ones plus the connector's five custom ones — is dispatched by {@code instanceof} to
- * {@link DorisDdlBuilder}, and the resulting statements are executed through a short-lived {@link
- * DorisHttpClient} (created per schema-change operation and closed via try-with-resources). All
- * event types are accepted (no {@code acceptsSchemaEvolutionType} narrowing), matching the
- * coordinator's pass-through derivation.
+ * {@link DorisDdlBuilder}, and the resulting statements are executed through a single {@link
+ * DorisHttpClient} held for the applier's lifetime (see {@link #httpClient}). All event types are
+ * accepted (no {@code acceptsSchemaEvolutionType} narrowing), matching the coordinator's
+ * pass-through derivation.
  *
  * <p>Implements {@link OldSchemaAwareMetadataApplier}: when the coordinator applies an {@link
  * AlterColumnTypeEvent} it also resolves the pre-change schema (an event only carries the new
@@ -60,8 +60,8 @@ import java.util.Optional;
  * <p>After executing a {@code MODIFY COLUMN} DDL (which triggers a heavy, asynchronous schema
  * change in Doris), the applier delegates to {@link DorisSchemaChangeMonitor} to poll {@code SHOW
  * ALTER TABLE COLUMN} until the job reaches a final state. This ensures Group Commit writes are not
- * rejected when data flow resumes. The DDL execution and the SHOW polling share one {@code
- * DorisHttpClient} instance, created and closed for the duration of the operation.
+ * rejected when data flow resumes. The DDL execution and the SHOW polling share the same {@code
+ * DorisHttpClient} instance.
  */
 public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMetadataApplier {
 
@@ -70,6 +70,25 @@ public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMeta
     private final DorisDataSinkOptions options;
     private final DorisDdlBuilder ddlBuilder;
     private final DorisSchemaChangeMonitor schemaChangeMonitor;
+
+    /**
+     * The client shared by every schema change this applier applies.
+     *
+     * <p>One instance for the applier's lifetime instead of one per event: a {@link
+     * DorisHttpClient} owns its own OkHttp connection pool, so a client created per event opens a
+     * fresh TCP connection for every DDL and closes it again right after (its {@code close()} shuts
+     * the dispatcher down and evicts the pool). That cost is invisible for a handful of events but
+     * is paid hundreds of times when a snapshot creates hundreds of tables in one round. Schema
+     * changes are applied serially on the coordinator's apply thread, so one client is never used
+     * concurrently.
+     *
+     * <p>{@code transient}: this applier is part of the schema registry state that Flink serializes
+     * to the JobManager, and an OkHttp client is not serializable. It is created on first use, so
+     * the deserialized copy gets its own client. Not closed explicitly — the applier has no
+     * lifecycle hook — but its footprint stays bounded: OkHttp returns idle connections to its pool
+     * and closes them after its keep-alive expires, and its dispatcher threads time out when idle.
+     */
+    private transient DorisHttpClient httpClient;
 
     public DorisMetadataApplier(DorisDataSinkOptions options) {
         this.options = options;
@@ -80,8 +99,8 @@ public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMeta
     @Override
     public void applySchemaChange(SchemaChangeEvent schemaChangeEvent)
             throws SchemaEvolveException {
-        try (DorisHttpClient client = createHttpClient()) {
-            applySqls(schemaChangeEvent, buildSqls(schemaChangeEvent), client);
+        try {
+            applySqls(schemaChangeEvent, buildSqls(schemaChangeEvent), httpClient());
         } catch (SchemaEvolveException e) {
             throw e;
         } catch (Exception e) {
@@ -101,7 +120,8 @@ public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMeta
             return;
         }
 
-        try (DorisHttpClient client = createHttpClient()) {
+        DorisHttpClient client = httpClient();
+        try {
             try {
                 applySqls(event, sqls, client);
             } catch (SchemaEvolveException e) {
@@ -181,13 +201,20 @@ public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMeta
         throw new UnsupportedSchemaChangeEventException(event);
     }
 
-    /** Creates a short-lived {@link DorisHttpClient} for a single schema-change operation. */
-    private DorisHttpClient createHttpClient() {
-        return new DorisHttpClient(
-                options.getFenodes(),
-                options.getUsername(),
-                options.getPassword(),
-                options.getMaxRetries(),
-                options.getStreamLoadProperties());
+    /**
+     * Returns the applier's client, creating it on first use — the applier is serialized to the
+     * JobManager, so the field is null until the deserialized copy first needs to reach Doris.
+     */
+    private synchronized DorisHttpClient httpClient() {
+        if (httpClient == null) {
+            httpClient =
+                    new DorisHttpClient(
+                            options.getFenodes(),
+                            options.getUsername(),
+                            options.getPassword(),
+                            options.getMaxRetries(),
+                            options.getStreamLoadProperties());
+        }
+        return httpClient;
     }
 }

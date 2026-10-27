@@ -31,6 +31,7 @@ import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.Moc
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer.RecordedRequest;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer.Response;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.util.InstantiationUtil;
 
 import org.junit.Test;
 
@@ -90,6 +91,57 @@ public class DorisMetadataApplierTest {
             assertThat(server.recorded.get(1).body)
                     .isEqualTo(
                             "{\"stmt\":\"ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` COMMENT 'display name'\"}");
+        }
+    }
+
+    @Test
+    public void testReusesOneHttpConnectionAcrossSchemaChanges() throws Exception {
+        Schema schema =
+                Schema.newBuilder().physicalColumn("id", DataTypes.INT()).primaryKey("id").build();
+        try (MockDorisServer server =
+                new MockDorisServer(req -> Response.ok("{\"code\":0,\"msg\":\"OK\"}"))) {
+            DorisMetadataApplier applier = applier(server);
+
+            applier.applySchemaChange(new CreateTableEvent(ORDERS, schema));
+            applier.applySchemaChange(
+                    new CreateTableEvent(TableId.tableId("shop", "customers"), schema));
+            applier.applySchemaChange(
+                    new CreateTableEvent(TableId.tableId("shop", "items"), schema));
+
+            // The applier holds one DorisHttpClient for its lifetime, so the second and third DDL
+            // arrive over the connection the first one opened instead of paying a new TCP
+            // handshake per event, as a per-event client (whose close() evicts its pool) did.
+            assertThat(server.recorded).hasSize(3);
+            assertThat(
+                            server.recorded.stream()
+                                    .map(request -> request.remotePort)
+                                    .distinct()
+                                    .count())
+                    .isEqualTo(1);
+        }
+    }
+
+    @Test
+    public void testDeserializedApplierRecreatesItsHttpClient() throws Exception {
+        Schema schema =
+                Schema.newBuilder().physicalColumn("id", DataTypes.INT()).primaryKey("id").build();
+        try (MockDorisServer server =
+                new MockDorisServer(req -> Response.ok("{\"code\":0,\"msg\":\"OK\"}"))) {
+            DorisMetadataApplier applier = applier(server);
+            // Use the applier first, so the serialization below would carry a live OkHttp client
+            // if the field were not transient — serializing the applier is what Flink does when
+            // it ships the schema registry to the JobManager.
+            applier.applySchemaChange(new CreateTableEvent(ORDERS, schema));
+
+            DorisMetadataApplier restored =
+                    InstantiationUtil.deserializeObject(
+                            InstantiationUtil.serializeObject(applier),
+                            DorisMetadataApplier.class.getClassLoader());
+
+            assertThat(restored).isNotNull();
+            restored.applySchemaChange(
+                    new CreateTableEvent(TableId.tableId("shop", "items"), schema));
+            assertThat(server.recorded).hasSize(2);
         }
     }
 
