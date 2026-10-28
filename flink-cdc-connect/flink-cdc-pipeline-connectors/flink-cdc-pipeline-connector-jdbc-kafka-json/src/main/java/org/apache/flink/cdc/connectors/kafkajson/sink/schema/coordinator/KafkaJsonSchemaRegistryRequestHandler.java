@@ -382,6 +382,7 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
         currentFinishedSchemaChanges.clear();
         currentIgnoredSchemaChanges.clear();
         currentChangeException = null;
+        flushedSinkWriters.remove(nonce);
         return finishedSchemaChanges;
     }
 

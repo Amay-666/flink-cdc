@@ -155,6 +155,38 @@ public class KafkaJsonSchemaRegistryRequestHandlerTest {
     }
 
     @Test
+    public void testFinishedRoundReleasesItsFlushBookkeeping() throws Exception {
+        RecordingMetadataApplier applier = new RecordingMetadataApplier();
+        try (KafkaJsonSchemaRegistryRequestHandler handler = handler(applier)) {
+            handler.registerSinkWriter(0);
+
+            long nonce = nextNonce();
+            handler.flushSuccess(0, nonce);
+            assertThat(
+                            send(
+                                            handler,
+                                            new KafkaJsonSchemaChangeRequest(
+                                                    ORDERS,
+                                                    new CreateTableEvent(ORDERS, SCHEMA),
+                                                    0,
+                                                    nonce))
+                                    .isAccepted())
+                    .isTrue();
+            awaitResult(handler, nonce);
+
+            // The finished round released its flush record, so reusing its nonce waits for a
+            // flush of its own instead of being released by the stale set.
+            SchemaChangeResponse response =
+                    send(
+                            handler,
+                            new KafkaJsonSchemaChangeRequest(
+                                    ORDERS_V2, new CreateTableEvent(ORDERS_V2, SCHEMA), 0, nonce));
+            assertThat(response.isWaitingForFlush()).isTrue();
+            assertThat(applier.applied).containsExactly(new CreateTableEvent(ORDERS, SCHEMA));
+        }
+    }
+
+    @Test
     public void testCustomRenameTableEventFullFlow() throws Exception {
         RecordingMetadataApplier applier = new RecordingMetadataApplier();
         try (KafkaJsonSchemaRegistryRequestHandler handler = handler(applier)) {
