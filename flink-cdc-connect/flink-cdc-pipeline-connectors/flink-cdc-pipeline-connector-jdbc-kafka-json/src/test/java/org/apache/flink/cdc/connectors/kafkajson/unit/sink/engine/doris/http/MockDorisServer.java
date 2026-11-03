@@ -47,11 +47,23 @@ public class MockDorisServer implements Closeable {
         public final String body;
         public final Map<String, String> headers;
 
-        RecordedRequest(String method, String path, String body, Map<String, String> headers) {
+        /**
+         * The client's TCP port. A client that reuses one connection sends its requests from the
+         * same port; a client that opens a new connection per request uses a new port each time.
+         */
+        public final int remotePort;
+
+        RecordedRequest(
+                String method,
+                String path,
+                String body,
+                Map<String, String> headers,
+                int remotePort) {
             this.method = method;
             this.path = path;
             this.body = body;
             this.headers = headers;
+            this.remotePort = remotePort;
         }
 
         static RecordedRequest from(HttpExchange exchange) throws IOException {
@@ -63,7 +75,11 @@ public class MockDorisServer implements Closeable {
             String body =
                     new String(readAllBytes(exchange.getRequestBody()), StandardCharsets.UTF_8);
             return new RecordedRequest(
-                    exchange.getRequestMethod(), exchange.getRequestURI().getPath(), body, headers);
+                    exchange.getRequestMethod(),
+                    exchange.getRequestURI().getPath(),
+                    body,
+                    headers,
+                    exchange.getRemoteAddress().getPort());
         }
 
         static byte[] readAllBytes(InputStream inputStream) throws IOException {

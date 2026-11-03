@@ -53,7 +53,7 @@ public class KafkaJsonSchemaOperatorFactory extends SimpleOperatorFactory<Event>
             SchemaChangeBehavior schemaChangeBehavior,
             String timezone) {
         super(
-                new SchemaOperator(
+                new KafkaJsonSchemaOperator(
                         Collections.emptyList(), rpcTimeOut, schemaChangeBehavior, timezone));
         this.metadataApplier = metadataApplier;
         this.schemaChangeBehavior = schemaChangeBehavior;

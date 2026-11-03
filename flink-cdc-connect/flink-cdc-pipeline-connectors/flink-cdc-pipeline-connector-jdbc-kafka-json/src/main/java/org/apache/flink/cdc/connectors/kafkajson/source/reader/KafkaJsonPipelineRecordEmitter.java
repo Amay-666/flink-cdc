@@ -25,6 +25,7 @@ import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.connectors.base.source.meta.split.SourceSplitState;
 import org.apache.flink.cdc.connectors.base.source.metrics.SourceReaderMetrics;
 import org.apache.flink.cdc.connectors.base.source.reader.IncrementalSourceRecordEmitter;
+import org.apache.flink.cdc.connectors.kafkajson.event.BatchCreateTableEvents;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.dialect.KafkaJsonDialect;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffsetFactory;
@@ -50,6 +51,23 @@ import static org.apache.flink.cdc.connectors.base.source.meta.wartermark.Waterm
 public class KafkaJsonPipelineRecordEmitter extends IncrementalSourceRecordEmitter<Event> {
 
     private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonPipelineRecordEmitter.class);
+
+    /**
+     * How many tables one {@link BatchCreateTableEvents} may carry: large enough that hundreds of
+     * tables need only a handful of coordination rounds, small enough that one round of DDLs —
+     * executed one after another against the external system while the data flow is blocked — stays
+     * inside the schema-change RPC timeout.
+     */
+    private static final int CREATE_TABLE_BATCH_MAX_TABLES = 100;
+
+    /**
+     * How many encoded bytes one {@link BatchCreateTableEvents} may carry: it bounds the record's
+     * memory and the size of the coordination request that carries it, and it is what keeps wide
+     * tables (hundreds of columns, long comments) from turning a 100-table chunk into a multi-
+     * megabyte record. A typical schema is a few hundred bytes to a few KB, so the table count
+     * binds first and this limit only catches the pathological case.
+     */
+    private static final int CREATE_TABLE_BATCH_MAX_BYTES = 1024 * 1024;
 
     private final KafkaJsonSourceConfig sourceConfig;
 
@@ -104,11 +122,12 @@ public class KafkaJsonPipelineRecordEmitter extends IncrementalSourceRecordEmitt
             SourceRecord element, SourceOutput<Event> output, SourceSplitState splitState)
             throws Exception {
         // FLINK-40102 batch mode: emit all CreateTableEvents together on the first record, before
-        // any DataChangeEvent. Each per-table event would trigger a downstream FlushEvent that
-        // flushes buffered data; in batch mode the flushes hit an empty buffer (no data has flowed
-        // yet), so no data files are produced and the data stream is not interrupted.
+        // any DataChangeEvent, as a few BatchCreateTableEvents. A per-table event would trigger a
+        // downstream FlushEvent and a full schema-change round each; a batch triggers one of each
+        // per chunk, hitting an empty buffer (no data has flowed yet), so no data files are
+        // produced and the data stream is not interrupted.
         if (batchEmitCreateTableEventsEnabled && !batchEmitted) {
-            createTableEventCache.forEach(output::collect);
+            emitCreateTableEventBatches(createTableEventCache, output);
             createTableEventCache.forEach(
                     event -> alreadySendCreateTableTables.add(event.tableId()));
             batchEmitted = true;
@@ -140,6 +159,22 @@ public class KafkaJsonPipelineRecordEmitter extends IncrementalSourceRecordEmitt
                     .forEach(output::collect);
         }
         super.processElement(element, output, splitState);
+    }
+
+    /**
+     * Emits the cached schema events, chunked by {@link BatchCreateTableEvents#partition} into
+     * batches that respect both {@link #CREATE_TABLE_BATCH_MAX_TABLES} and {@link
+     * #CREATE_TABLE_BATCH_MAX_BYTES}.
+     */
+    private void emitCreateTableEventBatches(
+            List<CreateTableEvent> createTableEvents, SourceOutput<Event> output) {
+        for (BatchCreateTableEvents batch :
+                BatchCreateTableEvents.partition(
+                        createTableEvents,
+                        CREATE_TABLE_BATCH_MAX_TABLES,
+                        CREATE_TABLE_BATCH_MAX_BYTES)) {
+            output.collect(batch);
+        }
     }
 
     private void sendCreateTableEvent(
