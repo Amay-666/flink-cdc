@@ -200,7 +200,7 @@ public class KafkaJsonScanFetchTask extends AbstractScanFetchTask {
                                     snapshotSplit.getSplitStart(),
                                     snapshotSplit.getSplitEnd(),
                                     snapshotSplit.getSplitKeyType().getFieldCount(),
-                                    connectorConfig.getQueryFetchSize());
+                                    sourceConfig.getFetchSize());
                     ResultSet rs = selectStatement.executeQuery()) {
 
                 List<Column> columns = table.columns();

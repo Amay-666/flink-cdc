@@ -69,6 +69,23 @@ class KafkaJsonSourceConfigFactoryTest {
         assertEquals("com.mysql.cj.jdbc.Driver", config.getDriverClassName());
     }
 
+    @Test
+    void testFetchSizeOptionWiresOnlyTheSourceConfig() {
+        // The snapshot read takes its JDBC fetch size from sourceConfig.getFetchSize() (see
+        // KafkaJsonScanFetchTask). The Debezium connector config's query.fetch.size is
+        // deliberately NOT fed by the option: nothing maps it, so it stays on the Debezium
+        // default 0 — the two fetch-size views are decoupled, and the option route is the
+        // source config alone.
+        assertEquals(1024, buildFactory().fetchSize(1024).create(0).getFetchSize());
+        assertEquals(
+                0,
+                buildFactory()
+                        .fetchSize(1024)
+                        .create(0)
+                        .getDbzConnectorConfig()
+                        .getQueryFetchSize());
+    }
+
     /**
      * A job may capture multiple databases at once: the varargs databaseList/tableList must keep
      * the full lists (the dialect's snapshot discovery walks every entry) and join them into the

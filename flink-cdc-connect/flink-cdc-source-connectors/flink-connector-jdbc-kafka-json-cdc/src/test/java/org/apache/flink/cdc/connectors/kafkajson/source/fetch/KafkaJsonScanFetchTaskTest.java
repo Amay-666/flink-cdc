@@ -17,6 +17,7 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.source.fetch;
 
+import org.apache.flink.cdc.connectors.base.options.SourceOptions;
 import org.apache.flink.cdc.connectors.base.source.meta.split.SnapshotSplit;
 import org.apache.flink.cdc.connectors.base.source.meta.wartermark.WatermarkEvent;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
@@ -219,6 +220,42 @@ class KafkaJsonScanFetchTaskTest {
     }
 
     @Test
+    void testSnapshotReadTakesFetchSizeFromSourceConfig() throws Exception {
+        // The statement's fetch size must come from sourceConfig.getFetchSize() — wired from
+        // the scan.snapshot.fetch.size option — and NOT from the Debezium connector config:
+        // nothing maps the option into query.fetch.size, so its default 0 used to reach the
+        // statement as setFetchSize(0), the JDBC "driver default", and the configured batch
+        // size never took effect under useCursorFetch.
+        SnapshotSplit split = snapshotSplit(new Object[] {1L}, new Object[] {3L});
+        List<Integer> fetchSizeLog = new ArrayList<>();
+        KafkaJsonSourceFetchTaskContext context =
+                new KafkaJsonSourceFetchTaskContext(
+                        configWithFetchSize(128), new KafkaJsonDialect(configWithFetchSize(128)));
+        context.setKafkaConsumerForTesting(new FakeKafkaConsumer(new HashMap<>(), new HashMap<>()));
+        context.setJdbcConnectionForTesting(
+                fakeJdbc(
+                        Collections.singletonList(new Object[] {2L, "B"}),
+                        new ArrayList<>(),
+                        new ArrayList<>(),
+                        fetchSizeLog));
+        context.configure(split);
+
+        KafkaJsonScanFetchTask.KafkaJsonSnapshotSplitReadTask readTask =
+                new KafkaJsonScanFetchTask.KafkaJsonSnapshotSplitReadTask(
+                        context.getRecordFactory(),
+                        context.getDatabaseSchema(),
+                        context.getConnection(),
+                        context.getDbzConnectorConfig(),
+                        context.getSourceConfig(),
+                        context.getQueue(),
+                        split);
+        readTask.execute(() -> true);
+
+        drain(context.getQueue(), 1);
+        assertEquals(Collections.singletonList(128), fetchSizeLog);
+    }
+
+    @Test
     void testBinaryTimeToDuration() {
         // 13:45:01 — 8 bytes: sign(0), days=0 (4 LE bytes), hours=13, minutes=45, seconds=1
         byte[] wholeSecond = {0, 0, 0, 0, 0, 13, 45, 1};
@@ -291,6 +328,12 @@ class KafkaJsonScanFetchTaskTest {
     }
 
     private static KafkaJsonSourceConfig config() {
+        return configWithFetchSize(
+                SourceOptions.SCAN_SNAPSHOT_FETCH_SIZE.defaultValue());
+    }
+
+    /** Like {@link #config()} with an explicit {@code scan.snapshot.fetch.size}. */
+    private static KafkaJsonSourceConfig configWithFetchSize(int fetchSize) {
         return new KafkaJsonSourceConfigFactory()
                 .hostname("localhost")
                 .username("root")
@@ -300,6 +343,7 @@ class KafkaJsonScanFetchTaskTest {
                 .kafkaBootstrapServers("bootstrap")
                 .kafkaTopics("t")
                 .serverTimeZone("UTC")
+                .fetchSize(fetchSize)
                 .create(0);
     }
 
@@ -363,11 +407,21 @@ class KafkaJsonScanFetchTaskTest {
     /**
      * Builds a {@link JdbcConnection} whose {@link Connection}/{@link PreparedStatement}/{@link
      * ResultSet} are faked with {@link Proxy} handlers: {@code prepareStatement} records the SQL in
-     * {@code sqlLog}, {@code setObject} records its arguments in {@code setObjectArgs}, and {@code
-     * executeQuery} iterates over {@code rows}.
+     * {@code sqlLog}, {@code setObject} records its arguments in {@code setObjectArgs}, {@code
+     * setFetchSize} records its argument in {@code fetchSizeLog}, and {@code executeQuery}
+     * iterates over {@code rows}.
      */
     private static JdbcConnection fakeJdbc(
             List<Object[]> rows, List<String> sqlLog, List<Object[]> setObjectArgs) {
+        return fakeJdbc(rows, sqlLog, setObjectArgs, new ArrayList<>());
+    }
+
+    /** Like {@link #fakeJdbc(List, List, List)}, but also records every setFetchSize call. */
+    private static JdbcConnection fakeJdbc(
+            List<Object[]> rows,
+            List<String> sqlLog,
+            List<Object[]> setObjectArgs,
+            List<Integer> fetchSizeLog) {
         AtomicInteger rowIndex = new AtomicInteger(-1);
         ResultSet resultSet =
                 (ResultSet)
@@ -397,6 +451,7 @@ class KafkaJsonScanFetchTaskTest {
                                 (proxy, method, args) -> {
                                     switch (method.getName()) {
                                         case "setFetchSize":
+                                            fetchSizeLog.add((Integer) args[0]);
                                             return null;
                                         case "setObject":
                                             setObjectArgs.add(Arrays.copyOf(args, args.length));

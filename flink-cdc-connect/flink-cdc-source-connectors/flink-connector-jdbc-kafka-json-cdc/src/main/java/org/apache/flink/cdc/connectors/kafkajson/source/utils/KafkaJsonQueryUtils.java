@@ -27,6 +27,7 @@ import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Iterator;
 
@@ -237,7 +238,8 @@ public class KafkaJsonQueryUtils {
             throws SQLException {
         final Connection connection = jdbc.connection();
         connection.setAutoCommit(false);
-        final PreparedStatement statement = connection.prepareStatement(sql);
+        final PreparedStatement statement = connection.prepareStatement(
+                sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
         statement.setFetchSize(fetchSize);
         return statement;
     }
