@@ -141,7 +141,9 @@ public class StatefulDorisSinkWriter implements StatefulSinkWriter<Event, DorisW
             DorisDataSinkOptions options, ZoneId pipelineZoneId, Sink.InitContext initContext) {
         this.options = options;
         this.pipelineZoneId = pipelineZoneId;
-        this.metrics = new DorisWriteMetrics(initContext.metricGroup());
+        this.metrics =
+                new DorisWriteMetrics(
+                        initContext.metricGroup(), options.isGroupCommitEnabled());
         this.isGroupCommit = options.isGroupCommitEnabled();
         this.sequenceColumnName =
                 options.isGroupCommitEnabled() ? options.getSequenceColumnName() : null;
@@ -160,7 +162,12 @@ public class StatefulDorisSinkWriter implements StatefulSinkWriter<Event, DorisW
                         options.getPassword(),
                         options.getMaxRetries(),
                         options.getStreamLoadProperties(),
-                        options.getGroupCommitMode().headerValue());
+                        options.getGroupCommitMode().headerValue(),
+                        options.isGroupCommitEnabled()
+                                ? options.getSequenceColumnName()
+                                : null,
+                        metrics,
+                        options.getMaxBatchBytes());
         schedulePeriodicFlush(initContext);
     }
 
@@ -216,7 +223,9 @@ public class StatefulDorisSinkWriter implements StatefulSinkWriter<Event, DorisW
     protected void landBatch(String database, String table, List<Map<String, Object>> rows)
             throws IOException {
         // Group Commit mode: pass null label so DorisHttpClient sends the group_commit header
-        // instead of a label (specifying a label degrades to non-Group-Commit).
+        // instead of a label (specifying a label degrades to non-Group-Commit). The batch's
+        // byte-cap chunking happens inside the client: one call, one flush, and however many
+        // request bodies the cap demands.
         streamLoad(database, table, isGroupCommit ? null : newLabel(database, table), rows);
     }
 

@@ -17,7 +17,9 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.http;
 
+import org.apache.flink.cdc.common.utils.Preconditions;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions;
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisWriteMetrics;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,6 +31,7 @@ import okhttp3.Response;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -202,8 +205,30 @@ public class DorisHttpClient implements Closeable {
 
     private final boolean isGroupCommit;
 
+    /**
+     * Name of the Group Commit sequence column, or {@code null} when Group Commit is off. Sent as
+     * the {@code function_column.sequence_col} header on every Group-Commit StreamLoad so Doris
+     * maps the JSON key to the sequence column.
+     */
+    @Nullable private final String sequenceColumnName;
+
+    /**
+     * Sink for the per-load row accounting Doris reports on every committed load ({@code
+     * NumberLoadedRows}/{@code NumberFilteredRows}), or {@code null} for load-free clients (DDL,
+     * commit/abort). With a {@code max_filter_ratio} above zero Doris filters rows under a
+     * {@code Status: Success}; the counters (plus the WARN logged on any filtered row) are the
+     * only thing that keeps such drops visible.
+     */
+    @Nullable private final DorisWriteMetrics loadMetrics;
+
+    /**
+     * The serialized-size cap one StreamLoad request body must respect; see the 9-argument
+     * constructor. {@code 0} or less disables the cap.
+     */
+    private final long maxBatchBytes;
+
     public DorisHttpClient(String fenodes, String username, String password, int maxRetries) {
-        this(fenodes, username, password, maxRetries, Collections.emptyMap(), "off");
+        this(fenodes, username, password, maxRetries, Collections.emptyMap(), "off", null, null);
     }
 
     /**
@@ -220,7 +245,7 @@ public class DorisHttpClient implements Closeable {
             String password,
             int maxRetries,
             Map<String, String> streamLoadProperties) {
-        this(fenodes, username, password, maxRetries, streamLoadProperties, "off");
+        this(fenodes, username, password, maxRetries, streamLoadProperties, "off", null, null);
     }
 
     /**
@@ -233,6 +258,9 @@ public class DorisHttpClient implements Closeable {
      * @param groupCommitMode Group Commit mode: {@code "off"}, {@code "sync_mode"} or {@code
      *     "async_mode"}. When not {@code "off"}, callers should pass a {@code null} label to {@link
      *     #streamLoad} so the {@code group_commit} header is sent instead of a label.
+     * @param sequenceColumnName Name of the column the writer uses as the Group Commit sequence
+     *     column, or {@code null} when Group Commit is off. Sent as the {@code
+     *     function_column.sequence_col} header on every Group-Commit StreamLoad.
      */
     public DorisHttpClient(
             String fenodes,
@@ -240,7 +268,63 @@ public class DorisHttpClient implements Closeable {
             String password,
             int maxRetries,
             Map<String, String> streamLoadProperties,
-            String groupCommitMode) {
+            String groupCommitMode,
+            String sequenceColumnName) {
+        this(
+                fenodes,
+                username,
+                password,
+                maxRetries,
+                streamLoadProperties,
+                groupCommitMode,
+                sequenceColumnName,
+                null,
+                DorisDataSinkOptions.MAX_BATCH_BYTES.defaultValue());
+    }
+
+    /**
+     * @param loadMetrics sink for the per-load row accounting (see {@link #loadMetrics}); the sink
+     *     writers pass their {@link DorisWriteMetrics}, load-free clients pass {@code null}.
+     * @see #DorisHttpClient(String, String, String, int, Map, String, String)
+     */
+    public DorisHttpClient(
+            String fenodes,
+            String username,
+            String password,
+            int maxRetries,
+            Map<String, String> streamLoadProperties,
+            String groupCommitMode,
+            String sequenceColumnName,
+            @Nullable DorisWriteMetrics loadMetrics) {
+        this(
+                fenodes,
+                username,
+                password,
+                maxRetries,
+                streamLoadProperties,
+                groupCommitMode,
+                sequenceColumnName,
+                loadMetrics,
+                DorisDataSinkOptions.MAX_BATCH_BYTES.defaultValue());
+    }
+
+    /**
+     * @param maxBatchBytes the serialized-size cap one StreamLoad request body must respect; a
+     *     larger batch is split internally and landed as several sequential loads (labelled
+     *     {@code <label>_c1}, {@code _c2}, ...; the first chunk keeps the plain label). {@code 0}
+     *     or less disables the cap. See {@code sink.buffer.max-batch-bytes}.
+     * @see #DorisHttpClient(String, String, String, int, Map, String, String, DorisWriteMetrics)
+     */
+    public DorisHttpClient(
+            String fenodes,
+            String username,
+            String password,
+            int maxRetries,
+            Map<String, String> streamLoadProperties,
+            String groupCommitMode,
+            String sequenceColumnName,
+            @Nullable DorisWriteMetrics loadMetrics,
+            long maxBatchBytes) {
         this.fenodes = parseFenodes(fenodes);
         // Retries on top of the first attempt, so 0 means "fail without retrying" — clamping this
         // to 1 instead would quietly turn sink.max-retries=0 into one retry.
@@ -260,6 +344,9 @@ public class DorisHttpClient implements Closeable {
         // Use the normalized field: callers pass the header value, which is null when Group
         // Commit is off, and "off".equalsIgnoreCase(null) would read that as enabled.
         this.isGroupCommit = !"off".equalsIgnoreCase(this.groupCommitMode);
+        this.sequenceColumnName = sequenceColumnName;
+        this.loadMetrics = loadMetrics;
+        this.maxBatchBytes = maxBatchBytes;
         this.client =
                 new OkHttpClient.Builder()
                         .connectTimeout(30, TimeUnit.SECONDS)
@@ -283,6 +370,10 @@ public class DorisHttpClient implements Closeable {
      * because the same rows carry the same sequence values, so Doris's "larger sequence replaces
      * smaller" semantics make the retry a no-op for keys that already committed.
      *
+     * <p>A batch whose estimated serialized size exceeds {@code sink.buffer.max-batch-bytes} is
+     * split and landed as several sequential loads: one giant body cannot pass the JVM's 2GB
+     * array limit, which a row-count cap cannot prevent for wide rows.
+     *
      * @param database target database (already mapped via the dialect options)
      * @param table target table (already mapped via the dialect options)
      * @param label the load label, deduplicated by Doris across retries; {@code null} when Group
@@ -297,7 +388,153 @@ public class DorisHttpClient implements Closeable {
         if (rows.isEmpty()) {
             return 0;
         }
-        byte[] body = OBJECT_MAPPER.writeValueAsBytes(rows);
+        // Byte-cap chunking lives here — the one place rows become JSON — so the writers stay
+        // oblivious of the batch's serialized size. A batch above the cap lands as several
+        // sequential loads under derived labels (the first chunk keeps the plain label), and no
+        // single request body can approach the JVM's 2GB array limit, which the row-count caps
+        // of the writers cannot prevent for wide rows. Each chunk is serialized by the same
+        // writeValueAsBytes(List) call the uncapped path uses — the estimate only decides the
+        // chunk boundary, never the bytes on the wire.
+        int totalBytes = 0;
+        List<List<Map<String, Object>>> chunks =
+                partitionByBatchBytes(database, table, rows, maxBatchBytes);
+        for (int i = 0; i < chunks.size(); i++) {
+            byte[] body = OBJECT_MAPPER.writeValueAsBytes(chunks.get(i));
+            totalBytes += streamLoad(database, table, chunkLabel(label, i), body);
+        }
+        return totalBytes;
+    }
+
+    /**
+     * Splits a batch of rows into chunks whose <em>estimated</em> serialized size stays within
+     * {@code maxBytes}. The estimate is UTF-8 aware (a CJK character counts as its 3-byte width,
+     * not one char) and escape aware (quotes and backslashes double, control characters become
+     * six-character unicode escapes), so it over-counts rather than under-counts — an error of a
+     * few percent in the safe direction, irrelevant with the default 100MB cap against the 2GB
+     * array limit.
+     * Each chunk is later serialized whole by {@code writeValueAsBytes(chunk)}: the estimate
+     * picks the boundary, the real serializer produces the body, so there is no hand-assembled
+     * JSON anywhere. A single row whose estimate alone exceeds the cap forms its own chunk and
+     * logs a WARN — a row cannot be split, so an oversized blob still goes out as one request.
+     *
+     * @param maxBytes the byte cap per body; {@code 0} or less returns the whole batch as one
+     *     chunk (the legacy unbounded behaviour)
+     */
+    private List<List<Map<String, Object>>> partitionByBatchBytes(
+            String database, String table, List<Map<String, Object>> rows, long maxBytes) {
+        if (maxBytes <= 0L || rows.size() <= 1) {
+            return Collections.singletonList(rows);
+        }
+        List<List<Map<String, Object>>> chunks = new ArrayList<>();
+        List<Map<String, Object>> current = new ArrayList<>();
+        long currentBytes = 0L;
+        for (Map<String, Object> row : rows) {
+            long rowBytes = estimatedSerializedBytes(row);
+            if (!current.isEmpty() && currentBytes + rowBytes > maxBytes) {
+                chunks.add(current);
+                current = new ArrayList<>();
+                currentBytes = 0L;
+            }
+            if (rowBytes > maxBytes) {
+                LOG.warn(
+                        "One row of {}.{} serializes to roughly {} bytes, above the {} byte batch"
+                                + " cap; loading it as its own request.",
+                        database,
+                        table,
+                        rowBytes,
+                        maxBytes);
+            }
+            current.add(row);
+            currentBytes += rowBytes;
+        }
+        if (!current.isEmpty()) {
+            chunks.add(current);
+        }
+        return chunks;
+    }
+
+    /**
+     * A UTF-8 and escape aware estimate of one row's serialized JSON byte size; see {@link
+     * #partitionByBatchBytes}. Character inspection only — no serialization pass, no allocation.
+     *
+     * <p>The value types are the closed set {@code DorisRowConverter} produces: strings (including
+     * complex columns, which arrive as their rendered JSON text — its embedded quotes are
+     * accounted by the escape doubling), the numeric types, booleans, and {@code byte[]} for
+     * BINARY/VARBINARY, which Jackson serializes as Base64 (a 4/3 inflation).
+     */
+    private static long estimatedSerializedBytes(Map<String, Object> row) {
+        long bytes = 2L; // the surrounding braces
+        for (Map.Entry<String, Object> entry : row.entrySet()) {
+            bytes += utf8EscapedLength(entry.getKey()) + 6L; // quotes, colon, comma
+            Object value = entry.getValue();
+            if (value == null) {
+                bytes += 4L; // null
+            } else if (value instanceof Number || value instanceof Boolean) {
+                // numbers and booleans serialize to their ASCII string form
+                bytes += String.valueOf(value).length();
+            } else if (value instanceof byte[]) {
+                // Jackson Base64-encodes binary values: 4 output characters for every 3 bytes
+                // (plus up to 2 padding), in quotes
+                bytes += ((byte[]) value).length * 4L / 3L + 4L;
+            } else {
+                bytes += utf8EscapedLength(String.valueOf(value)) + 2L; // quotes
+            }
+        }
+        return bytes;
+    }
+
+    /**
+     * The UTF-8 byte length of the JSON-escaped form of a string: an ASCII character is one byte,
+     * a CJK character three, a quote or backslash doubles (escaped), and a control character
+     * becomes a six-character unicode escape. Supplementary characters (two surrogate
+     * chars) count as six, above their real four — the estimate errs high, which is the safe
+     * direction for a cap.
+     */
+    private static long utf8EscapedLength(String s) {
+        long bytes = 0L;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '"' || c == '\\') {
+                bytes += 2L;
+            } else if (c < 0x20) {
+                bytes += 6L;
+            } else if (c < 0x80) {
+                bytes += 1L;
+            } else if (c < 0x800) {
+                bytes += 2L;
+            } else {
+                bytes += 3L;
+            }
+        }
+        return bytes;
+    }
+
+    /**
+     * The label of chunk {@code index}: the first chunk keeps the plain {@code label} (single-chunk
+     * batches — the overwhelmingly common case — are byte-identical to the uncapped behaviour),
+     * later chunks append {@code _c<index>} so every request of one batch carries a unique label.
+     * A {@code null} label (Group Commit, where Doris assigns labels) stays {@code null}.
+     */
+    private static String chunkLabel(String label, int index) {
+        if (label == null || index == 0) {
+            return label;
+        }
+        return label + "_c" + index;
+    }
+
+    /**
+     * Stream-loads a pre-serialized JSON array body; see {@link #streamLoad(String, String, String,
+     * List)} for the protocol details (label semantics, redirect dance, retry idempotence).
+     *
+     * @param body the JSON array of row objects, as produced by {@code
+     *     ObjectMapper.writeValueAsBytes(rows)}
+     * @return the number of bytes sent in the request body (for write-throughput metrics)
+     */
+    public int streamLoad(String database, String table, String label, byte[] body)
+            throws IOException {
+        if (body.length == 0) {
+            return 0;
+        }
         String operation = describeStreamLoad(database, table, label);
         // Doris 2.x answers the StreamLoad PUT on the FE with a 307 whose Location points at the BE
         // owning the tablets. OkHttp does not follow redirects for PUT, so the two-step dance is
@@ -373,7 +610,7 @@ public class DorisHttpClient implements Closeable {
      * @return the transaction the rows now live in, needed to commit or abort them
      * @throws LabelAlreadyExistsException when the label belongs to a transaction Doris remembers
      */
-    public PrecommitResult precommitStreamLoad(
+    public List<PrecommitResult> precommitStreamLoad(
             String database, String table, String label, List<Map<String, Object>> rows)
             throws IOException {
         checkArgument(
@@ -383,7 +620,33 @@ public class DorisHttpClient implements Closeable {
                         + "skip empty batches instead.",
                 database,
                 table);
-        return precommit(database, table, label, OBJECT_MAPPER.writeValueAsBytes(rows));
+        // Every chunk is its own transaction (a 2PC load cannot span transactions), so a batch
+        // above the byte cap pre-commits as several transactions under derived labels: the first
+        // chunk keeps the plain label, later ones append _c<index>. The rows-in-transaction
+        // semantics are unchanged — a commit of all of them, or an abort of all of them, is the
+        // caller's checkpoint-driven decision, chunk or no chunk. Each chunk is serialized whole
+        // by the same writeValueAsBytes(List) call the uncapped path uses.
+        List<List<Map<String, Object>>> chunks =
+                partitionByBatchBytes(database, table, rows, maxBatchBytes);
+        List<PrecommitResult> results = new ArrayList<>(chunks.size());
+        for (int i = 0; i < chunks.size(); i++) {
+            byte[] body = OBJECT_MAPPER.writeValueAsBytes(chunks.get(i));
+            results.add(precommit(database, table, chunkLabel(label, i), body));
+        }
+        return results;
+    }
+
+    /**
+     * Pre-commits one pre-serialized body under {@code label}; see {@link
+     * #precommitStreamLoad(String, String, String, List)} for the protocol details. Used by the
+     * chunking loop above and available for callers that serialize themselves.
+     *
+     * @return the transaction the rows now live in, needed to commit or abort them
+     * @throws LabelAlreadyExistsException when the label belongs to a transaction Doris remembers
+     */
+    public PrecommitResult precommitStreamLoad(
+            String database, String table, String label, byte[] body) throws IOException {
+        return precommit(database, table, label, body);
     }
 
     /**
@@ -392,12 +655,23 @@ public class DorisHttpClient implements Closeable {
      */
     public static class PrecommitResult {
 
+        private final String label;
         private final long transactionId;
         private final int bodyBytes;
 
-        PrecommitResult(long transactionId, int bodyBytes) {
+        PrecommitResult(String label, long transactionId, int bodyBytes) {
+            this.label = label;
             this.transactionId = transactionId;
             this.bodyBytes = bodyBytes;
+        }
+
+        /**
+         * The label the transaction was opened under — the derived chunk label when the batch was
+         * split ({@code <label>_c1}, ...); the writer needs it to key the transaction it will
+         * commit.
+         */
+        public String getLabel() {
+            return label;
         }
 
         public long getTransactionId() {
@@ -476,14 +750,15 @@ public class DorisHttpClient implements Closeable {
                 HTTP_TEMP_REDIRECT);
     }
 
-    private static PrecommitResult evaluatePrecommit(
+    // non-static: reads loadMetrics through recordLoadStats
+    private PrecommitResult evaluatePrecommit(
             Response response, String database, String table, String label, int bodyBytes)
             throws IOException {
-        if (!response.isSuccessful()) {
-            throw new IOException(
-                    "HTTP " + response.code() + " for 2PC precommit of " + database + "." + table);
-        }
         String responseBody = response.body() != null ? response.body().string() : "";
+        if (!response.isSuccessful()) {
+            String error = String.format("HTTP %d for 2PC precommit of %s.%s: %s", response.code(), database, table, truncateForLog(responseBody));
+            throw new IOException(error);
+        }
         JsonNode root = OBJECT_MAPPER.readTree(responseBody);
         String status = root.path("Status").asText();
         if (DORIS_SUCCESS_STATUS.contains(status)) {
@@ -502,7 +777,10 @@ public class DorisHttpClient implements Closeable {
                                 + ") without reporting a transaction id: "
                                 + responseBody);
             }
-            return new PrecommitResult(transactionId, bodyBytes);
+            // The load result is settled at pre-commit time (commit only publishes it), so the
+            // row accounting is recorded here rather than at the final commit.
+            recordLoadStats(root, database, table, label, responseBody);
+            return new PrecommitResult(label, transactionId, bodyBytes);
         }
         if (LABEL_ALREADY_EXISTS.equals(status)) {
             String message = root.path("Message").asText();
@@ -572,16 +850,13 @@ public class DorisHttpClient implements Closeable {
     private static void evaluateTwoPhaseOperation(
             Response response, String database, String operation, long transactionId)
             throws IOException {
-        if (!response.isSuccessful()) {
-            throw new IOException(
-                    "HTTP "
-                            + response.code()
-                            + " for 2PC "
-                            + operation
-                            + " of transaction "
-                            + transactionId);
-        }
         String responseBody = response.body() != null ? response.body().string() : "";
+        if (!response.isSuccessful()) {
+            String error = String.format(
+                    "HTTP %d for 2PC %s of transaction %d: %s",
+                    response.code(), operation, transactionId, truncateForLog(responseBody));
+            throw new IOException(error);
+        }
         JsonNode root = OBJECT_MAPPER.readTree(responseBody);
         // Unlike a load, this endpoint answers with lower-case "status"/"msg" fields.
         if ("Success".equalsIgnoreCase(root.path("status").asText())) {
@@ -668,6 +943,11 @@ public class DorisHttpClient implements Closeable {
         // group_commit: sent instead of a label when Group Commit is enabled
         if (isGroupCommit && label == null) {
             headers.put("group_commit", groupCommitMode);
+            Preconditions.checkArgument(
+                    sequenceColumnName != null && !sequenceColumnName.isEmpty(),
+                    "sequenceColumnName must be non-empty " +
+                    "when Group Commit is enabled");
+            headers.put("function_column.sequence_col", sequenceColumnName);
         }
         // sink.properties pass-through: user-supplied StreamLoad properties (columns=...,
         // max_filter_ratio=..., timezone=..., ...). A key colliding with one of the protocol
@@ -690,20 +970,27 @@ public class DorisHttpClient implements Closeable {
     private int evaluateStreamLoad(
             Response response, String database, String table, String label, int bytes)
             throws IOException {
-        if (!response.isSuccessful()) {
-            throw new IOException(
-                    "HTTP " + response.code() + " for StreamLoad of " + database + "." + table);
-        }
         String responseBody = response.body() != null ? response.body().string() : "";
+        if (!response.isSuccessful()) {
+            String error = String.format( "HTTP %d for StreamLoad of %s.%s: %s",
+                    response.code(), database, table, truncateForLog(responseBody));
+            throw new IOException(error);
+        }
         JsonNode root = OBJECT_MAPPER.readTree(responseBody);
         String status = root.path("Status").asText();
         boolean groupCommit = label == null;
         if (groupCommit) {
             // Group Commit mode: "Label Already Exists" never occurs (Doris assigns labels).
             if ("Success".equals(status)) {
-                // Warn if Doris silently fell back to non-GC (table lacks sequence column, heavy
-                // schema change, WAL space insufficient for async_mode, etc.)
+                // Report whether Doris really applied group commit to this batch: the response's
+                // GroupCommit flag, not the request's group_commit header, is the truth — Doris
+                // can silently fall back (missing sequence column, heavy schema change, WAL
+                // space insufficient for async_mode, ...). The metric pair makes the fallback
+                // rate visible; the WARN below marks its first occurrence.
                 boolean groupCommitUsed = root.path("GroupCommit").asBoolean(false);
+                if (loadMetrics != null) {
+                    loadMetrics.recordGroupCommitLoad(groupCommitUsed);
+                }
                 if (!groupCommitUsed) {
                     LOG.warn(
                             "Group commit was requested but Doris fell back to normal mode for "
@@ -713,10 +1000,12 @@ public class DorisHttpClient implements Closeable {
                             database,
                             table);
                 }
+                recordLoadStats(root, database, table, label, responseBody);
                 return bytes;
             }
         } else {
             if (DORIS_SUCCESS_STATUS.contains(status)) {
+                recordLoadStats(root, database, table, label, responseBody);
                 return bytes;
             }
             // "Label Already Exists" on its own is not a success: it only says that some load with
@@ -750,6 +1039,39 @@ public class DorisHttpClient implements Closeable {
     /** Removes the {@code user:password@} prefix the FE bakes into its redirect target. */
     private static String stripUserInfo(String location) {
         return location.replaceFirst("^([a-zA-Z][a-zA-Z0-9+.-]*://)[^@/]*@", "$1");
+    }
+
+    /**
+     * Records Doris's own row accounting of a committed load: {@code NumberLoadedRows} into the
+     * {@code loadedRows} counter, {@code NumberFilteredRows} into {@code filteredRows}, plus a
+     * WARN when rows were filtered. A {@code Status: Success} with filtered rows is only possible
+     * with a {@code max_filter_ratio} above zero, and it is a silent data loss in progress
+     * whatever the configuration intent was; the response body names the reason (Doris reports
+     * an {@code ErrorURL} pointing at the rejected rows). The "Label Already Exists / FINISHED"
+     * path deliberately skips this: those rows were counted by the original load of that label.
+     */
+    private void recordLoadStats(
+            JsonNode root, String database, String table, String label, String responseBody) {
+        long loaded = root.path("NumberLoadedRows").asLong(-1L);
+        long filtered = root.path("NumberFilteredRows").asLong(-1L);
+        if (loadMetrics != null) {
+            if (loaded > 0) {
+                loadMetrics.addLoadedRows(loaded);
+            }
+            if (filtered > 0) {
+                loadMetrics.addFilteredRows(filtered);
+            }
+        }
+        if (filtered > 0) {
+            LOG.warn(
+                    "Doris filtered {} rows of the StreamLoad for {}.{} (label {}); the response"
+                            + " body names the reason: {}",
+                    filtered,
+                    database,
+                    table,
+                    label != null ? label : "group_commit",
+                    responseBody);
+        }
     }
 
     /**
@@ -865,7 +1187,8 @@ public class DorisHttpClient implements Closeable {
      */
     private static void requireSuccessful(Response response) throws IOException {
         if (!response.isSuccessful()) {
-            throw new IOException("HTTP " + response.code());
+            String responseBody = response.body() != null ? response.body().string() : "";
+            throw new IOException("HTTP " + response.code() + " :" + truncateForLog(responseBody));
         }
     }
 
@@ -957,7 +1280,8 @@ public class DorisHttpClient implements Closeable {
                     if (!response.isSuccessful()
                             && !isRetryableStatus(status)
                             && !isHandledStatus(status, handledStatuses)) {
-                        throw new DorisHttpException("HTTP " + status + " for " + operation);
+                        String responseBody = response.body() != null ? response.body().string() : null;
+                        throw new DorisHttpException("HTTP " + status + " for " + operation + " :" + truncateForLog(responseBody));
                     }
                     return handler.handle(response);
                 }
@@ -1010,6 +1334,10 @@ public class DorisHttpClient implements Closeable {
             Thread.currentThread().interrupt();
             throw new IOException("Interrupted while waiting to retry", e);
         }
+    }
+
+    private static String truncateForLog(String body) {
+        return body != null && body.length() > 2048 ? body.substring(0, 2048) + "...(" + body.length() + " chars)" : body;
     }
 
     /** Raised when Doris rejects a request at the application level (non-retryable). */

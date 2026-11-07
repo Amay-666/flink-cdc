@@ -25,6 +25,7 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -67,15 +68,19 @@ public class DorisHttpClientTwoPhaseCommitTest {
             backend.set("http://" + server.endpoint());
             DorisHttpClient client = client(server);
 
-            DorisHttpClient.PrecommitResult precommit =
+            // The list carries one entry per byte-capped chunk; this batch fits one body.
+            List<DorisHttpClient.PrecommitResult> precommits =
                     client.precommitStreamLoad(
                             "shop",
                             "orders",
                             "cdc_shop_orders_0_8_0",
                             Collections.singletonList(Collections.singletonMap("id", 1)));
 
+            assertThat(precommits).hasSize(1);
+            DorisHttpClient.PrecommitResult precommit = precommits.get(0);
             assertThat(precommit.getTransactionId()).isEqualTo(4001L);
             assertThat(precommit.getBodyBytes()).isEqualTo(10);
+            assertThat(precommit.getLabel()).isEqualTo("cdc_shop_orders_0_8_0");
             assertThat(server.recorded).hasSize(2);
             // The FE leg.
             assertThat(server.recorded.get(0).path).isEqualTo("/api/shop/orders/_stream_load");

@@ -128,12 +128,18 @@ public class TwoPhaseDorisSinkWriter extends StatefulDorisSinkWriter
         String key = database + "." + table;
         int rung = nextRung.getOrDefault(key, 0);
         String label = labelFor(database, table, rung);
-        DorisHttpClient.PrecommitResult precommit = precommit(database, table, label, rows);
+        // One call: the client splits the batch into byte-capped bodies and pre-commits each as
+        // its own transaction under a derived chunk label (the first keeps the plain label).
+        List<DorisHttpClient.PrecommitResult> precommits = precommit(database, table, label, rows);
         // Only past a successful pre-commit: a batch that failed is retried by the task, and it has
         // to be retried under the label whose transaction it opens.
         nextRung.put(key, rung + 1);
-        openTransactions.put(
-                label, new DorisCommittable(database, table, label, precommit.getTransactionId()));
+        for (DorisHttpClient.PrecommitResult precommit : precommits) {
+            openTransactions.put(
+                    precommit.getLabel(),
+                    new DorisCommittable(
+                            database, table, precommit.getLabel(), precommit.getTransactionId()));
+        }
     }
 
     @Override
@@ -161,9 +167,10 @@ public class TwoPhaseDorisSinkWriter extends StatefulDorisSinkWriter
 
     /**
      * Pre-commits one batch under {@code label}, first clearing the label if a previous attempt
-     * left a transaction on it.
+     * left a transaction on it. One entry per byte-capped chunk: each chunk is its own
+     * transaction under its own (derived) label.
      */
-    private DorisHttpClient.PrecommitResult precommit(
+    private List<DorisHttpClient.PrecommitResult> precommit(
             String database, String table, String label, List<Map<String, Object>> rows)
             throws IOException {
         try {
@@ -174,17 +181,21 @@ public class TwoPhaseDorisSinkWriter extends StatefulDorisSinkWriter
         }
     }
 
-    private DorisHttpClient.PrecommitResult precommitClearingLabelConflicts(
+    private List<DorisHttpClient.PrecommitResult> precommitClearingLabelConflicts(
             String database, String table, String label, List<Map<String, Object>> rows)
             throws IOException {
         for (int attempt = 1; ; attempt++) {
             try {
-                DorisHttpClient.PrecommitResult precommit =
+                List<DorisHttpClient.PrecommitResult> precommits =
                         httpClient.precommitStreamLoad(database, table, label, rows);
-                metrics.recordStreamLoad(precommit.getBodyBytes());
-                return precommit;
+                for (DorisHttpClient.PrecommitResult precommit : precommits) {
+                    metrics.recordStreamLoad(precommit.getBodyBytes());
+                }
+                return precommits;
             } catch (DorisHttpClient.LabelAlreadyExistsException e) {
-                clearLabelConflict(database, table, label, e, attempt);
+                // A chunk label carries the conflict, and only its transaction must be cleared —
+                // the base label of the batch is not the one Doris rejected.
+                clearLabelConflict(database, table, e.getLabel(), e, attempt);
             }
         }
     }

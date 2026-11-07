@@ -139,9 +139,11 @@ public class DorisDdlBuilder implements Serializable {
                             + commentSql(column.getComment()));
         }
         // Group Commit: inject a physical BIGINT sequence column for UNIQUE-model tables.
-        // Doris uses this column (declared via function_column.sequence_col in PROPERTIES) to
-        // resolve ordering when Group Commit reorders batch commits. The writer populates it
-        // with a monotonically increasing value per subtask.
+        // Doris uses this column to resolve ordering when Group Commit reorders batch commits:
+        // the PROPERTIES declare its type (function_column.sequence_type), and every
+        // Group-Commit StreamLoad points at it with the function_column.sequence_col header
+        // (see DorisHttpClient). The writer populates it with a monotonically increasing value
+        // per subtask.
         boolean injectSequence = options.isGroupCommitEnabled() && !primaryKeys.isEmpty();
         if (injectSequence) {
             columns.add(quote(options.getSequenceColumnName()) + " BIGINT");
@@ -184,11 +186,12 @@ public class DorisDdlBuilder implements Serializable {
         }
         // Merge framework-injected Group Commit properties with user-supplied table properties.
         // Framework properties go in first; user's sink.table.properties can override any of them
-        // (including function_column.sequence_col if the user wants a different column name — but
-        // they must then ensure that column exists in the table).
+        // — including replacing the injected function_column.sequence_type with a
+        // function_column.sequence_col of their own column, in which case they must ensure that
+        // column exists in the table.
         LinkedHashMap<String, String> allProps = new LinkedHashMap<>();
         if (injectSequence) {
-            allProps.put("function_column.sequence_col", options.getSequenceColumnName());
+            allProps.put("function_column.sequence_type", "BIGINT");
             allProps.put(
                     "group_commit_interval_ms", String.valueOf(options.getGroupCommitIntervalMs()));
             allProps.put(

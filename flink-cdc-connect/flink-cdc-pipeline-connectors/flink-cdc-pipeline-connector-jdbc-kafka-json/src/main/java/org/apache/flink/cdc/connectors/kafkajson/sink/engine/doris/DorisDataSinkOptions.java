@@ -141,6 +141,21 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
     public static final ConfigOption<Integer> BUFFER_SIZE =
             ConfigOptions.key("sink.buffer.size").intType().defaultValue(1024);
 
+    /**
+     * Upper bound on the serialized JSON byte size of one StreamLoad request body. A flushed batch
+     * whose estimated size exceeds it is split into several sequential loads; a single row larger
+     * than the cap (an oversized blob, say) still goes out as its own request and logs a WARN.
+     *
+     * <p>The row-count caps ({@code sink.buffer.size}, {@code sink.buffer.max-buffered-rows})
+     * cannot bound wide rows: {@code 1024} rows of a few megabytes each serialize past the JVM's
+     * 2GB array limit, which kills the flush — and a batch that kills its flush kills the task,
+     * again and again, because the restart replays into the same oversized batch.
+     */
+    public static final ConfigOption<Long> MAX_BATCH_BYTES =
+            ConfigOptions.key("sink.buffer.max-batch-bytes")
+                    .longType()
+                    .defaultValue(100L * 1024 * 1024);
+
     /** Upper bound on the total rows buffered across all tables before a forced flush. */
     public static final ConfigOption<Integer> MAX_BUFFERED_ROWS =
             ConfigOptions.key("sink.buffer.max-buffered-rows").intType().defaultValue(50_000);
@@ -175,7 +190,7 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
      * sequence value into every row so Doris can resolve ordering across reordered batch commits.
      * Requires a UNIQUE-model table (i.e. the source schema must declare a primary key); the DDL
      * builder automatically adds the sequence physical column and the {@code
-     * function_column.sequence_col} property.
+     * function_column.sequence_type} property.
      *
      * <ul>
      *   <li>{@code OFF} (default) — traditional Stream Load.
@@ -431,6 +446,11 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
 
     public int getBufferSize() {
         return getConfig().get(BUFFER_SIZE);
+    }
+
+    /** See {@link #MAX_BATCH_BYTES}. */
+    public long getMaxBatchBytes() {
+        return getConfig().get(MAX_BATCH_BYTES);
     }
 
     public int getMaxBufferedRows() {

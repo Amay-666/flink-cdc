@@ -228,10 +228,13 @@ public class KafkaJsonDdlBlockingITCase {
 
             // The CREATE TABLE declares the sequence column and the properties Doris needs in order
             // to use it for version ordering. The body is the {"stmt": ...} JSON envelope, so the
-            // DDL's own quotes are escaped in it — assert on the unescaped tokens only.
+            // DDL's own quotes are escaped in it — assert on the unescaped tokens only. The
+            // property declares the column's type (function_column.sequence_type, the form the DDL
+            // builder emits since b89a206); pointing Doris at the column happens per load, through
+            // the function_column.sequence_col StreamLoad header asserted below.
             assertThat(ddls.get(0).body)
                     .contains("`cdc_sequence` BIGINT")
-                    .contains("function_column.sequence_col")
+                    .contains("function_column.sequence_type")
                     .contains("group_commit_interval_ms")
                     .contains("group_commit_data_bytes");
 

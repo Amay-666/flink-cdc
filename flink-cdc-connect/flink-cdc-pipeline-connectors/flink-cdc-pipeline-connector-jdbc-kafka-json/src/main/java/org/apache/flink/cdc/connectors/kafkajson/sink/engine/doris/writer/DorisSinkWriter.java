@@ -137,7 +137,9 @@ public class DorisSinkWriter implements SinkWriter<Event> {
             DorisDataSinkOptions options, ZoneId pipelineZoneId, Sink.InitContext initContext) {
         this.options = options;
         this.pipelineZoneId = pipelineZoneId;
-        this.metrics = new DorisWriteMetrics(initContext.metricGroup());
+        this.metrics =
+                new DorisWriteMetrics(
+                        initContext.metricGroup(), options.isGroupCommitEnabled());
         this.isGroupCommit = options.isGroupCommitEnabled();
         this.sequenceColumnName =
                 options.isGroupCommitEnabled() ? options.getSequenceColumnName() : null;
@@ -155,7 +157,12 @@ public class DorisSinkWriter implements SinkWriter<Event> {
                         options.getPassword(),
                         options.getMaxRetries(),
                         options.getStreamLoadProperties(),
-                        options.getGroupCommitMode().headerValue());
+                        options.getGroupCommitMode().headerValue(),
+                        options.isGroupCommitEnabled()
+                                ? options.getSequenceColumnName()
+                                : null,
+                        metrics,
+                        options.getMaxBatchBytes());
         schedulePeriodicFlush(initContext);
     }
 

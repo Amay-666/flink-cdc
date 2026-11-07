@@ -26,11 +26,22 @@ import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.DorisSin
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.DorisSinkFixtures.FakeInitContext;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer;
 
+import org.apache.flink.cdc.common.data.binary.BinaryRecordData;
+import org.apache.flink.cdc.common.data.binary.BinaryStringData;
+import org.apache.flink.cdc.common.event.CreateTableEvent;
+import org.apache.flink.cdc.common.event.DataChangeEvent;
+import org.apache.flink.cdc.common.event.TableId;
+import org.apache.flink.cdc.common.schema.Schema;
+import org.apache.flink.cdc.common.types.DataTypes;
+import org.apache.flink.cdc.common.types.RowType;
+import org.apache.flink.cdc.runtime.typeutils.BinaryRecordDataGenerator;
+import org.apache.flink.configuration.Configuration;
 import org.junit.Test;
 
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -193,6 +204,76 @@ public class StatefulDorisSinkWriterTest {
     }
 
     @Test
+    public void testFlushSplitsBatchesAboveTheBatchByteCap() throws Exception {
+        // Regression for the 2GB ByteArrayBuilder failure: 1024 wide rows serialized as ONE
+        // request body exceeded the JVM array limit and killed the flush — and a batch that
+        // kills its flush kills the task, repeatedly, because the restart replays into the same
+        // oversized batch. A drained batch above the byte cap must land as several loads.
+        try (MockDorisServer server = DorisSinkFixtures.successServer()) {
+            TableId wide = TableId.tableId("shop", "wide");
+            Schema wideSchema =
+                    Schema.newBuilder()
+                            .physicalColumn("id", DataTypes.INT())
+                            .physicalColumn("payload", DataTypes.STRING())
+                            .primaryKey("id")
+                            .build();
+            BinaryRecordDataGenerator generator =
+                    new BinaryRecordDataGenerator(
+                            RowType.of(DataTypes.INT(), DataTypes.STRING()));
+            // Three rows of roughly 430 serialized bytes each under a 1000-byte cap: the first
+            // two form one chunk, the third its own.
+            String payload = new String(new char[400]).replace('\0', 'x');
+            StatefulDorisSinkWriter writer =
+                    writer(
+                            server,
+                            new FakeInitContext(),
+                            (Consumer<Configuration>)
+                                    config ->
+                                            config.set(
+                                                    DorisDataSinkOptions.MAX_BATCH_BYTES, 1000L));
+            writer.write(new CreateTableEvent(wide, wideSchema), null);
+            writer.write(insertEvent(wide, generator, 1, payload), null);
+            writer.write(insertEvent(wide, generator, 2, payload), null);
+            writer.write(insertEvent(wide, generator, 3, payload), null);
+
+            writer.flush(false);
+
+            assertThat(server.recorded).hasSize(2);
+            assertThat(server.recorded.get(0).path).isEqualTo("/api/shop/wide/_stream_load");
+            assertThat(server.recorded.get(0).body).contains("xxx");
+            // chunk 1 carries two rows, chunk 2 the remaining one
+            assertThat(countOccurrences(server.recorded.get(0).body, "\"payload\"")).isEqualTo(2);
+            assertThat(countOccurrences(server.recorded.get(1).body, "\"payload\"")).isEqualTo(1);
+            // each body stays under the cap (exact sizes, not an estimate)
+            assertThat(server.recorded.get(0).body.length()).isLessThanOrEqualTo(1000);
+            assertThat(server.recorded.get(1).body.length()).isLessThanOrEqualTo(1000);
+            // every chunk carries a unique label: a repeated label would let Doris deduplicate
+            // the second request as "Label Already Exists / FINISHED" and silently drop its rows
+            String label0 = server.recorded.get(0).headers.get("label");
+            String label1 = server.recorded.get(1).headers.get("label");
+            assertThat(label0).startsWith("cdc_shop_wide_");
+            assertThat(label1).startsWith("cdc_shop_wide_");
+            assertThat(label0).isNotEqualTo(label1);
+            writer.close();
+        }
+    }
+
+    private static DataChangeEvent insertEvent(
+            TableId tableId, BinaryRecordDataGenerator generator, int id, String payload) {
+        BinaryRecordData record =
+                generator.generate(new Object[] {id, BinaryStringData.fromString(payload)});
+        return DataChangeEvent.insertEvent(tableId, record);
+    }
+
+    private static int countOccurrences(String haystack, String needle) {
+        int count = 0;
+        for (int i = haystack.indexOf(needle); i >= 0; i = haystack.indexOf(needle, i + 1)) {
+            count++;
+        }
+        return count;
+    }
+
+    @Test
     public void testCloseFlushesBufferedRowsInSinglePhaseMode() throws Exception {
         try (MockDorisServer server = DorisSinkFixtures.successServer()) {
             StatefulDorisSinkWriter writer = writer(server, new FakeInitContext());
@@ -222,5 +303,15 @@ public class StatefulDorisSinkWriterTest {
         return states.isEmpty()
                 ? sink.createWriter(initContext)
                 : sink.restoreWriter(initContext, states);
+    }
+
+    private static StatefulDorisSinkWriter writer(
+            MockDorisServer server,
+            FakeInitContext initContext,
+            Consumer<Configuration> tune)
+            throws IOException {
+        DorisDataSinkOptions options = DorisSinkFixtures.options(server, tune);
+        StatefulDorisSink sink = new StatefulDorisSink(options, DorisSinkFixtures.ZONE);
+        return sink.createWriter(initContext);
     }
 }

@@ -17,6 +17,7 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http;
 
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisWriteMetrics;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.http.DorisHttpClient;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer.RecordedRequest;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer.Response;
@@ -31,6 +32,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -64,6 +66,203 @@ public class DorisHttpClientTest {
             assertThat(request.headers.get("Authorization")).isEqualTo(basicAuth("root", "123456"));
             assertThat(request.headers).containsEntry("hidden_columns", "__DORIS_DELETE_SIGN__");
             assertThat(request.body).isEqualTo("[{\"id\":1}]");
+        }
+    }
+
+    @Test
+    public void testBatchCapEstimateCountsBinaryAsBase64() throws IOException {
+        // A BINARY/VARBINARY value reaches the writer as byte[], and Jackson serializes it as
+        // Base64 (~4/3 of the raw length) — a String.valueOf estimate would see the ~11-character
+        // Java toString of the array instead and let the batch blow past its cap. Two 900-byte
+        // binaries under a 1000-byte cap must land as two one-row requests.
+        Map<String, Object> binaryRow1 = new HashMap<>();
+        binaryRow1.put("id", 1);
+        binaryRow1.put("blob", new byte[900]);
+        Map<String, Object> binaryRow2 = new HashMap<>(binaryRow1);
+        binaryRow2.put("id", 2);
+
+        try (MockDorisServer server =
+                new MockDorisServer(req -> Response.ok("{\"Status\":\"Success\"}"))) {
+            DorisHttpClient client =
+                    new DorisHttpClient(
+                            server.endpoint(), "root", "123456", 1, Collections.emptyMap(),
+                            "off", null, null, 1000L);
+
+            client.streamLoad(
+                    "shop", "orders", "cdc_binary", Arrays.asList(binaryRow1, binaryRow2));
+
+            assertThat(server.recorded).hasSize(2);
+            // each body carries one row, and the blob is really Base64 on the wire
+            assertThat(server.recorded.get(0).body).contains("\"blob\":\"AAAA");
+            assertThat(server.recorded.get(0).body.length())
+                    .isLessThanOrEqualTo(1300); // 1200 Base64 + overhead, no 2x surprise
+            assertThat(server.recorded.get(1).headers.get("label")).isEqualTo("cdc_binary_c1");
+        }
+    }
+
+    @Test
+    public void testStreamLoadReportsDorisRowAccounting() throws IOException {
+        // Doris's per-load row accounting (NumberLoadedRows / NumberFilteredRows) must reach the
+        // sink metrics. A Status: Success carrying filtered rows is only possible with a
+        // max_filter_ratio above zero, and it is a silent data loss in progress — the counters
+        // (and the WARN the client logs next to them) are what makes it visible.
+        try (MockDorisServer server =
+                new MockDorisServer(
+                        req ->
+                                Response.ok(
+                                        "{\"Status\":\"Success\",\"NumberLoadedRows\":5,"
+                                                + "\"NumberFilteredRows\":1}"))) {
+            AtomicLong loaded = new AtomicLong(-1L);
+            AtomicLong filtered = new AtomicLong(-1L);
+            DorisWriteMetrics metrics =
+                    new DorisWriteMetrics(null, false) {
+                        @Override
+                        public void addLoadedRows(long rows) {
+                            loaded.set(rows);
+                        }
+
+                        @Override
+                        public void addFilteredRows(long rows) {
+                            filtered.set(rows);
+                        }
+                    };
+            DorisHttpClient client =
+                    new DorisHttpClient(
+                            server.endpoint(),
+                            "root",
+                            "123456",
+                            1,
+                            Collections.emptyMap(),
+                            "off",
+                            null,
+                            metrics);
+
+            client.streamLoad(
+                    "shop",
+                    "orders",
+                    "cdc_label_1",
+                    Collections.singletonList(Collections.singletonMap("id", 1)));
+
+            assertThat(loaded.get()).isEqualTo(5L);
+            assertThat(filtered.get()).isEqualTo(1L);
+        }
+    }
+
+    @Test
+    public void testStreamLoadReportsGroupCommitUsage() throws IOException {
+        // The response's GroupCommit flag — not the request's group_commit header — is the
+        // truth about whether Doris really applied group commit to the batch. It must reach
+        // the metrics for both the healthy case and the silent fallback the client WARNs
+        // about, so a growing fallback rate shows up on a dashboard.
+        try (MockDorisServer server =
+                new MockDorisServer(
+                        req -> Response.ok("{\"Status\":\"Success\",\"GroupCommit\":true}"))) {
+            AtomicReference<Boolean> used = new AtomicReference<>();
+            DorisWriteMetrics metrics =
+                    new DorisWriteMetrics(null, true) {
+                        @Override
+                        public void recordGroupCommitLoad(boolean groupCommitUsed) {
+                            used.set(groupCommitUsed);
+                        }
+                    };
+            DorisHttpClient client =
+                    new DorisHttpClient(
+                            server.endpoint(),
+                            "root",
+                            "123456",
+                            1,
+                            Collections.emptyMap(),
+                            "async_mode",
+                            "sequence_col",
+                            metrics);
+
+            // a null label marks the load as a Group-Commit load
+            client.streamLoad(
+                    "shop", "orders", null, Collections.singletonList(Collections.singletonMap("id", 1)));
+
+            assertThat(used.get()).isEqualTo(Boolean.TRUE);
+        }
+
+        // the fallback: Doris answers GroupCommit=false, the load still succeeds
+        try (MockDorisServer server =
+                new MockDorisServer(
+                        req -> Response.ok("{\"Status\":\"Success\",\"GroupCommit\":false}"))) {
+            AtomicReference<Boolean> used = new AtomicReference<>();
+            DorisWriteMetrics metrics =
+                    new DorisWriteMetrics(null, true) {
+                        @Override
+                        public void recordGroupCommitLoad(boolean groupCommitUsed) {
+                            used.set(groupCommitUsed);
+                        }
+                    };
+            DorisHttpClient client =
+                    new DorisHttpClient(
+                            server.endpoint(),
+                            "root",
+                            "123456",
+                            1,
+                            Collections.emptyMap(),
+                            "async_mode",
+                            "sequence_col",
+                            metrics);
+
+            client.streamLoad(
+                    "shop", "orders", null, Collections.singletonList(Collections.singletonMap("id", 1)));
+
+            assertThat(used.get()).isEqualTo(Boolean.FALSE);
+        }
+    }
+
+    @Test
+    public void testBatchCapEstimateIsUtf8Aware() throws IOException {
+        // 100 CJK characters serialize to ~300 UTF-8 bytes, not 100: a char-counting estimate
+        // would let a batch grow threefold past its cap. Three such rows under a 700-byte cap
+        // must split 2+1; three ASCII rows of the same character count fit one body.
+        String cjk = new String(new char[100]).replace('\0', '汉');
+        Map<String, Object> cjkRow1 = new HashMap<>();
+        cjkRow1.put("id", 1);
+        cjkRow1.put("payload", cjk);
+        Map<String, Object> cjkRow2 = new HashMap<>(cjkRow1);
+        cjkRow2.put("id", 2);
+        Map<String, Object> cjkRow3 = new HashMap<>(cjkRow1);
+        cjkRow3.put("id", 3);
+        String ascii = new String(new char[100]).replace('\0', 'x');
+        Map<String, Object> asciiRow1 = new HashMap<>();
+        asciiRow1.put("id", 1);
+        asciiRow1.put("payload", ascii);
+        Map<String, Object> asciiRow2 = new HashMap<>(asciiRow1);
+        asciiRow2.put("id", 2);
+        Map<String, Object> asciiRow3 = new HashMap<>(asciiRow1);
+        asciiRow3.put("id", 3);
+
+        try (MockDorisServer server =
+                new MockDorisServer(req -> Response.ok("{\"Status\":\"Success\"}"))) {
+            DorisHttpClient cjkClient =
+                    new DorisHttpClient(
+                            server.endpoint(), "root", "123456", 1, Collections.emptyMap(),
+                            "off", null, null, 700L);
+            cjkClient.streamLoad(
+                    "shop", "orders", "cdc_cjk", Arrays.asList(cjkRow1, cjkRow2, cjkRow3));
+
+            // 2 CJK rows ≈ 660 serialized bytes fit the 700-byte cap; the third would exceed it.
+            assertThat(server.recorded).hasSize(2);
+            assertThat(server.recorded.get(0).body).contains("汉");
+            assertThat(server.recorded.get(1).body).contains("汉");
+            assertThat(server.recorded.get(1).headers.get("label")).isEqualTo("cdc_cjk_c1");
+        }
+
+        try (MockDorisServer server =
+                new MockDorisServer(req -> Response.ok("{\"Status\":\"Success\"}"))) {
+            DorisHttpClient asciiClient =
+                    new DorisHttpClient(
+                            server.endpoint(), "root", "123456", 1, Collections.emptyMap(),
+                            "off", null, null, 700L);
+            asciiClient.streamLoad(
+                    "shop", "orders", "cdc_ascii", Arrays.asList(asciiRow1, asciiRow2, asciiRow3));
+
+            // 3 ASCII rows ≈ 390 serialized bytes: one body, the plain label.
+            assertThat(server.recorded).hasSize(1);
+            assertThat(server.recorded.get(0).headers.get("label")).isEqualTo("cdc_ascii");
         }
     }
 
@@ -458,7 +657,8 @@ public class DorisHttpClientTest {
                             "123456",
                             1,
                             Collections.emptyMap(),
-                            "sync_mode");
+                            "sync_mode",
+                            "cdc_sequence");
 
             client.streamLoad(
                     "shop",
@@ -489,7 +689,8 @@ public class DorisHttpClientTest {
                             "123456",
                             1,
                             Collections.emptyMap(),
-                            "async_mode");
+                            "async_mode",
+                            "cdc_sequence");
 
             client.streamLoad(
                     "shop", "orders", null, Collections.singletonList(Collections.emptyMap()));
@@ -511,7 +712,8 @@ public class DorisHttpClientTest {
                             "123456",
                             1,
                             Collections.emptyMap(),
-                            "sync_mode");
+                            "sync_mode",
+                            "cdc_sequence");
 
             int bytes =
                     client.streamLoad(
@@ -542,7 +744,8 @@ public class DorisHttpClientTest {
                             "123456",
                             1,
                             Collections.emptyMap(),
-                            "sync_mode");
+                            "sync_mode",
+                            "cdc_sequence");
 
             client.streamLoad(
                     "shop", "orders", null, Collections.singletonList(Collections.emptyMap()));
@@ -580,7 +783,8 @@ public class DorisHttpClientTest {
                             "123456",
                             1,
                             Collections.emptyMap(),
-                            "sync_mode");
+                            "sync_mode",
+                            "cdc_sequence");
 
             client.streamLoad(
                     "shop",

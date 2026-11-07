@@ -811,8 +811,10 @@ public class DorisDdlBuilderTest {
         String ddl = sqls.get(0);
         // Sequence physical column is appended after all CDC columns
         assertThat(ddl).contains("`cdc_sequence` BIGINT");
-        // PROPERTIES include function_column.sequence_col mapping
-        assertThat(ddl).contains("\"function_column.sequence_col\" = \"cdc_sequence\"");
+        // PROPERTIES carry the table-level sequence declaration; the per-load mapping of the
+        // injected column rides on the stream-load header (function_column.sequence_col in
+        // DorisHttpClient), not on the table properties
+        assertThat(ddl).contains("\"function_column.sequence_type\" = \"BIGINT\"");
         // PROPERTIES include group_commit_interval_ms (default 10000)
         assertThat(ddl).contains("\"group_commit_interval_ms\" = \"10000\"");
         // PROPERTIES include group_commit_data_bytes (default 64MB)
@@ -836,7 +838,7 @@ public class DorisDdlBuilderTest {
         List<String> sqls = builder.buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
 
         assertThat(sqls.get(0)).doesNotContain("cdc_sequence");
-        assertThat(sqls.get(0)).doesNotContain("function_column.sequence_col");
+        assertThat(sqls.get(0)).doesNotContain("function_column.sequence_type");
     }
 
     @Test
@@ -849,7 +851,7 @@ public class DorisDdlBuilderTest {
                 defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
 
         assertThat(sqls.get(0)).doesNotContain("cdc_sequence");
-        assertThat(sqls.get(0)).doesNotContain("function_column.sequence_col");
+        assertThat(sqls.get(0)).doesNotContain("function_column.sequence_type");
     }
 
     @Test
@@ -865,7 +867,7 @@ public class DorisDdlBuilderTest {
         List<String> sqls = builder.buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
 
         assertThat(sqls.get(0)).contains("`my_seq` BIGINT");
-        assertThat(sqls.get(0)).contains("\"function_column.sequence_col\" = \"my_seq\"");
+        assertThat(sqls.get(0)).contains("\"function_column.sequence_type\" = \"BIGINT\"");
     }
 
     @Test
@@ -902,7 +904,7 @@ public class DorisDdlBuilderTest {
         // User's sink.table.properties overrides the framework default
         assertThat(sqls.get(0)).contains("\"group_commit_interval_ms\" = \"5000\"");
         // Framework-injected properties are still present
-        assertThat(sqls.get(0)).contains("\"function_column.sequence_col\" = \"cdc_sequence\"");
+        assertThat(sqls.get(0)).contains("\"function_column.sequence_type\" = \"BIGINT\"");
     }
 
     @Test
