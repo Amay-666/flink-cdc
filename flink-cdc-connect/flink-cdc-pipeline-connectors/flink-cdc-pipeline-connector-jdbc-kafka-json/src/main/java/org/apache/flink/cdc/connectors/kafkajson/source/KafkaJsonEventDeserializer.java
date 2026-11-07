@@ -19,6 +19,7 @@ package org.apache.flink.cdc.connectors.kafkajson.source;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.cdc.common.annotation.Internal;
+import org.apache.flink.cdc.common.data.TimestampData;
 import org.apache.flink.cdc.common.event.CreateTableEvent;
 import org.apache.flink.cdc.common.event.Event;
 import org.apache.flink.cdc.common.event.SchemaChangeEvent;
@@ -42,6 +43,8 @@ import io.debezium.document.Array;
 import io.debezium.document.Document;
 import io.debezium.relational.Tables;
 import io.debezium.relational.history.HistoryRecord;
+import io.debezium.time.MicroTimestamp;
+import io.debezium.time.NanoTimestamp;
 import io.debezium.relational.history.TableChanges;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.Struct;
@@ -149,6 +152,33 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
     @Override
     protected Map<String, String> getMetadata(SourceRecord record) {
         return Collections.emptyMap();
+    }
+
+    /**
+     * Converts epoch timestamps with floor division: a value before the epoch splits into a
+     * negative millisecond and a NON-NEGATIVE nano-of-millisecond, which is what {@link
+     * TimestampData}'s contract requires. The shared parent truncates toward zero, so a
+     * pre-1970 {@code MicroTimestamp}/{@code NanoTimestamp} column value (a DATETIME with
+     * fractional precision older than the epoch) yielded a negative nanosecond field and
+     * failed the whole deserialization with an {@code IllegalArgumentException}.
+     */
+    @Override
+    protected Object convertToTimestamp(Object dbzObj, Schema schema) {
+        if (dbzObj instanceof Long) {
+            switch (schema.name()) {
+                case MicroTimestamp.SCHEMA_NAME:
+                    long micro = (long) dbzObj;
+                    return TimestampData.fromMillis(
+                            Math.floorDiv(micro, 1000),
+                            (int) (Math.floorMod(micro, 1000) * 1000));
+                case NanoTimestamp.SCHEMA_NAME:
+                    long nano = (long) dbzObj;
+                    return TimestampData.fromMillis(
+                            Math.floorDiv(nano, 1_000_000),
+                            (int) Math.floorMod(nano, 1_000_000));
+            }
+        }
+        return super.convertToTimestamp(dbzObj, schema);
     }
 
     /**
