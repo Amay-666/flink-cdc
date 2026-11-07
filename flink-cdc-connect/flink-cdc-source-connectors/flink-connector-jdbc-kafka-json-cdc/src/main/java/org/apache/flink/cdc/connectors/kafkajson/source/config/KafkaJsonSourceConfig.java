@@ -189,11 +189,14 @@ public class KafkaJsonSourceConfig extends JdbcSourceConfig {
      * always skip the backfill. TiDB keeps the backfill on by default: TiCDC keeps emitting
      * watermark events, so the bounded read always has a watermark at-or-after the ending offset to
      * cross.
+     *
+     * <p>Snapshot mode skips the backfill for every dialect: it degrades to a pure JDBC dump.
      */
     @Override
     public boolean isSkipSnapshotBackfill() {
         return super.isSkipSnapshotBackfill()
-                || databaseType == KafkaJsonSourceOptions.DatabaseType.MYSQL;
+                || databaseType == KafkaJsonSourceOptions.DatabaseType.MYSQL
+                || getStartupOptions().isSnapshotOnly();
     }
 
     /**

@@ -22,8 +22,10 @@ import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceCo
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceOptions.EventTime;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.FakeKafkaConsumer;
+import org.apache.flink.util.FlinkRuntimeException;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.record.TimestampType;
 import org.junit.jupiter.api.Test;
@@ -34,6 +36,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Unit test for {@link KafkaJsonOffsetSupplier}. */
 class KafkaJsonOffsetSupplierTest {
@@ -64,20 +68,51 @@ class KafkaJsonOffsetSupplierTest {
     }
 
     @Test
-    void testCurrentOnEmptyTopicsReturnsInitialOffset() {
+    void testCurrentOnTopicWithoutPartitionsThrows() {
+        // The topic yields no partition (the fake registers partitions only from the log keys, so
+        // an absent topic reports an empty list). The probe must fail as fast as the stream
+        // phase's assignAndSeek — the same message — instead of degrading the watermark to
+        // INITIAL_OFFSET and letting the whole snapshot run as a JDBC dump first.
         Map<TopicPartition, List<ConsumerRecord<String, String>>> log = new HashMap<>();
         Map<TopicPartition, Long> endingOffsets = new HashMap<>();
         KafkaJsonOffsetSupplier supplier =
                 new KafkaJsonOffsetSupplier(
                         config(EventTime.ES), new FakeKafkaConsumer(log, endingOffsets));
-        assertEquals(KafkaJsonOffset.INITIAL_OFFSET, supplier.current());
+        FlinkRuntimeException e =
+                assertThrows(FlinkRuntimeException.class, supplier::current);
+        assertTrue(
+                e.getMessage().contains("No Kafka partition found for topics: [t]"),
+                e.getMessage());
+    }
+
+    @Test
+    void testCurrentOnUnknownTopicThrows() {
+        // partitionsFor returns null: the topic is absent from the broker's metadata (the
+        // consumer disables auto-creation), which is a configuration error, not a watermark to
+        // sample.
+        Map<TopicPartition, List<ConsumerRecord<String, String>>> log = new HashMap<>();
+        Map<TopicPartition, Long> endingOffsets = new HashMap<>();
+        FakeKafkaConsumer unknownTopicConsumer =
+                new FakeKafkaConsumer(log, endingOffsets) {
+                    @Override
+                    public List<PartitionInfo> partitionsFor(String topic) {
+                        return null;
+                    }
+                };
+        KafkaJsonOffsetSupplier supplier =
+                new KafkaJsonOffsetSupplier(config(EventTime.ES), unknownTopicConsumer);
+        FlinkRuntimeException e =
+                assertThrows(FlinkRuntimeException.class, supplier::current);
+        assertTrue(e.getMessage().contains("Kafka topic 't' does not exist"), e.getMessage());
     }
 
     @Test
     void testCurrentOnEmptyPartitionsReturnsInitialOffset() {
         Map<TopicPartition, List<ConsumerRecord<String, String>>> log = new HashMap<>();
         Map<TopicPartition, Long> endingOffsets = new HashMap<>();
-        // partitions exist but their logs are empty (end offset 0)
+        // partitions exist but their logs are empty (end offset 0): a real topic that carries no
+        // message yet — the one legitimate INITIAL case on the strict side of the probe. Missing
+        // topics throw (see the two tests above); a quiet topic merely has no watermark to sample.
         log.put(PARTITION_0, new ArrayList<>());
         endingOffsets.put(PARTITION_0, 0L);
         KafkaJsonOffsetSupplier supplier =

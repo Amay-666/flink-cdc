@@ -27,6 +27,7 @@ import org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.Debeziu
 import org.apache.flink.cdc.connectors.kafkajson.source.message.debezium.DebeziumMessageParser;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonKafkaUtils;
+import org.apache.flink.util.FlinkRuntimeException;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -56,6 +57,15 @@ import java.util.Properties;
  * the backfill, and is never re-emitted by the stream — the full-&gt;incremental switch is
  * exactly-once for those changes. (A minimum event time, by contrast, would leave such changes on
  * the stream side while the JDBC read has already captured their effect, duplicating them.)
+ *
+ * <p>The probe is as strict as the stream phase's {@code assignAndSeek}: a configured topic that
+ * does not exist or yields no partitions fails immediately instead of silently degrading the
+ * watermark to {@link KafkaJsonOffset#INITIAL_OFFSET}. The lenient variant let a misconfigured
+ * topic run the whole snapshot as a JDBC dump and surface only when the stream split was assigned
+ * — hours later, and with a boundary that may skip the changes made during the snapshot. The
+ * legitimate INITIAL cases are unaffected: the snapshot-only / no-topics short-circuit happens
+ * before any Kafka call, and a real topic that exists but carries no message yet still has no
+ * watermark to sample.
  */
 public class KafkaJsonKafkaOffsetUtils {
 
@@ -64,13 +74,15 @@ public class KafkaJsonKafkaOffsetUtils {
     /**
      * Returns the current position of the change-log stream: the maximum message event time across
      * all configured topics and partitions, stamped on the sentinel partition/offset (see the class
-     * javadoc). Returns {@link KafkaJsonOffset#INITIAL_OFFSET} when no message is available yet.
+     * javadoc). Returns {@link KafkaJsonOffset#INITIAL_OFFSET} when no message is available yet;
+     * throws when a configured topic does not exist or yields no partitions.
      */
     public static KafkaJsonOffset queryCurrentOffset(KafkaJsonSourceConfig sourceConfig) {
-        if (sourceConfig.getKafkaTopics() == null || sourceConfig.getKafkaTopics().isEmpty()) {
-            // A snapshot-only job without Kafka topics has no stream to sample a watermark from:
-            // the INITIAL offset leaves every split's backfill window empty (and the stream
-            // fetch task completes without reading), so no Kafka connection is opened at all.
+        if (sourceConfig.getKafkaTopics() == null
+                || sourceConfig.getKafkaTopics().isEmpty()
+                || sourceConfig.getStartupOptions().isSnapshotOnly()) {
+            // Snapshot mode is a JDBC dump and empty topics degrade to one: no watermark to
+            // sample, no Kafka connection to open.
             return KafkaJsonOffset.INITIAL_OFFSET;
         }
         try (KafkaConsumer<String, String> consumer =
@@ -89,6 +101,10 @@ public class KafkaJsonKafkaOffsetUtils {
      * <p>For each partition the newest message is read and its event time for the configured mode
      * is extracted from the message content — Kafka's own record timestamp is the producer send
      * time, not the source change time, so it can not be used as the offset ordering key.
+     *
+     * @throws FlinkRuntimeException when a configured topic does not exist or the topics yield no
+     *     partition — the snapshot watermark probe must fail as fast as the stream phase's {@code
+     *     assignAndSeek} (see the class javadoc)
      */
     public static KafkaJsonOffset queryCurrentOffset(
             KafkaConsumer<String, String> consumer,
@@ -97,7 +113,10 @@ public class KafkaJsonKafkaOffsetUtils {
             MessageFormat format) {
         List<TopicPartition> partitions = listPartitions(consumer, topics);
         if (partitions.isEmpty()) {
-            return KafkaJsonOffset.INITIAL_OFFSET;
+            // Mirror the stream phase's assignAndSeek check: a configured topic that resolves to
+            // no partition is a configuration error. Degrading the watermark to INITIAL_OFFSET
+            // here used to let the whole snapshot run as a JDBC dump before the error surfaced.
+            throw new FlinkRuntimeException("No Kafka partition found for topics: " + topics);
         }
 
         Map<TopicPartition, Long> endOffsets = consumer.endOffsets(partitions);
@@ -180,7 +199,9 @@ public class KafkaJsonKafkaOffsetUtils {
         for (String topic : topics) {
             List<PartitionInfo> partitionInfos = consumer.partitionsFor(topic);
             if (partitionInfos == null) {
-                continue;
+                // The stream phase's assignAndSeek throws the same message; the probe must not be
+                // more lenient than it (see the class javadoc).
+                throw new FlinkRuntimeException("Kafka topic '" + topic + "' does not exist");
             }
             for (PartitionInfo partitionInfo : partitionInfos) {
                 partitions.add(new TopicPartition(topic, partitionInfo.partition()));

@@ -160,18 +160,12 @@ public class KafkaJsonStreamFetchTask implements FetchTask<SourceSplitBase> {
         KafkaJsonSourceFetchTaskContext sourceFetchContext =
                 (KafkaJsonSourceFetchTaskContext) context;
         KafkaJsonSourceConfig sourceConfig = sourceFetchContext.getSourceConfig();
-        // A snapshot-only job without Kafka topics runs as a pure JDBC dump: the framework
-        // still hands the reader the final stream split (INITIAL -> INITIAL watermarks), but
-        // there is nothing to consume. Returning here lets the fetcher's finally block mark
-        // the task finished, and the bounded job ends right after the snapshot — the consumer
-        // of the task context is created lazily, so no Kafka connection is opened at all. The
-        // Kafka options are validated for every other mode at job setup
-        // (KafkaJsonSourceConfigFactory#create).
-        if (sourceConfig.getKafkaTopics() == null || sourceConfig.getKafkaTopics().isEmpty()) {
-            LOG.info(
-                    "Stream split {} carries no Kafka topic (snapshot-only JDBC dump): "
-                            + "completing it without reading",
-                    split);
+        // Snapshot mode is a JDBC dump; empty topics degrade to one too. The final split has
+        // nothing to read — complete it without touching the consumer.
+        if (sourceConfig.getStartupOptions().isSnapshotOnly()
+                || sourceConfig.getKafkaTopics() == null
+                || sourceConfig.getKafkaTopics().isEmpty()) {
+            LOG.info("Completing stream split {} without reading (snapshot JDBC dump)", split);
             return;
         }
         this.schemaChangeHandler = new KafkaJsonSchemaChangeHandler(sourceConfig);

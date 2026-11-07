@@ -42,6 +42,7 @@ import org.apache.kafka.common.record.TimestampType;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.sql.Types;
 import java.util.ArrayList;
@@ -184,6 +185,44 @@ class KafkaJsonStreamFetchTaskTest {
         // the no-op split emits nothing and is not running afterwards
         assertTrue(context.getQueue().poll().isEmpty());
         assertEquals(KafkaJsonOffset.INITIAL_OFFSET, task.getCurrentOffset());
+        assertFalse(task.isRunning());
+    }
+
+    @Test
+    @Timeout(30)
+    void testSnapshotOnlyWithKafkaTopicsCompletesWithoutReading() throws Exception {
+        // Snapshot mode degrades to a JDBC dump even with topics configured: the final split
+        // completes without touching the consumer. The timeout guards the regression —
+        // without the early return the poll loop never exits.
+        KafkaJsonSourceConfig config =
+                new KafkaJsonSourceConfigFactory()
+                        .hostname("localhost")
+                        .username("root")
+                        .password("x")
+                        .databaseList("test")
+                        .tableList("test.users")
+                        .kafkaBootstrapServers("bootstrap")
+                        .kafkaTopics("t")
+                        .serverTimeZone("UTC")
+                        .startupOptions(StartupOptions.snapshot())
+                        .create(0);
+        Map<TopicPartition, List<ConsumerRecord<String, String>>> log = new HashMap<>();
+        log.put(PARTITION, Collections.emptyList());
+        FakeKafkaConsumer consumer = new FakeKafkaConsumer(log, null);
+        KafkaJsonSourceFetchTaskContext context =
+                new KafkaJsonSourceFetchTaskContext(config, new KafkaJsonDialect(config));
+        context.setKafkaConsumerForTesting(consumer);
+        StreamSplit split =
+                streamSplit(KafkaJsonOffset.INITIAL_OFFSET, KafkaJsonOffset.INITIAL_OFFSET);
+        KafkaJsonStreamFetchTask task = new KafkaJsonStreamFetchTask(split);
+        context.configure(split);
+
+        task.execute(context);
+
+        // the split emits nothing, never touches the consumer, and completes
+        assertTrue(context.getQueue().poll().isEmpty());
+        assertEquals(KafkaJsonOffset.INITIAL_OFFSET, task.getCurrentOffset());
+        assertTrue(consumer.getCommittedOffsets().isEmpty());
         assertFalse(task.isRunning());
     }
 

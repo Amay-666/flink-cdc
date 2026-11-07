@@ -18,7 +18,9 @@
 package org.apache.flink.cdc.connectors.kafkajson.source.fetch;
 
 import org.apache.flink.cdc.connectors.base.options.SourceOptions;
+import org.apache.flink.cdc.connectors.base.options.StartupOptions;
 import org.apache.flink.cdc.connectors.base.source.meta.split.SnapshotSplit;
+import org.apache.flink.cdc.connectors.base.source.meta.offset.Offset;
 import org.apache.flink.cdc.connectors.base.source.meta.wartermark.WatermarkEvent;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfigFactory;
@@ -166,6 +168,29 @@ class KafkaJsonScanFetchTaskTest {
         assertEquals(new KafkaJsonOffset(3000, -1, -1).getOffset(), records.get(6).sourceOffset());
 
         assertEquals(2, watermarkCalls.get());
+    }
+
+    @Test
+    void testSnapshotWatermarkProbeNeverOpensKafkaConsumer() {
+        // The scan task's watermark probes route through the context's probing view, whose
+        // supplier builds its reusable consumer EAGERLY in the constructor: a snapshot job with
+        // normalized (null) Kafka options used to NPE inside buildConsumerProps at the first
+        // split's low-watermark probe. The probe must short-circuit to the INITIAL offset
+        // without creating any consumer.
+        KafkaJsonSourceConfig config =
+                new KafkaJsonSourceConfigFactory()
+                        .hostname("localhost")
+                        .username("root")
+                        .password("x")
+                        .databaseList("test")
+                        .tableList("test.users")
+                        .serverTimeZone("UTC")
+                        .startupOptions(StartupOptions.snapshot())
+                        .create(0);
+        KafkaJsonSourceFetchTaskContext context =
+                new KafkaJsonSourceFetchTaskContext(config, new KafkaJsonDialect(config));
+        Offset offset = context.getDataSourceDialect().displayCurrentOffset(config);
+        assertEquals(KafkaJsonOffset.INITIAL_OFFSET, offset);
     }
 
     @Test

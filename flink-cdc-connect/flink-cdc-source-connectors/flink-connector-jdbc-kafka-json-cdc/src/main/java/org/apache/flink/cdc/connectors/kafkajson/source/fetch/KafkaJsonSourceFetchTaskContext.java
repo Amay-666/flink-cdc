@@ -251,6 +251,12 @@ public class KafkaJsonSourceFetchTaskContext extends JdbcSourceFetchTaskContext 
 
     /** The probe behind {@link #getDataSourceDialect()}: the reader's reusable consumer. */
     private KafkaJsonOffset probeCurrentOffset() {
+        // Snapshot mode (and the no-topics pure dump) samples no watermark.
+        if (kafkaJsonSourceConfig.getStartupOptions().isSnapshotOnly()
+                || kafkaJsonSourceConfig.getKafkaTopics() == null
+                || kafkaJsonSourceConfig.getKafkaTopics().isEmpty()) {
+            return KafkaJsonOffset.INITIAL_OFFSET;
+        }
         return getOffsetSupplier().current();
     }
 

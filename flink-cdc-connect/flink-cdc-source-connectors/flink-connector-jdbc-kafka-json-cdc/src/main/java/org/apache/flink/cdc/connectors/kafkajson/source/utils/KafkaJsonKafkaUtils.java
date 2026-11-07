@@ -59,6 +59,9 @@ public class KafkaJsonKafkaUtils {
         props.setProperty(
                 ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         props.setProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+        // fail fast on a mistyped or not-yet-created topic instead of letting the broker's
+        // auto-creation materialize it
+        props.setProperty(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, "false");
         props.putAll(sourceConfig.getKafkaProperties());
         return props;
     }
