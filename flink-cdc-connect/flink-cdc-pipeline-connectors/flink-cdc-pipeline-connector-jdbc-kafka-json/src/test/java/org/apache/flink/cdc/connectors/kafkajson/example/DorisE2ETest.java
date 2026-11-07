@@ -82,6 +82,16 @@ import static org.assertj.core.api.Assertions.within;
  * {@code e2e/env.yaml} must be provisioned from {@code e2e/env.yaml.template}. Without that
  * configuration the class is skipped rather than failed, so an ordinary {@code mvn test} still
  * passes on a machine that has no such services.
+ *
+ * <p>The class is opt-in regardless of configuration: it runs only with {@code
+ * -Dkafkajson.e2e.enabled=true}. A machine that <em>does</em> carry a provisioned {@code
+ * env.yaml} (a developer box wired to the shared test environment) therefore still skips it in
+ * routine self-testing, which must stay hermetic; run it explicitly when the real pipeline is
+ * the thing under test:
+ *
+ * <pre>{@code
+ * mvn test -pl <module> -Dtest=DorisE2ETest -Dkafkajson.e2e.enabled=true
+ * }</pre>
  */
 @Category({})
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
@@ -178,6 +188,13 @@ public class DorisE2ETest extends TestLogger {
 
     @BeforeClass
     public static void setup() throws Exception {
+        // Opt-in gate: this class drives the real TiDB/Doris/Kafka pipeline, so it must not run
+        // in a routine `mvn test` even on a machine whose e2e/env.yaml is provisioned — it is
+        // for deliberate manual runs only (see the class javadoc).
+        Assume.assumeTrue(
+                "DorisE2ETest is opt-in: run it with -Dkafkajson.e2e.enabled=true "
+                        + "(it drives a real TiDB/Doris/Kafka environment)",
+                Boolean.getBoolean("kafkajson.e2e.enabled"));
         Optional<E2eConfig> config = E2eConfig.find();
         Assume.assumeTrue(
                 "E2E environment not configured: copy src/test/resources/e2e/env.yaml.template "

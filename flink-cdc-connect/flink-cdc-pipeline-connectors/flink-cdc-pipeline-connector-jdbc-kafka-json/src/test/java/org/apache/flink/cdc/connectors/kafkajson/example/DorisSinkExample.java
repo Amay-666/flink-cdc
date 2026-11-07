@@ -17,6 +17,7 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.example;
 
+import com.google.common.base.Joiner;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.cdc.common.event.Event;
 import org.apache.flink.cdc.common.pipeline.SchemaChangeBehavior;
@@ -37,6 +38,7 @@ import java.time.Duration;
 import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Runnable end-to-end assembly of the connector's own DataStream topology: a canal-sourced stream
@@ -89,15 +91,15 @@ public class DorisSinkExample {
                         .username(e2e.getString("mysql.user"))
                         .password(e2e.getString("mysql.password"))
                         .databaseList(database)
-                        .tableList(database + ".test_schema_change3|test_schema_change4")
-                        .databaseType(KafkaJsonSourceOptions.DatabaseType.TIDB)
-                        .eventTime(KafkaJsonSourceOptions.EventTime.TIDB_TSO)
+                        .tableList(database + ".test_schema_change3")
+                        .databaseType(KafkaJsonSourceOptions.DatabaseType.MYSQL)
+                        .eventTime(KafkaJsonSourceOptions.EventTime.ES)
                         .scanNewlyAddedTableEnabled(true)
                         .includeSchemaChanges(true)
-                        .kafkaBootstrapServers(e2e.getString("kafka.servers"))
-                        .kafkaGroupId(e2e.getString("kafka.group"))
-                        .kafkaTopics(e2e.getString("kafka.topic"))
-                        .startupOptions(StartupOptions.initial())
+//                        .kafkaBootstrapServers(e2e.getString("kafka.servers"))
+//                        .kafkaGroupId(e2e.getString("kafka.group"))
+//                        .kafkaTopics(e2e.getString("kafka.topic"))
+                        .startupOptions(StartupOptions.snapshot())
                         .serverTimeZone("Asia/Shanghai");
         // Consume what the source reads with:
         // kafka-console-consumer --bootstrap-server <kafka.servers> --topic <kafka.topic>
@@ -118,9 +120,17 @@ public class DorisSinkExample {
         sinkConfig.set(
                 DorisDataSinkOptions.WRITER_MODE, DorisDataSinkOptions.WriterMode.STATEFUL.name());
         sinkConfig.set(DorisDataSinkOptions.IS_DROP_TABLE_BEFORE_CREATE, true);
+        sinkConfig.set(DorisDataSinkOptions.GENERATED_COLUMN_NAME, "pdd_bigdata_sync_time");
+        sinkConfig.set(DorisDataSinkOptions.GENERATED_COLUMN_TYPE, "DATETIME");
+        sinkConfig.set(DorisDataSinkOptions.GENERATED_COLUMN_FUNCTION, "NOW");
         DorisDataSinkOptions dorisDataSinkOptions = new DorisDataSinkOptions(sinkConfig);
         dorisDataSinkOptions.withTableMapping(
-                (tableId) -> tableId.getSchemaName() + "_" + tableId.getTableName());
+                (tableId) -> {
+                    String namespace = databaseAndTableNameReplace(tableId.getNamespace());
+                    String schemaName = databaseAndTableNameReplace(tableId.getSchemaName());
+                    String tableName = databaseAndTableNameReplace(tableId.getTableName());
+                    return Joiner.on("_").skipNulls().join("ods", namespace, schemaName, tableName, "realtime");
+                });
         dorisDataSinkOptions.withDatabaseMapping((tableId) -> e2e.getString("doris.database"));
 
         buildSink(
@@ -163,5 +173,13 @@ public class DorisSinkExample {
         return new KafkaJsonDataSinkBuilder(
                         new DorisDataSinkDialect(sinkOptions, ZoneId.of(timezone)))
                 .build(source, rpcTimeout, schemaChangeBehavior, timezone);
+    }
+
+    private static String databaseAndTableNameReplace(String name) {
+        // 将库名、表名所有非数字字母下划线替换为下划线
+        return Optional.ofNullable(name)
+                .filter(s -> !s.isEmpty())
+                .map(s -> s.replaceAll("[^a-zA-Z0-9_]", "_"))
+                .orElse(null);
     }
 }

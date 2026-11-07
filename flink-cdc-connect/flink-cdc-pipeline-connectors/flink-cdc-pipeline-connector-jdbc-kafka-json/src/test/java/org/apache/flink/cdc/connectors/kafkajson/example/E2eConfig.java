@@ -21,6 +21,7 @@ import org.apache.flink.cdc.connectors.kafkajson.utils.YamlUtils;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.Serializable;
 import java.util.Map;
 import java.util.Optional;
 
@@ -36,7 +37,9 @@ import java.util.Optional;
  * <p>Tests that need an environment call {@link #find()} and skip themselves when it is absent; the
  * runnable examples call {@link #get()}, which fails with instructions instead.
  */
-final class E2eConfig {
+final class E2eConfig implements Serializable {
+
+    private static final long serialVersionUID = 1L;
 
     /** The provisioned configuration; git-ignored because it carries real endpoints. */
     static final String DEFAULT_RESOURCE = "e2e/env.yaml";
