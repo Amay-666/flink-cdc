@@ -353,6 +353,17 @@ public class DorisSinkWriter implements SinkWriter<Event> {
         return batch;
     }
 
+    /**
+     * Registers the periodic flush timer.
+     *
+     * <p>The callback does <b>not</b> run on the timer pool thread: since FLINK-12481 (Flink
+     * 1.10), the {@code ProcessingTimeService} given to sink writers defers every timer callback
+     * to the mailbox, so {@code flushBuffered()} executes on the stream task's main thread —
+     * the same single thread that also runs {@code write}, {@code flush}, {@code snapshotState}
+     * and {@code close} (observed at runtime: the thread is the operator-chain thread, e.g.
+     * {@code PostPartition -> kafka-json-sink-writer (1/1)#0}). All buffer access is therefore
+     * serialized by construction and needs no lock.
+     */
     private void schedulePeriodicFlush(Sink.InitContext initContext) {
         if (options.getFlushInterval().isZero() || options.getFlushInterval().isNegative()) {
             return;
@@ -369,10 +380,10 @@ public class DorisSinkWriter implements SinkWriter<Event> {
                             try {
                                 flushBuffered();
                             } catch (IOException e) {
-                                // Log before propagating: this runs on the timer thread, so the
-                                // exception is reported from the processing-time service rather
-                                // than
-                                // from this writer, and it says nothing about which batch is lost.
+                                // Log before propagating: the callback is deferred to the
+                                // mailbox (FLINK-12481), so it runs on the task's main thread and
+                                // the exception fails the task exactly like one thrown from
+                                // write(); logging first records which batch is lost.
                                 LOG.error(
                                         "Periodic flush of the Doris buffer failed; failing the "
                                                 + "task instead of dropping the buffered rows.",
