@@ -127,10 +127,14 @@ class KafkaJsonTypeUtilsTest {
 
     @Test
     void testZeroLengthStringsClamped() {
-        // CHAR(0)/VARCHAR(0) are rejected by Flink, so the length is clamped to 1
+        // A bare `char` declares no (M) and MySQL's implicit default is 1 — the JDBC path
+        // reports exactly that length, so CHAR keeps the 1 fill. VARCHAR has no implicit
+        // default (the (M) is mandatory), so a zero/absent length can only be a quirk: the
+        // fill is the type's own maximum instead of a one-character clamp.
         assertEquals("CHAR(1)", KafkaJsonTypeUtils.fromDbzColumn(column("CHAR", 0)).toString());
         assertEquals(
-                "VARCHAR(1)", KafkaJsonTypeUtils.fromDbzColumn(column("VARCHAR", 0)).toString());
+                "VARCHAR(65535)",
+                KafkaJsonTypeUtils.fromDbzColumn(column("VARCHAR", 0)).toString());
     }
 
     @Test

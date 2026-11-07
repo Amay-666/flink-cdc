@@ -78,9 +78,12 @@ class KafkaJsonColumnMetaTest {
         assertEquals("STRING", toCdc("TEXT", 65535));
         assertEquals("STRING", toCdc("LONGTEXT", 2147483647));
         assertEquals("STRING", toCdc("JSON", 2147483647));
-        // CHAR(0)/VARCHAR(0) are rejected by CDC/Flink, so the length is clamped to 1
+        // A bare `char` declares no (M) and MySQL's implicit default is 1 — the JDBC path
+        // reports exactly that length, so CHAR keeps the 1 fill. VARCHAR has no implicit
+        // default (the (M) is mandatory), so a zero/absent length can only be a quirk: the
+        // fill is the type's own maximum instead of a one-character clamp.
         assertEquals("CHAR(1)", toCdc("CHAR", 0));
-        assertEquals("VARCHAR(1)", toCdc("VARCHAR", 0));
+        assertEquals("VARCHAR(65535)", toCdc("VARCHAR", 0));
     }
 
     @Test
@@ -187,6 +190,23 @@ class KafkaJsonColumnMetaTest {
         // the official Doris MySQL mapping keeps SET as the STRING of delimited labels; an
         // ARRAY<STRING> could not even cross the pipeline's binary record format
         assertEquals("STRING", toCdc("SET", 255));
+    }
+
+    @Test
+    void testEnumAndSetTypeNamesCarryingLabels() {
+        // MySQL Connector/J 8.0.x reports the bare TYPE_NAME ("ENUM" — verified live against
+        // a real MySQL), but readTableColumn stores the TYPE_NAME verbatim and other
+        // driver forms embed the label list ("enum('a','b','c')") or the arguments
+        // ("int(10) unsigned") in it. Every shape must resolve to the same base name and map
+        // ENUM/SET to STRING; before the base name was split at the first '(' too, the
+        // label-carrying form reached no mapping case at all.
+        assertEquals("STRING", toCdc("enum('a','b','c')", 1));
+        assertEquals("STRING", toCdc("set('x','y')", 1));
+        assertEquals("STRING", toCdc("ENUM", 0));
+        assertEquals("STRING", toCdc("SET", 0));
+        // parenthesized TYPE_NAMEs stay intact after the '(' split too
+        assertEquals("BIGINT", toCdc("int(10) unsigned", 10));
+        assertEquals("DECIMAL(10, 0)", toCdc("decimal(10,2)", 10));
     }
 
     @Test

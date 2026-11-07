@@ -18,6 +18,7 @@
 package org.apache.flink.cdc.connectors.kafkajson.source.ddl;
 
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTableUtils;
+import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTypeUtils;
 
 import io.debezium.relational.Column;
 import io.debezium.relational.Table;
@@ -86,6 +87,79 @@ class KafkaJsonDruidDdlParserTest {
         assertEquals(TABLE_ID, table.id());
         assertEquals(2, table.columns().size());
         assertEquals(Collections.singletonList("id"), table.primaryKeyColumnNames());
+    }
+
+    /**
+     * A DBeaver-issued CREATE TABLE, verbatim: leading tool comment, CRLF separators, a TEXT
+     * column with {@code CHARACTER SET}/{@code COLLATE} decorators, a {@code bit(1) DEFAULT
+     * b'1'} and a composite unique key.
+     *
+     * <p>The column this test exists for is {@code extend_attr}: the TEXT family mirrors the JDBC
+     * metadata path — TYPE_NAME carries the flavor and COLUMN_SIZE the flavor's byte limit —
+     * so {@code KafkaJsonColumnMeta} maps it to STRING exactly like a JDBC-discovered column,
+     * at every layer this assertion can reach.
+     */
+    @Test
+    void testParseDbeaverCreateTableWithTextColumn() {
+        String ddl =
+                "/* ApplicationName=DBeaver 24.0.4 - SQLEditor <badc_confcntr.sql> */ \r\n"
+                        + "-- badc_confcntr.def_dict_extend_attr definition\r\n"
+                        + "\r\n"
+                        + "CREATE TABLE `badc_confcntr`.`def_dict_extend_attr` (\r\n"
+                        + "  `id` bigint(20) NOT NULL COMMENT 'ID',\r\n"
+                        + "  `def_dict_id` bigint(20) NOT NULL COMMENT '字典项ID',\r\n"
+                        + "  `extend_attr_field` varchar(64) COLLATE utf8mb4_bin NOT NULL"
+                        + " COMMENT '扩展属性字段标识',\r\n"
+                        + "  `extend_attr` text CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL"
+                        + " COMMENT '扩展属性',\r\n"
+                        + "  `state` bit(1) DEFAULT b'1' COMMENT '状态',\r\n"
+                        + "  `created_by` bigint(20) DEFAULT NULL COMMENT '创建人id',\r\n"
+                        + "  `created_time` datetime DEFAULT NULL COMMENT '创建时间',\r\n"
+                        + "  `updated_by` bigint(20) DEFAULT NULL COMMENT '更新人id',\r\n"
+                        + "  `updated_time` datetime DEFAULT NULL COMMENT '更新时间',\r\n"
+                        + "  PRIMARY KEY (`id`),\r\n"
+                        + "  UNIQUE KEY `def_dict_extend_attr_def_dict_id_IDX`"
+                        + " (`def_dict_id`,`extend_attr_field`) USING BTREE\r\n"
+                        + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin"
+                        + " COMMENT='字典项与扩展属性关系表';";
+
+        KafkaJsonDdlParsedResult result =
+                parser.parse(
+                        "badc_confcntr",
+                        new TableId("badc_confcntr", null, "def_dict_extend_attr"),
+                        null,
+                        ddl);
+
+        assertEquals(KafkaJsonTableChangeType.CREATE, result.getType());
+        Table table = result.getNewTable();
+        assertEquals(9, table.columns().size());
+        assertEquals(Collections.singletonList("id"), table.primaryKeyColumnNames());
+
+        Column id = table.columnWithName("id");
+        assertEquals("BIGINT", id.typeName());
+        assertEquals(Types.BIGINT, id.jdbcType());
+        assertEquals(20, id.length());
+
+        // `text CHARACTER SET ... COLLATE ...` mirrors the JDBC metadata shape: the TEXT
+        // flavor type name, LONGVARCHAR and the flavor's byte limit
+        Column extendAttr = table.columnWithName("extend_attr");
+        assertEquals("TEXT", extendAttr.typeName());
+        assertEquals(Types.LONGVARCHAR, extendAttr.jdbcType());
+        assertEquals(65535, extendAttr.length());
+        assertEquals("扩展属性", extendAttr.comment());
+        // ... and therefore maps to the same CDC type a JDBC-discovered column maps to, which
+        // the sink renders as Doris's unbounded `string` — not a one-character VARCHAR
+        assertEquals(
+                "STRING",
+                KafkaJsonTypeUtils.fromDbzColumn(extendAttr).toString());
+
+        Column field = table.columnWithName("extend_attr_field");
+        assertEquals("VARCHAR", field.typeName());
+        assertEquals(64, field.length());
+
+        Column state = table.columnWithName("state");
+        assertEquals("BIT", state.typeName());
+        assertEquals(1, state.length());
     }
 
     @Test
@@ -741,18 +815,21 @@ class KafkaJsonDruidDdlParserTest {
         assertColumn(table, "c_set", "SET", Types.VARCHAR, 0);
         assertEquals(Arrays.asList("a", "b", "c"), table.columnWithName("c_enum").enumValues());
         assertEquals(Arrays.asList("x", "y"), table.columnWithName("c_set").enumValues());
-        assertColumn(table, "c_char", "VARCHAR", Types.VARCHAR, 16);
+        // string/binary families mirror the JDBC metadata shapes: TYPE_NAME carries the flavor
+        // (CHAR stays CHAR; the TEXT/BLOB flavors keep their names) and COLUMN_SIZE the flavor's
+        // byte limit
+        assertColumn(table, "c_char", "CHAR", Types.CHAR, 16);
         assertColumn(table, "c_varchar", "VARCHAR", Types.VARCHAR, 100);
-        assertColumn(table, "c_tinytext", "VARCHAR", Types.VARCHAR, 0);
-        assertColumn(table, "c_text", "VARCHAR", Types.VARCHAR, 0);
-        assertColumn(table, "c_mediumtext", "VARCHAR", Types.VARCHAR, 0);
-        assertColumn(table, "c_longtext", "VARCHAR", Types.VARCHAR, 0);
+        assertColumn(table, "c_tinytext", "TINYTEXT", Types.LONGVARCHAR, 255);
+        assertColumn(table, "c_text", "TEXT", Types.LONGVARCHAR, 65535);
+        assertColumn(table, "c_mediumtext", "MEDIUMTEXT", Types.LONGVARCHAR, 16777215);
+        assertColumn(table, "c_longtext", "LONGTEXT", Types.LONGVARCHAR, 2147483647);
         assertColumn(table, "c_binary", "BINARY", Types.BINARY, 8);
         assertColumn(table, "c_varbinary", "VARBINARY", Types.VARBINARY, 64);
-        assertColumn(table, "c_tinyblob", "BLOB", Types.BLOB, 0);
-        assertColumn(table, "c_blob", "BLOB", Types.BLOB, 0);
-        assertColumn(table, "c_mediumblob", "BLOB", Types.BLOB, 0);
-        assertColumn(table, "c_longblob", "BLOB", Types.BLOB, 0);
+        assertColumn(table, "c_tinyblob", "TINYBLOB", Types.LONGVARBINARY, 255);
+        assertColumn(table, "c_blob", "BLOB", Types.LONGVARBINARY, 65535);
+        assertColumn(table, "c_mediumblob", "MEDIUMBLOB", Types.LONGVARBINARY, 16777215);
+        assertColumn(table, "c_longblob", "LONGBLOB", Types.LONGVARBINARY, 2147483647);
 
         // positions follow the declaration order
         assertEquals(1, table.columnWithName("c_tinyint").position());

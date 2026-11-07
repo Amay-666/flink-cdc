@@ -178,20 +178,21 @@ class KafkaJsonTableUtilsTest {
         assertColumn(columns, "c_set", "SET", Types.VARCHAR, 0);
         assertEquals(Arrays.asList("a", "b", "c"), columns.get("c_enum").enumValues());
         assertEquals(Arrays.asList("x", "y"), columns.get("c_set").enumValues());
-        // text family members collapse to VARCHAR
-        assertColumn(columns, "c_char", "VARCHAR", Types.VARCHAR, 16);
+        // character strings keep their declared shape; the TEXT/BLOB families mirror the JDBC
+        // metadata path — TYPE_NAME carries the flavor, COLUMN_SIZE the flavor's byte limit —
+        // so KafkaJsonColumnMeta maps them to STRING/BYTES exactly like a JDBC-discovered column
+        assertColumn(columns, "c_char", "CHAR", Types.CHAR, 16);
         assertColumn(columns, "c_varchar", "VARCHAR", Types.VARCHAR, 100);
-        assertColumn(columns, "c_tinytext", "VARCHAR", Types.VARCHAR, 0);
-        assertColumn(columns, "c_text", "VARCHAR", Types.VARCHAR, 0);
-        assertColumn(columns, "c_mediumtext", "VARCHAR", Types.VARCHAR, 0);
-        assertColumn(columns, "c_longtext", "VARCHAR", Types.VARCHAR, 0);
-        // blob family members collapse to BLOB
+        assertColumn(columns, "c_tinytext", "TINYTEXT", Types.LONGVARCHAR, 255);
+        assertColumn(columns, "c_text", "TEXT", Types.LONGVARCHAR, 65535);
+        assertColumn(columns, "c_mediumtext", "MEDIUMTEXT", Types.LONGVARCHAR, 16777215);
+        assertColumn(columns, "c_longtext", "LONGTEXT", Types.LONGVARCHAR, 2147483647);
         assertColumn(columns, "c_binary", "BINARY", Types.BINARY, 8);
         assertColumn(columns, "c_varbinary", "VARBINARY", Types.VARBINARY, 64);
-        assertColumn(columns, "c_tinyblob", "BLOB", Types.BLOB, 0);
-        assertColumn(columns, "c_blob", "BLOB", Types.BLOB, 0);
-        assertColumn(columns, "c_mediumblob", "BLOB", Types.BLOB, 0);
-        assertColumn(columns, "c_longblob", "BLOB", Types.BLOB, 0);
+        assertColumn(columns, "c_tinyblob", "TINYBLOB", Types.LONGVARBINARY, 255);
+        assertColumn(columns, "c_blob", "BLOB", Types.LONGVARBINARY, 65535);
+        assertColumn(columns, "c_mediumblob", "MEDIUMBLOB", Types.LONGVARBINARY, 16777215);
+        assertColumn(columns, "c_longblob", "LONGBLOB", Types.LONGVARBINARY, 2147483647);
     }
 
     private static void assertColumn(

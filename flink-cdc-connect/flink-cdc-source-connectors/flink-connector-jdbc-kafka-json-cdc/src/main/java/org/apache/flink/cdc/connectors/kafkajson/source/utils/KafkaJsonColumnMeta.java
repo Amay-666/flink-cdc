@@ -49,6 +49,8 @@ public final class KafkaJsonColumnMeta {
     private static final int MAX_TEMPORAL_PRECISION = 6; // MySQL / TiDB fractional-seconds max
     private static final int MAX_DECIMAL_PRECISION = 38; // Flink / CDC decimal max
     private static final int DECIMAL_FALLBACK_SCALE = 18;
+    /** MySQL's maximum length of a VARCHAR/VARBINARY — the fill for a missing precision. */
+    private static final int MAX_VARCHAR_LENGTH = 65535;
 
     private final String baseName;
     private final boolean unsigned;
@@ -77,7 +79,8 @@ public final class KafkaJsonColumnMeta {
         String typeName = column.typeName();
         String normalized = typeName == null ? "" : typeName.toUpperCase().trim();
         boolean unsigned = normalized.contains("UNSIGNED") || normalized.contains("ZEROFILL");
-        String baseName = normalized.split(" ")[0];
+        // Split at the first space or '('.
+        String baseName = normalized.split("[\\s(]")[0];
 
         int precision = column.length();
         int scale = column.scale().orElse(0);
@@ -110,12 +113,22 @@ public final class KafkaJsonColumnMeta {
                 break;
             case "BIT":
             case "CHAR":
-            case "VARCHAR":
             case "BINARY":
-            case "VARBINARY":
-                // BIT(0)/CHAR(0)/VARCHAR(0)/BINARY(0)/VARBINARY(0) are rejected by both Flink and
-                // CDC; 1 is the smallest length that carries a value.
+                // A bare `bit`/`char`/`binary` carries no (M) in the DDL text and MySQL's
+                // implicit default for all three is 1 — the JDBC path reports exactly that
+                // length, so 1 is the JDBC-consistent fill for a missing/zero precision.
                 precision = Math.max(1, precision);
+                break;
+            case "VARCHAR":
+            case "VARBINARY":
+                // MySQL mandates the (M) of VARCHAR/VARBINARY, so a zero or absent precision
+                // can only come from a driver or parser quirk. Fill it with the type's own
+                // maximum rather than clamping to 1 — a 1 here would silently describe a
+                // one-character column. The sink clamps the byte length to Doris's
+                // DORIS_VARCHAR_MAX_BYTES anyway, so the fill is safe downstream.
+                if (precision <= 0) {
+                    precision = MAX_VARCHAR_LENGTH;
+                }
                 break;
             case "NUMERIC":
             case "FIXED":

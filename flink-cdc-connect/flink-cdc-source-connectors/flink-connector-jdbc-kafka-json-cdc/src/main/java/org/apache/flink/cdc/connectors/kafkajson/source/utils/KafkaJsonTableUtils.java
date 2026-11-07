@@ -51,16 +51,6 @@ public class KafkaJsonTableUtils {
             Pattern.compile(
                     "^\\s*([a-z0-9]+)\\s*(?:\\((.*?)\\))?\\s*(unsigned)?\\s*(zerofill)?\\s*$");
 
-    private static final Set<String> STRING_TYPES =
-            new LinkedHashSet<>(
-                    Arrays.asList("char", "varchar", "tinytext", "text", "mediumtext", "longtext"));
-
-    private static final Set<String> BINARY_TYPES =
-            new LinkedHashSet<>(Arrays.asList("binary", "varbinary"));
-
-    private static final Set<String> BLOB_TYPES =
-            new LinkedHashSet<>(Arrays.asList("blob", "tinyblob", "mediumblob", "longblob"));
-
     private static final Set<String> GEOMETRY_TYPES =
             new LinkedHashSet<>(
                     Arrays.asList(
@@ -221,19 +211,52 @@ public class KafkaJsonTableUtils {
                 jdbcType = Types.VARCHAR;
                 enumValues = MySqlEnumSetLabels.parse(mysqlType);
                 break;
+            case "char":
+                // mirror the JDBC metadata path: TYPE_NAME "CHAR", jdbc type CHAR — collapsing
+                // CHAR into VARCHAR here would diverge from a JDBC-discovered column (whose
+                // KafkaJsonColumnMeta mapping is CHAR(precision)) and surface as a phantom
+                // type change whenever the two schemas are diffed
+                typeName = "CHAR";
+                jdbcType = Types.CHAR;
+                break;
+            case "varchar":
+                typeName = "VARCHAR";
+                jdbcType = Types.VARCHAR;
+                break;
+            case "tinytext":
+            case "text":
+            case "mediumtext":
+            case "longtext":
+                // mirror the JDBC metadata path: TYPE_NAME carries the flavor and COLUMN_SIZE
+                // the flavor's byte limit, so KafkaJsonColumnMeta maps the column to STRING
+                // exactly like a JDBC-discovered one. Collapsing to VARCHAR here instead made
+                // the missing length clamp to VARCHAR(1) in the sink's DDL — a one-character
+                // column for a TEXT field. The (rare, ignored by MySQL) TEXT(M) display hint
+                // is not honored, matching COLUMN_SIZE semantics.
+                typeName = base.toUpperCase(Locale.ROOT);
+                jdbcType = Types.LONGVARCHAR;
+                length = textBlobLength(base);
+                break;
+            case "binary":
+                typeName = "BINARY";
+                jdbcType = Types.BINARY;
+                break;
+            case "varbinary":
+                typeName = "VARBINARY";
+                jdbcType = Types.VARBINARY;
+                break;
+            case "tinyblob":
+            case "blob":
+            case "mediumblob":
+            case "longblob":
+                // same parity as the TEXT family: the flavor TYPE_NAME, LONGVARBINARY and the
+                // byte limit; KafkaJsonColumnMeta maps every flavor to BYTES either way
+                typeName = base.toUpperCase(Locale.ROOT);
+                jdbcType = Types.LONGVARBINARY;
+                length = textBlobLength(base);
+                break;
             default:
-                if (STRING_TYPES.contains(base)) {
-                    typeName = "VARCHAR";
-                    jdbcType = Types.VARCHAR;
-                } else if (BINARY_TYPES.contains(base)) {
-                    typeName = base.equals("binary") ? "BINARY" : "VARBINARY";
-                    jdbcType = base.equals("binary") ? Types.BINARY : Types.VARBINARY;
-                } else if (BLOB_TYPES.contains(base)) {
-                    typeName = "BLOB";
-                    jdbcType = Types.BLOB;
-                } else {
-                    throw new FlinkRuntimeException("Unsupported mysqlType: " + mysqlType);
-                }
+                throw new FlinkRuntimeException("Unsupported mysqlType: " + mysqlType);
         }
         if (jdbcType == Types.FLOAT || jdbcType == Types.DOUBLE || jdbcType == Types.REAL) {
             // Approximate numerics carry no scale: the parsed display scale ("float(12,0)" —
@@ -245,6 +268,30 @@ public class KafkaJsonTableUtils {
             scale = null;
         }
         return new ParsedType(base, typeName, jdbcType, length, scale, enumValues);
+    }
+
+    /**
+     * The byte limit of the TEXT/BLOB flavor families, matching what the JDBC driver reports in
+     * {@code COLUMN_SIZE}: {@code tinytext}/{@code tinyblob} 2^8-1, {@code text}/{@code blob}
+     * 2^16-1, {@code mediumtext}/{@code mediumblob} 2^24-1 and {@code longtext}/{@code
+     * longblob} 2^32-1.
+     */
+    private static int textBlobLength(String base) {
+        switch (base) {
+            case "tinytext":
+            case "tinyblob":
+                return 255;
+            case "text":
+            case "blob":
+                return 65535;
+            case "mediumtext":
+            case "mediumblob":
+                return 16777215;
+            case "longtext":
+            case "longblob":
+            default:
+                return 2147483647;
+        }
     }
 
     private static int[] parseParams(String base, String params) {

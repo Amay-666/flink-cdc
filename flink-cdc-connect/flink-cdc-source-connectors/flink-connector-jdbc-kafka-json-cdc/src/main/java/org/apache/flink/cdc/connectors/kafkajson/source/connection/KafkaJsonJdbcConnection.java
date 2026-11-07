@@ -59,11 +59,12 @@ import java.util.Set;
  *       single-precision FLOAT32 branch;
  *   <li>the {@link #readSchema(Tables, String, String, Tables.TableFilter, ColumnNameFilter,
  *       boolean)} table loop fills the ENUM/SET label lists — from the TYPE_NAME itself when it
- *       carries the values (MySQL proper reports {@code enum('a','b','c')}), otherwise from {@code
- *       information_schema.COLUMNS}'s COLUMN_TYPE (TiDB reports the TYPE_NAME bare, "ENUM"/"SET").
- *       Without the labels, TiCDC's numeric ENUM index / SET bitmask cannot be mapped back to their
- *       text (see {@code KafkaJsonValueConverter#convert}); later value changes keep the labels
- *       fresh through the schema-change path, whose DDL text carries the whole new list.
+ *       carries the values (some drivers report {@code enum('a','b','c')}), otherwise from {@code
+ *       information_schema.COLUMNS}'s COLUMN_TYPE (MySQL Connector/J 8.0.x and TiDB report the
+ *       TYPE_NAME bare, "ENUM"/"SET"). Without the labels, TiCDC's numeric ENUM index / SET
+ *       bitmask cannot be mapped back to their text (see {@code
+ *       KafkaJsonValueConverter#convert}); later value changes keep the labels fresh through
+ *       the schema-change path, whose DDL text carries the whole new list.
  * </ul>
  *
  * <p>The column read also skips the {@code COLUMN_DEF} default value: {@link
@@ -281,15 +282,16 @@ public class KafkaJsonJdbcConnection extends JdbcConnection {
     /**
      * Fills the ENUM/SET label lists of the columns.
      *
-     * <p>MySQL proper reports the TYPE_NAME with the values ("enum('a','b','c')") — they are parsed
-     * from the type name itself, in memory and without any query. Only TiDB's bare "ENUM"/"SET"
-     * type names (no values in the metadata) fall back to a single {@code
-     * information_schema.COLUMNS} query per table; tables without ENUM/SET columns never query at
-     * all.
+     * <p>Some drivers report the TYPE_NAME with the values ("enum('a','b','c')") — those are
+     * parsed from the type name itself, in memory and without any query. MySQL Connector/J
+     * 8.0.x (verified live against a real MySQL) and TiDB report the bare
+     * "ENUM"/"SET" type names (no values in the metadata); those fall back to a single {@code
+     * information_schema.COLUMNS} query per table; tables without ENUM/SET columns never query
+     * at all.
      */
     private List<Column> fillEnumAndSetLabels(List<Column> columns, TableId tableId)
             throws SQLException {
-        // 1. the type names may already carry the values (MySQL proper) — parse them in memory
+        // 1. the type names may already carry the values (some drivers) — parse them in memory
         List<Column> parsed = columns;
         for (int i = 0; i < columns.size(); i++) {
             Column column = columns.get(i);
