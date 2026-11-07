@@ -379,7 +379,7 @@ public class KafkaJsonSchemaManager {
             // entries (the released SchemaOperator refreshes its per-table caches under the first
             // old id after processing a rename).
             RenameTableEvent renameTableEvent = (RenameTableEvent) event;
-            LOG.info("Handling schema change event: {}", event);
+            LOG.debug("Handling schema change event: {}", event);
             List<RenameTableEvent.TableRename> pairs = renameTableEvent.getPairs();
             Set<TableId> newTableIds =
                     pairs.stream()
@@ -409,13 +409,13 @@ public class KafkaJsonSchemaManager {
             // that the released SchemaOperator can still refresh its caches afterwards. The table
             // is recorded as removed, which is what lets a later CREATE TABLE of the same name be
             // applied instead of being discarded as a duplicate.
-            LOG.info("Handling schema change event: {}", event);
+            LOG.debug("Handling schema change event: {}", event);
             removedTables.add(event.tableId());
             return;
         }
         if (event instanceof TruncateTableEvent) {
             // Truncate does not change the schema; the entry is kept for the same reason as above.
-            LOG.info("Handling schema change event: {}", event);
+            LOG.debug("Handling schema change event: {}", event);
             return;
         }
         Optional<Schema> optionalSchema = getLatestSchema(schemaMap, event.tableId());
@@ -423,7 +423,7 @@ public class KafkaJsonSchemaManager {
                 optionalSchema.isPresent(),
                 "Unable to apply SchemaChangeEvent for table \"%s\" without existing schema",
                 event.tableId());
-        LOG.info("Handling schema change event: {}", event);
+        LOG.debug("Handling schema change event: {}", event);
         Schema evolvedSchema = optionalSchema.get();
         if (event instanceof AlterTableCommentEvent) {
             registerCommentChange(
@@ -467,7 +467,7 @@ public class KafkaJsonSchemaManager {
             Schema currentSchema,
             Schema newSchema) {
         if (currentSchema.equals(newSchema)) {
-            LOG.warn(
+            LOG.debug(
                     "Schema change for table \"{}\" produced the schema that is already "
                             + "registered; the schema version is left untouched so that no "
                             + "retained version is evicted.",
@@ -498,7 +498,7 @@ public class KafkaJsonSchemaManager {
                 // event did not come from that path. Surface it: the loop below drops the update
                 // while the DDL builder still emits it, and Doris then rejects the statement — the
                 // warning is what connects the two.
-                LOG.warn(
+                LOG.debug(
                         "Column comment change names column \"{}\" of table \"{}\", which the "
                                 + "current schema does not have; the comment is ignored here.",
                         columnName,
@@ -556,7 +556,7 @@ public class KafkaJsonSchemaManager {
             boolean lastApply) {
         LOG.info("Handling schema change event: {}", event);
         if (resetRemovedTable(schemaMap, event.tableId(), event.getSchema(), lastApply)) {
-            LOG.info(
+            LOG.debug(
                     "Table {} had been removed; its schema history was reset by this re-creation.",
                     event.tableId());
             return;

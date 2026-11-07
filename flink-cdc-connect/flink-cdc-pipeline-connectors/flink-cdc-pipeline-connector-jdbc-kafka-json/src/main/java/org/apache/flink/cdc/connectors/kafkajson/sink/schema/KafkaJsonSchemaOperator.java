@@ -460,7 +460,7 @@ public class KafkaJsonSchemaOperator extends AbstractStreamOperator<Event>
                 NonceUtils.generateNonce(
                         getCurrentTimestamp(), subTaskId, tableId, schemaChangeEvent);
 
-        LOG.info("{}> Sending the FlushEvent for table {} (nonce: {}).", subTaskId, tableId, nonce);
+        LOG.debug("{}> Sending the FlushEvent for table {} (nonce: {}).", subTaskId, tableId, nonce);
         output.collect(new StreamRecord<>(new FlushEvent(tableId, nonce)));
 
         // The request will block if another schema change event is being handled
@@ -477,12 +477,12 @@ public class KafkaJsonSchemaOperator extends AbstractStreamOperator<Event>
             // Update evolved schema changes based on apply results
             finishedSchemaChangeEvents.forEach(e -> output.collect(new StreamRecord<>(e)));
         } else if (response.isDuplicate()) {
-            LOG.info(
+            LOG.debug(
                     "{}> Schema change event {} has been handled in another subTask already.",
                     subTaskId,
                     schemaChangeEvent);
         } else if (response.isIgnored()) {
-            LOG.info(
+            LOG.debug(
                     "{}> Schema change event {} has been ignored. No schema evolution needed.",
                     subTaskId,
                     schemaChangeEvent);

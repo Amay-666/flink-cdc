@@ -163,14 +163,14 @@ public class KafkaJsonSchemaRegistryRequestHandlerTest {
             long nonce = nextNonce();
             handler.flushSuccess(0, nonce);
             assertThat(
-                            send(
-                                            handler,
-                                            new KafkaJsonSchemaChangeRequest(
-                                                    ORDERS,
-                                                    new CreateTableEvent(ORDERS, SCHEMA),
-                                                    0,
-                                                    nonce))
-                                    .isAccepted())
+                    send(
+                            handler,
+                            new KafkaJsonSchemaChangeRequest(
+                                    ORDERS,
+                                    new CreateTableEvent(ORDERS, SCHEMA),
+                                    0,
+                                    nonce))
+                            .isAccepted())
                     .isTrue();
             awaitResult(handler, nonce);
 
@@ -351,12 +351,16 @@ public class KafkaJsonSchemaRegistryRequestHandlerTest {
     }
 
     private KafkaJsonSchemaRegistryRequestHandler handler(MetadataApplier applier) {
+        // The commit runs wherever the injected executor runs it; Runnable::run lets it execute
+        // on the DDL thread of the round itself, which the volatile FINISHED write still makes
+        // safely visible to the test thread polling getSchemaChangeResult.
         return new KafkaJsonSchemaRegistryRequestHandler(
                 applier,
                 manager,
                 new KafkaJsonSchemaDerivation(),
                 SchemaChangeBehavior.EVOLVE,
-                context);
+                context,
+                Runnable::run);
     }
 
     private static SchemaChangeResponse send(

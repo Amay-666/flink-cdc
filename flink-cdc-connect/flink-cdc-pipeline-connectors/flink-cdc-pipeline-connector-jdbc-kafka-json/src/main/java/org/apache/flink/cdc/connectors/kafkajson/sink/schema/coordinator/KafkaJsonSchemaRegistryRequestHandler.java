@@ -26,6 +26,7 @@ import org.apache.flink.cdc.common.pipeline.SchemaChangeBehavior;
 import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.common.sink.MetadataApplier;
 import org.apache.flink.cdc.common.utils.Preconditions;
+import org.apache.flink.cdc.common.utils.SchemaUtils;
 import org.apache.flink.cdc.connectors.kafkajson.event.BatchCreateTableEvents;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonSchemaChangeRequest;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonSchemaChangeResultRequest;
@@ -40,30 +41,48 @@ import org.slf4j.LoggerFactory;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 import static org.apache.flink.cdc.runtime.operators.schema.event.CoordinationResponseUtils.wrap;
 
 /**
  * A handler to deal with all requests and events for {@link KafkaJsonSchemaRegistry}.
  *
- * <p>This mirrors the released {@code SchemaRegistryRequestHandler} state machine — {@code IDLE →
- * WAITING_FOR_FLUSH → APPLYING → FINISHED} with {@code BUSY} requests queued by subtask — so that a
- * schema change blocks upstream data flow until every sink subtask has flushed, then applies the
- * DDL and lets the data flow resume. Two deviations make the connector's custom events safe: the
- * derivation is a pure pass-through (no {@code lenientize} switch on {@code getType()}), and {@link
- * #applySchemaChange} gates on {@code instanceof CreateTableEvent} instead of {@code getType()} and
- * drops the {@code acceptsSchemaEvolutionType} check — the connector's metadata applier accepts all
- * events. An {@code AlterColumnTypeEvent} additionally carries no old type, so when the applier
- * implements {@link OldSchemaAwareMetadataApplier} the handler resolves the pre-change schema from
- * {@link KafkaJsonSchemaManager} and passes it along.
+ * <p>State machine: {@code IDLE -> APPLYING -> FINISHED -> IDLE}. A request is accepted only when
+ * the registry is idle and every registered sink writer has flushed for the request's nonce —
+ * flush events are broadcast before the request is sent, so the acknowledgements and the
+ * operator's request poll race benignly against each other. Requests that lose that race receive
+ * {@code BUSY} and are retried by the operator (they are not queued here); duplicate and ignored
+ * requests are answered without a round at all.
+ *
+ * <p>Threading model — why {@link KafkaJsonSchemaManager} needs no lock: the handler state and the
+ * schema history are owned by the coordinator event loop, the single-threaded executor given as
+ * {@code coordinatorExecutor}. The DDL statements of an accepted round run on {@link
+ * #schemaChangeThreadPool} but only talk to the external system; when they finish, the results are
+ * posted back to the event loop, which alone applies them to the schema manager ({@link
+ * #commitSchemaChangeResults}) and flips the state to {@code FINISHED}. Schema queries and
+ * checkpoint serialization also run on the event loop, so no two threads ever touch the
+ * unsynchronized {@code HashMap}s inside the schema manager — a slow Doris DDL can no longer race
+ * a concurrent read.
+ *
+ * <p>Two deviations keep the connector's custom events safe: the derivation is a pure pass-through
+ * (no {@code lenientize} switch on {@code getType()}), and the DDL loop gates on {@code instanceof
+ * CreateTableEvent} instead of {@code getType()} and drops the {@code acceptsSchemaEvolutionType}
+ * check — the connector's metadata applier accepts all events. An {@code AlterColumnTypeEvent}
+ * additionally carries no old type, so when the applier implements {@link
+ * OldSchemaAwareMetadataApplier} the pre-change schema is resolved on the event loop at acceptance
+ * time (race-free) and handed to the DDL thread with the task.
  */
 public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
     private static final Logger LOG =
@@ -92,8 +111,14 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
     /** Sink writers which have sent flush success events for the request. */
     private final ConcurrentHashMap<Long, Set<Integer>> flushedSinkWriters;
 
-    /** Executor service to execute schema change. */
+    /** Executor service to execute schema change DDLs. */
     private final ExecutorService schemaChangeThreadPool;
+
+    /**
+     * The coordinator's single-threaded event loop. DDL results are posted back onto it so that
+     * every mutation of {@link #schemaManager} and of this handler's state happens on one thread.
+     */
+    private final Executor coordinatorExecutor;
 
     private final SchemaChangeBehavior schemaChangeBehavior;
 
@@ -106,12 +131,14 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
             KafkaJsonSchemaManager schemaManager,
             KafkaJsonSchemaDerivation schemaDerivation,
             SchemaChangeBehavior schemaChangeBehavior,
-            OperatorCoordinator.Context context) {
+            OperatorCoordinator.Context context,
+            Executor coordinatorExecutor) {
         this.metadataApplier = metadataApplier;
         this.schemaManager = schemaManager;
         this.schemaDerivation = schemaDerivation;
         this.schemaChangeBehavior = schemaChangeBehavior;
         this.context = context;
+        this.coordinatorExecutor = coordinatorExecutor;
 
         this.activeSinkWriters = ConcurrentHashMap.newKeySet();
         this.flushedSinkWriters = new ConcurrentHashMap<>();
@@ -161,7 +188,7 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                         }
                     }
                     if (batchCreates.isEmpty()) {
-                        LOG.info(
+                        LOG.debug(
                                 "All tables of create-table batch {} have been addressed before, ignoring it.",
                                 event);
                         clearCurrentSchemaChangeRequest(nonce);
@@ -170,17 +197,17 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                     }
                 } else if (schemaManager.isOriginalSchemaChangeEventRedundant(event)) {
                     // If this schema change event has been requested by another subTask, ignore it.
-                    LOG.info("Event {} has been addressed before, ignoring it.", event);
+                    LOG.debug("Event {} has been addressed before, ignoring it.", event);
                     clearCurrentSchemaChangeRequest(nonce);
-                    LOG.info(
-                            "SchemaChangeStatus switched from WAITING_FOR_FLUSH to IDLE for request {} due to duplicated request.",
+                    LOG.debug(
+                            "SchemaChangeStatus is still IDLE for request {} due to duplicated request.",
                             request);
                     response.complete(wrap(SchemaChangeResponse.duplicate()));
                     return;
                 }
 
                 if (activeSinkWriters.size() < parallelism) {
-                    LOG.info(
+                    LOG.debug(
                             "Not all active sink writers have been registered. Current {}, expected {}.",
                             activeSinkWriters.size(),
                             parallelism);
@@ -189,7 +216,7 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                 }
 
                 if (!activeSinkWriters.equals(flushedSinkWriters.get(nonce))) {
-                    LOG.info(
+                    LOG.debug(
                             "Not all active sink writers have completed flush (nonce: {}). Flushed writers: {}, expected: {}.",
                             nonce,
                             flushedSinkWriters.get(nonce),
@@ -214,29 +241,40 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                 // It is kept because the released SchemaOperator is the other side of this protocol
                 // and does handle SchemaChangeResponse.ignored().
                 if (derivedSchemaChangeEvents.isEmpty()) {
-                    LOG.info("Event {} is omitted from sending to downstream, ignoring it.", event);
+                    LOG.debug("Event {} is omitted from sending to downstream, ignoring it.", event);
                     clearCurrentSchemaChangeRequest(nonce);
-                    LOG.info(
-                            "SchemaChangeStatus switched from WAITING_FOR_FLUSH to IDLE for request {} due to ignored request.",
+                    LOG.debug(
+                            "SchemaChangeStatus is still IDLE for request {} due to ignored request.",
                             request);
 
                     response.complete(wrap(SchemaChangeResponse.ignored()));
                     return;
                 }
 
-                LOG.info(
+                LOG.debug(
                         "SchemaChangeStatus switched from IDLE to APPLYING, other requests will be blocked.");
                 // This request has been accepted.
                 schemaChangeStatus = RequestStatus.APPLYING;
 
                 response.complete(wrap(SchemaChangeResponse.accepted(derivedSchemaChangeEvents)));
 
-                LOG.info(
+                // The pre-change schemas for AlterColumnTypeEvents are resolved here, on the
+                // event loop, before the DDL task is submitted: the evolved history is only ever
+                // mutated on this thread (at commit time, after the DDLs ran), so this read is
+                // race-free and still observes the round's "before" state.
+                List<Optional<Schema>> preChangeSchemas =
+                        resolvePreChangeSchemas(derivedSchemaChangeEvents);
+
+                LOG.debug(
                         "All sink subtask have flushed for table {}. Start to apply schema change request {}.",
                         request.getTableId().toString(),
                         request);
                 schemaChangeThreadPool.submit(
-                        () -> applySchemaChange(request.getTableId(), derivedSchemaChangeEvents));
+                        () ->
+                                executeSchemaChangeDdls(
+                                        request.getTableId(),
+                                        derivedSchemaChangeEvents,
+                                        preChangeSchemas));
             } else {
                 response.complete(wrap(SchemaChangeResponse.busy()));
             }
@@ -244,17 +282,29 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
     }
 
     /**
-     * Apply the schema change to the external system.
+     * Runs the DDL statements of an accepted schema change round on the DDL thread. This method
+     * only talks to the external system: the schema manager and the handler state are owned by
+     * the coordinator event loop and are updated by {@link #commitSchemaChangeResults} once this
+     * method returns, so a slow DDL (a Doris asynchronous schema change can take minutes) cannot
+     * overlap a schema read or a checkpoint serialization.
      *
-     * @param tableId the table need to change schema
-     * @param derivedSchemaChangeEvents list of the schema changes
+     * @param tableId the table the schema changes apply to
+     * @param derivedSchemaChangeEvents the schema changes to apply, in order
+     * @param preChangeSchemas per-event pre-change evolved schemas (see {@link
+     *     #resolvePreChangeSchemas}); only read for {@link AlterColumnTypeEvent}s
      */
-    private void applySchemaChange(
-            TableId tableId, List<SchemaChangeEvent> derivedSchemaChangeEvents) {
-        for (SchemaChangeEvent changeEvent : derivedSchemaChangeEvents) {
+    private void executeSchemaChangeDdls(
+            TableId tableId,
+            List<SchemaChangeEvent> derivedSchemaChangeEvents,
+            List<Optional<Schema>> preChangeSchemas) {
+        List<SchemaChangeEvent> appliedEvents = new ArrayList<>();
+        List<SchemaChangeEvent> ignoredEvents = new ArrayList<>();
+        Throwable failure = null;
+        for (int i = 0; i < derivedSchemaChangeEvents.size(); i++) {
+            SchemaChangeEvent changeEvent = derivedSchemaChangeEvents.get(i);
             if (schemaChangeBehavior == SchemaChangeBehavior.IGNORE
                     && !(changeEvent instanceof CreateTableEvent)) {
-                currentIgnoredSchemaChanges.add(changeEvent);
+                ignoredEvents.add(changeEvent);
                 continue;
             }
             try {
@@ -262,19 +312,16 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                         && metadataApplier instanceof OldSchemaAwareMetadataApplier) {
                     // An AlterColumnTypeEvent only carries the new types; an engine that needs the
                     // old (pre-change) types to react — Doris, which cannot shrink a CHAR/VARCHAR
-                    // column the way MySQL/TiDB can — gets them from the pre-change evolved schema.
-                    // It is resolved before applyEvolvedSchemaChange below, so it still reflects
-                    // this event's "before" state.
-                    Optional<Schema> oldSchema =
-                            schemaManager.getLatestEvolvedSchema(changeEvent.tableId());
+                    // column the way MySQL/TiDB can — gets them from the snapshot resolved on the
+                    // event loop at acceptance time.
                     ((OldSchemaAwareMetadataApplier) metadataApplier)
-                            .applyAlterColumnType((AlterColumnTypeEvent) changeEvent, oldSchema);
+                            .applyAlterColumnType(
+                                    (AlterColumnTypeEvent) changeEvent, preChangeSchemas.get(i));
                 } else {
                     metadataApplier.applySchemaChange(changeEvent);
                 }
-                LOG.info("Applied schema change {} to table {}.", changeEvent, tableId);
-                schemaManager.applyEvolvedSchemaChange(changeEvent);
-                currentFinishedSchemaChanges.add(changeEvent);
+                LOG.debug("Applied schema change {} to table {}.", changeEvent, tableId);
+                appliedEvents.add(changeEvent);
             } catch (Throwable t) {
                 LOG.error(
                         "Failed to apply schema change {} to table {}. Caused by: {}",
@@ -282,7 +329,7 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                         tableId,
                         t);
                 if (!shouldIgnoreException(t)) {
-                    currentChangeException = t;
+                    failure = t;
                     break;
                 } else {
                     LOG.warn(
@@ -292,12 +339,97 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                 }
             }
         }
-        Preconditions.checkState(
-                schemaChangeStatus == RequestStatus.APPLYING,
-                "Illegal schemaChangeStatus state: should be APPLYING before applySchemaChange finishes, not "
-                        + schemaChangeStatus);
-        schemaChangeStatus = RequestStatus.FINISHED;
-        LOG.info("SchemaChangeStatus switched from APPLYING to FINISHED.");
+        postCommit(appliedEvents, ignoredEvents, failure);
+    }
+
+    /** Hands the DDL outcomes back to the coordinator event loop. */
+    private void postCommit(
+            List<SchemaChangeEvent> appliedEvents,
+            List<SchemaChangeEvent> ignoredEvents,
+            Throwable failure) {
+        try {
+            coordinatorExecutor.execute(
+                    () -> commitSchemaChangeResults(appliedEvents, ignoredEvents, failure));
+        } catch (RejectedExecutionException e) {
+            // The event loop is already shut down — the job is stopping or failing over, and the
+            // restored handler will replay this round. Nothing is committed, which is safe: the
+            // schema history still reflects the state of the last completed checkpoint.
+            LOG.debug(
+                    "Coordinator event loop rejected the DDL-result commit; the round is left uncommitted.",
+                    e);
+        }
+    }
+
+    /**
+     * Applies the results of a finished DDL round to the schema manager and flips the state to
+     * {@code FINISHED}. Runs on the coordinator event loop — the single thread that also serves
+     * schema queries and checkpoint serialization, which is what makes those reads race-free
+     * against these writes.
+     */
+    private void commitSchemaChangeResults(
+            List<SchemaChangeEvent> appliedEvents,
+            List<SchemaChangeEvent> ignoredEvents,
+            Throwable failure) {
+        try {
+            synchronized (schemaChangeRequestLock) {
+                Preconditions.checkState(
+                        schemaChangeStatus == RequestStatus.APPLYING,
+                        "Illegal schemaChangeStatus state: should be APPLYING when committing DDL results, not "
+                                + schemaChangeStatus);
+                for (SchemaChangeEvent appliedEvent : appliedEvents) {
+                    schemaManager.applyEvolvedSchemaChange(appliedEvent);
+                    currentFinishedSchemaChanges.add(appliedEvent);
+                }
+                currentIgnoredSchemaChanges.addAll(ignoredEvents);
+                currentChangeException = failure;
+                schemaChangeStatus = RequestStatus.FINISHED;
+                LOG.debug("SchemaChangeStatus switched from APPLYING to FINISHED.");
+            }
+        } catch (Throwable t) {
+            // The event loop's thread factory installs a FatalExitExceptionHandler: an exception
+            // escaping a task would kill the JobManager, so route it to a job failover instead.
+            LOG.error("Failed to commit schema change results; failing the job.", t);
+            context.failJob(t);
+        }
+    }
+
+    /**
+     * Resolves, for every {@link AlterColumnTypeEvent} of a round, the evolved schema as it
+     * stands before that event applies — the {@code oldSchema} an {@link
+     * OldSchemaAwareMetadataApplier} needs. Must run on the coordinator event loop before the
+     * DDL task is submitted: the history is only mutated on that thread, and this round's own
+     * mutations happen at commit time, so the latest version read here is the "before" state.
+     *
+     * <p>The pass-through derivation yields at most one event per round (or a batch of creates,
+     * which never alters), so the simulation below — letting a hypothetical second alter of the
+     * same table observe the first alter's effect — is unreachable today; it keeps this method
+     * correct should the derivation ever widen.
+     */
+    private List<Optional<Schema>> resolvePreChangeSchemas(
+            List<SchemaChangeEvent> derivedSchemaChangeEvents) {
+        Map<TableId, Schema> simulatedView = new HashMap<>();
+        List<Optional<Schema>> preChangeSchemas = new ArrayList<>();
+        for (SchemaChangeEvent changeEvent : derivedSchemaChangeEvents) {
+            if (changeEvent instanceof AlterColumnTypeEvent
+                    && metadataApplier instanceof OldSchemaAwareMetadataApplier) {
+                Schema preChange = simulatedView.get(changeEvent.tableId());
+                if (preChange == null) {
+                    preChange =
+                            schemaManager
+                                    .getLatestEvolvedSchema(changeEvent.tableId())
+                                    .orElse(null);
+                }
+                preChangeSchemas.add(Optional.ofNullable(preChange));
+                if (preChange != null) {
+                    simulatedView.put(
+                            changeEvent.tableId(),
+                            SchemaUtils.applySchemaChangeEvent(preChange, changeEvent));
+                }
+            } else {
+                preChangeSchemas.add(Optional.empty());
+            }
+        }
+        return preChangeSchemas;
     }
 
     /**
@@ -306,7 +438,7 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
      * @param sinkSubtask the sink subtask to register
      */
     public void registerSinkWriter(int sinkSubtask) {
-        LOG.info("Register sink subtask {}.", sinkSubtask);
+        LOG.debug("Register sink subtask {}.", sinkSubtask);
         activeSinkWriters.add(sinkSubtask);
     }
 
@@ -332,7 +464,7 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                 "Illegal schemaChangeStatus: should not be IDLE before getting schema change request results.");
         if (schemaChangeStatus == RequestStatus.FINISHED) {
             schemaChangeStatus = RequestStatus.IDLE;
-            LOG.info(
+            LOG.debug(
                     "SchemaChangeStatus switched from FINISHED to IDLE. (nonce: {})",
                     request.getNonce());
 
@@ -400,7 +532,8 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
     //
     //  A: When a request came to an idling request handler. Only possible when registry is IDLE,
     // and it has collected all FlushEvents from sink writers.
-    //  B: When schema change application finishes (successfully or with exceptions)
+    //  B: When the DDL round finished on the DDL thread and its results were committed back on
+    // the event loop (successfully or with exceptions).
     //  C: When current schema change request result has been retrieved by SchemaOperator, and be
     // ready for the next request.
     private enum RequestStatus {

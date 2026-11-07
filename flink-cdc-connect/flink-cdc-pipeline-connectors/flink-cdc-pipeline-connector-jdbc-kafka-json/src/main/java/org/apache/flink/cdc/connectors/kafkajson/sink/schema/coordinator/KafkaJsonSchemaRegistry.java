@@ -100,10 +100,7 @@ public class KafkaJsonSchemaRegistry implements OperatorCoordinator, Coordinatio
 
     private final SchemaChangeBehavior schemaChangeBehavior;
 
-    /**
-     * Current parallelism. Use this to verify if the registry has collected enough flush success
-     * events from sink operators.
-     */
+    /** Schema Operator's current parallelism.*/
     private int currentParallelism;
 
     public KafkaJsonSchemaRegistry(
@@ -126,7 +123,8 @@ public class KafkaJsonSchemaRegistry implements OperatorCoordinator, Coordinatio
                         schemaManager,
                         schemaDerivation,
                         schemaChangeBehavior,
-                        context);
+                        context,
+                        coordinatorExecutor);
     }
 
     @Override
@@ -299,7 +297,8 @@ public class KafkaJsonSchemaRegistry implements OperatorCoordinator, Coordinatio
                                         schemaManager,
                                         schemaDerivation,
                                         schemaManager.getBehavior(),
-                                        context);
+                                        context,
+                                        coordinatorExecutor);
                         break;
                     }
                 default:
@@ -335,7 +334,7 @@ public class KafkaJsonSchemaRegistry implements OperatorCoordinator, Coordinatio
     private void handleGetEvolvedSchemaRequest(
             GetEvolvedSchemaRequest getEvolvedSchemaRequest,
             CompletableFuture<CoordinationResponse> response) {
-        LOG.info("Handling evolved schema request: {}", getEvolvedSchemaRequest);
+        LOG.debug("Handling evolved schema request: {}", getEvolvedSchemaRequest);
         int schemaVersion = getEvolvedSchemaRequest.getSchemaVersion();
         TableId tableId = getEvolvedSchemaRequest.getTableId();
         if (schemaVersion == GetEvolvedSchemaRequest.LATEST_SCHEMA_VERSION) {
@@ -362,7 +361,7 @@ public class KafkaJsonSchemaRegistry implements OperatorCoordinator, Coordinatio
     private void handleGetOriginalSchemaRequest(
             GetOriginalSchemaRequest getOriginalSchemaRequest,
             CompletableFuture<CoordinationResponse> response) {
-        LOG.info("Handling original schema request: {}", getOriginalSchemaRequest);
+        LOG.debug("Handling original schema request: {}", getOriginalSchemaRequest);
         int schemaVersion = getOriginalSchemaRequest.getSchemaVersion();
         TableId tableId = getOriginalSchemaRequest.getTableId();
         if (schemaVersion == GetOriginalSchemaRequest.LATEST_SCHEMA_VERSION) {
