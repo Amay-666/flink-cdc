@@ -44,6 +44,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.nio.ByteOrder;
 import java.nio.charset.Charset;
 import java.nio.charset.IllegalCharsetNameException;
@@ -59,6 +60,7 @@ import java.time.temporal.Temporal;
 import java.time.temporal.TemporalAdjuster;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -69,6 +71,14 @@ import java.util.regex.Pattern;
  * <p>Line 240 & 246: add FLOAT type adjustment.
  *
  * <p>Line 485 & 499: add method to convert FLOAT value.
+ *
+ * <p>Line 466-510: parse integral String values losslessly ({@code Long.parseLong} with a
+ * {@link BigDecimal} fallback) instead of {@code Math.round(Double.parseDouble(...))}. The
+ * double round-trip cannot represent values beyond 2^53, so 18-digit snowflake ids delivered as
+ * canal row text were silently rounded to the nearest representable double (the 64-multiple
+ * grid at 2^58). In Debezium the String branch only ever sees DDL default literals, which are
+ * tiny; this connector feeds canal row values (all Strings) into the same converters, so the
+ * parsing must be exact.
  */
 @Immutable
 public class MySqlValueConverters extends JdbcValueConverters {
@@ -357,7 +367,7 @@ public class MySqlValueConverters extends JdbcValueConverters {
                     logger.debug("Using {} charset by default for column: {}", charset, column);
                     return (data) -> convertString(column, fieldDefn, charset, data);
                 }
-                logger.warn(
+                logger.debug(
                         "Using UTF-8 charset by default for column without charset: {}", column);
                 return (data) -> convertString(column, fieldDefn, StandardCharsets.UTF_8, data);
             case Types.TIME:
@@ -387,7 +397,7 @@ public class MySqlValueConverters extends JdbcValueConverters {
     protected Charset charsetFor(Column column) {
         String mySqlCharsetName = column.charsetName();
         if (mySqlCharsetName == null) {
-            logger.warn("Column is missing a character set: {}", column);
+            logger.debug("Column is missing a character set: {}", column);
             return null;
         }
         String encoding = MySqlConnection.getJavaEncodingForMysqlCharSet(mySqlCharsetName);
@@ -399,7 +409,7 @@ public class MySqlValueConverters extends JdbcValueConverters {
                     MySqlConnection.getJavaEncodingForMysqlCharSet(mySqlCharsetName.toLowerCase());
         }
         if (encoding == null) {
-            logger.warn(
+            logger.debug(
                     "Column uses MySQL character set '{}', which has no mapping to a Java character set",
                     mySqlCharsetName);
         } else {
@@ -467,7 +477,7 @@ public class MySqlValueConverters extends JdbcValueConverters {
     protected Object convertSmallInt(Column column, Field fieldDefn, Object data) {
         // MySQL allows decimal default values for smallint columns
         if (data instanceof String) {
-            data = Math.round(Double.parseDouble((String) data));
+            data = parseIntegralText(column, (String) data);
         }
 
         return super.convertSmallInt(column, fieldDefn, data);
@@ -477,7 +487,7 @@ public class MySqlValueConverters extends JdbcValueConverters {
     protected Object convertInteger(Column column, Field fieldDefn, Object data) {
         // MySQL allows decimal default values for integer columns
         if (data instanceof String) {
-            data = Math.round(Double.parseDouble((String) data));
+            data = parseIntegralText(column, (String) data);
         }
 
         return super.convertInteger(column, fieldDefn, data);
@@ -487,10 +497,75 @@ public class MySqlValueConverters extends JdbcValueConverters {
     protected Object convertBigInt(Column column, Field fieldDefn, Object data) {
         // MySQL allows decimal default values for bigint columns
         if (data instanceof String) {
-            data = Math.round(Double.parseDouble((String) data));
+            data = parseIntegralText(column, (String) data);
         }
 
         return super.convertBigInt(column, fieldDefn, data);
+    }
+
+    /**
+     * Parses the textual form of an integral column value losslessly. An integer literal goes
+     * through {@link Long#parseLong(String)}; MySQL also permits decimal literals as default
+     * values of integer columns, and those round through {@link BigDecimal}. The value never
+     * passes through {@code double}: its 52-bit significand cannot represent values beyond
+     * 2^53, so {@code Math.round(Double.parseDouble(...))} silently corrupted snowflake-style
+     * ids (18 digits) to the nearest representable double — the 64-multiple grid at 2^58.
+     *
+     * <p>Whether the literal is integral is decided by a character scan up front, so the
+     * decimal fallback is not exception-driven control flow: {@code Long.parseLong} throwing
+     * on well-formed input is reserved for the genuinely exceptional overflow, and a decimal
+     * takes its path without paying for a {@link NumberFormatException} first.
+     *
+     * <p>Values that are neither integral nor decimal literals, and values that overflow a
+     * signed long, fail with a {@link ConnectException} instead of being silently rounded or
+     * saturated.
+     *
+     * @param value the textual value, never null — the callers reach this method only behind
+     *     an {@code instanceof String} check or an explicit null guard
+     */
+    static Long parseIntegralText(Column column, String value) {
+        Objects.requireNonNull(value, "value");
+        String text = value.trim();
+        if (isIntegralLiteral(text)) {
+            try {
+                return Long.parseLong(text);
+            } catch (NumberFormatException overflow) {
+                // integral, but beyond Long.MAX_VALUE / below Long.MIN_VALUE
+                throw new ConnectException(
+                        "Value '" + value + "' for column " + column.name()
+                                + " overflows a signed long", overflow);
+            }
+        }
+        try {
+            // HALF_UP keeps Math.round's rounding of a .5 fraction for positive values
+            return new BigDecimal(text).setScale(0, RoundingMode.HALF_UP).longValueExact();
+        } catch (NumberFormatException | ArithmeticException e) {
+            throw new ConnectException(
+                    "Failed to convert value '" + value + "' for column " + column.name(), e);
+        }
+    }
+
+    /**
+     * Returns whether the text has the integral shape {@link Long#parseLong(String)} accepts —
+     * an optional sign followed by nothing but digits — so that decimals ({@code 3.5}, {@code
+     * 1e3}) and garbage take the decimal/error path without an exception round-trip.
+     */
+    private static boolean isIntegralLiteral(String text) {
+        int start = 0;
+        if (!text.isEmpty() && (text.charAt(0) == '+' || text.charAt(0) == '-')) {
+            start = 1;
+        }
+        if (start == text.length()) {
+            // "", "+" or "-": no digits at all
+            return false;
+        }
+        for (int i = start; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c < '0' || c > '9') {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

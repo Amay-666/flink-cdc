@@ -51,8 +51,13 @@ import java.util.regex.Pattern;
  * converters (driven by {@link MySqlValueConverters}) accept different Java types per column type:
  *
  * <ul>
- *   <li>signed numerics, decimals, floats/doubles, strings, JSON, ENUM, SET and YEAR accept the
- *       plain {@code String} and are returned unchanged;
+ *   <li>signed integers ({@code TINYINT/SMALLINT/INT/MEDIUMINT/BIGINT}) are parsed to a {@link
+ *       Long} here — the way Debezium's binlog decoder delivers row values — because the value
+ *       converters' {@code String} branches (see {@link MySqlValueConverters#convertBigInt})
+ *       exist only for DDL default literals and round through {@code double}, which corrupts
+ *       values beyond 2^53 (snowflake-style ids) to the nearest representable double;
+ *   <li>decimals, float/doubles, strings, JSON, ENUM, SET and YEAR accept the plain {@code
+ *       String} and are returned unchanged;
  *   <li>{@code TINYINT/SMALLINT/MEDIUMINT/INT UNSIGNED} require a {@link Number};
  *   <li>{@code BOOLEAN}/{@code BIT(1)} (whose converter has no {@code String} branch) require a
  *       {@link Number} or {@link Boolean};
@@ -106,6 +111,22 @@ public class KafkaJsonValueConverter {
         }
         switch (column.jdbcType()) {
             case java.sql.Types.BOOLEAN: // BOOL / BOOLEAN
+                return toNumber(value, column);
+            case java.sql.Types.TINYINT: // MySQL TINYINT
+            case java.sql.Types.SMALLINT: // MySQL SMALLINT
+            case java.sql.Types.INTEGER: // MySQL INT / MEDIUMINT (JDBC reports MEDIUMINT as INTEGER)
+            case java.sql.Types.BIGINT: // MySQL BIGINT
+                if (KafkaJsonTableUtils.isUnsigned(typeName)) {
+                    // Unsigned columns keep the trailing handling: their converters expect a
+                    // Number — except BIGINT UNSIGNED, whose convertUnsignedBigint parses the
+                    // String through BigDecimal losslessly (values can exceed Long.MAX_VALUE).
+                    break;
+                }
+                // Parse the canal text to a Long instead of passing the String through: the
+                // MySqlValueConverters' String branches serve DDL default literals and round
+                // through double, whose 52-bit significand cannot represent values beyond
+                // 2^53 — a 18-digit snowflake id would be silently rounded to the nearest
+                // 64-multiple (the double grid at 2^58).
                 return toNumber(value, column);
             case java.sql.Types.BIT:
                 return toBit(column, value);
@@ -184,8 +205,8 @@ public class KafkaJsonValueConverter {
             }
             return toNumber(value, column);
         }
-        // All remaining types (signed numerics, decimal, float/double, char/text, JSON, ENUM, SET,
-        // YEAR) accept the plain String
+        // All remaining types (decimal, float/double, char/text, JSON, ENUM, SET, YEAR) accept
+        // the plain String
         return value;
     }
 

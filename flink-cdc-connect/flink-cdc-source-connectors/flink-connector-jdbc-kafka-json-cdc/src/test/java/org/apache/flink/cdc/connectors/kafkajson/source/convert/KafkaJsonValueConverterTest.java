@@ -64,10 +64,22 @@ class KafkaJsonValueConverterTest {
     }
 
     @Test
-    void testSignedIntegersPassThrough() {
-        // signed numerics accept the plain String
-        assertEquals("123", converter.convert(column(Types.INTEGER, "INT", 11), "123"));
-        assertEquals("-1", converter.convert(column(Types.BIGINT, "BIGINT", 20), "-1"));
+    void testSignedIntegersParsedToNumber() {
+        // signed integers parse to a Long here: the value converters' String branches exist
+        // only for DDL default literals and round through double
+        assertEquals(123L, converter.convert(column(Types.INTEGER, "INT", 11), "123"));
+        assertEquals(-1L, converter.convert(column(Types.BIGINT, "BIGINT", 20), "-1"));
+        assertEquals(127L, converter.convert(column(Types.TINYINT, "TINYINT", 4), "127"));
+        assertEquals(-32768L, converter.convert(column(Types.SMALLINT, "SMALLINT", 6), "-32768"));
+        // snowflake ids beyond 2^53 must survive the canal text conversion exactly: a double
+        // round-trip would round them to the nearest 64-multiple (the double grid at 2^58)
+        assertEquals(
+                332805230706017666L,
+                converter.convert(column(Types.BIGINT, "BIGINT", 20), "332805230706017666"));
+        assertEquals(
+                -332805230706017666L,
+                converter.convert(column(Types.BIGINT, "BIGINT", 20), "-332805230706017666"));
+        // decimal, char/text and JSON still pass through as the plain String
         assertEquals("3.14", converter.convert(column(Types.DECIMAL, "DECIMAL", 10), "3.14"));
         assertEquals("abc", converter.convert(column(Types.VARCHAR, "VARCHAR", 255), "abc"));
         assertEquals(
@@ -262,17 +274,18 @@ class KafkaJsonValueConverterTest {
     }
 
     @Test
-    void testIntegerBoundariesPassThrough() {
-        // signed integer extremes stay String: the Debezium converters parse them from String
+    void testIntegerBoundariesParsedToNumber() {
+        // signed integer extremes parse to a Long: the value converters' String branches exist
+        // only for DDL default literals and round through double
         assertEquals(
-                "2147483647", converter.convert(column(Types.INTEGER, "INT", 11), "2147483647"));
+                2147483647L, converter.convert(column(Types.INTEGER, "INT", 11), "2147483647"));
         assertEquals(
-                "-2147483648", converter.convert(column(Types.INTEGER, "INT", 11), "-2147483648"));
+                -2147483648L, converter.convert(column(Types.INTEGER, "INT", 11), "-2147483648"));
         assertEquals(
-                "9223372036854775807",
+                9223372036854775807L,
                 converter.convert(column(Types.BIGINT, "BIGINT", 20), "9223372036854775807"));
         assertEquals(
-                "-9223372036854775808",
+                -9223372036854775808L,
                 converter.convert(column(Types.BIGINT, "BIGINT", 20), "-9223372036854775808"));
     }
 
@@ -387,15 +400,15 @@ class KafkaJsonValueConverterTest {
     }
 
     @Test
-    void testConvertFromJsonNumericPassThrough() {
-        // numeric values render back to their text form, which the canal converter parses
+    void testConvertFromJsonNumericParsedForIntegrals() {
+        // integral numeric values parse to a Long, exactly like the canal text does
         assertEquals(
-                "123",
+                123L,
                 converter.convertFromJson(
                         column(Types.INTEGER, "INT", 11),
                         JsonNodeFactory.instance.numberNode(123)));
         assertEquals(
-                "9223372036854775807",
+                9223372036854775807L,
                 converter.convertFromJson(
                         column(Types.BIGINT, "BIGINT", 20),
                         JsonNodeFactory.instance.numberNode(Long.MAX_VALUE)));
