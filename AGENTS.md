@@ -12,4 +12,3 @@
 - Full specification, grammar, examples, and validation checklist:
   `.claude/skills/conventional-commit/references/spec.md`
 - If an AI generates a commit message, validate it against the full specification before committing.
-- 
