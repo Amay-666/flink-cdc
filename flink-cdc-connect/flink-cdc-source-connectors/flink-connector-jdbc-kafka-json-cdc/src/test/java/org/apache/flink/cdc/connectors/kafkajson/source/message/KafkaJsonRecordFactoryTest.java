@@ -22,6 +22,7 @@ import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceCo
 import org.apache.flink.cdc.connectors.kafkajson.source.convert.MySqlValueConverters;
 import org.apache.flink.cdc.connectors.kafkajson.source.schema.KafkaJsonSourceInfo;
 import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTableUtils;
+import org.apache.flink.cdc.connectors.kafkajson.source.utils.KafkaJsonTypeUtils;
 
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -212,6 +213,41 @@ class KafkaJsonRecordFactoryTest {
         Struct value = (Struct) record.value();
         assertEquals("c", value.getString("op"));
         assertEquals(332805230706017666L, value.getStruct("after").getInt64("id"));
+    }
+
+    /**
+     * Regression test for the tinyint(1) booleanization: a tinyint(1) column legally holds
+     * -128..127 (0..255 unsigned). The record layer keeps the number (the Connect schema is
+     * INT16 — the slot below holds {@code 2}), and the sink-side type must stay numeric too:
+     * with BOOLEAN, {@code DorisRowConverter} read the record's SMALLINT slot through the
+     * BOOLEAN getter's non-zero test and collapsed 2/3/100 to 1.
+     */
+    @Test
+    void testTinyIntOneKeepsValuesAboveOne() {
+        Table table = usersTable("id");
+        factory.registerTable(table);
+        Map<String, String> row = aliceRow();
+        row.put("enabled", "2");
+        Object[] data = factory.canalRowData(table, row);
+
+        SourceRecord record =
+                factory.createRecord(
+                        table,
+                        null,
+                        data,
+                        Envelope.Operation.CREATE,
+                        sourceInfo(SnapshotRecord.FALSE),
+                        "test.users",
+                        0,
+                        100L);
+
+        // the record layer carries the number ...
+        assertEquals(
+                (short) 2, ((Struct) record.value()).getStruct("after").getInt16("enabled"));
+        // ... and the sink-side type (what DorisRowConverter builds its getter from) is
+        // numeric, so the value reaches Doris as 2, not a boolean true
+        assertEquals(
+                "TINYINT", KafkaJsonTypeUtils.fromDbzColumn(table.columnWithName("enabled")).toString());
     }
 
     /**

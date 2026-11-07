@@ -29,10 +29,17 @@ public class KafkaJsonConnectionPoolFactory extends JdbcConnectionPoolFactory {
     // which still attempts an encrypted handshake (and fails on a cert validity check when the
     // container clock drifts). Explicitly disabling SSL keeps the JDBC path deterministic, and
     // allowPublicKeyRetrieval is then needed for caching_sha2_password accounts (MySQL 8 default).
+    //
+    // tinyInt1isBit=false (verified live): with Connector/J's default true, the metadata of a
+    // tinyint(1) column arrives as TYPE_NAME 'BIT' (and getObject returns a Boolean), which
+    // routed tinyint(1) through the BIT mapping — every layer booleanized and non-zero values
+    // (2, 3, 100) collapsed to 1. With false, the column reports TYPE_NAME 'TINYINT',
+    // DATA_TYPE -6, and the numeric path holds end to end.
     public static final String JDBC_URL_PATTERN =
             "jdbc:mysql://%s:%s/?sslMode=DISABLED&allowPublicKeyRetrieval=true"
                     + "&useUnicode=true&characterEncoding=UTF-8&useCursorFetch=true"
-                    + "&rewriteBatchedStatements=true";
+                    + "&rewriteBatchedStatements=true&zeroDateTimeBehavior=CONVERT_TO_NULL"
+                    + "&tinyInt1isBit=false";
 
     @Override
     public String getJdbcUrl(JdbcSourceConfig sourceConfig) {

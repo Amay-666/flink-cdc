@@ -170,22 +170,15 @@ public final class KafkaJsonColumnMeta {
             case "BOOLEAN":
                 return DataTypes.BOOLEAN();
             case "TINYINT":
-                // MySQL has no boolean type, it uses tinyint(1) to represent boolean
-                if (precision == 1) {
-                    return DataTypes.BOOLEAN();
-                }
-                // unsigned tinyint (0..255) exceeds the signed TINYINT range, promote to
-                // SMALLINT the same way the released MySQL connector's row-type inference does
                 return unsigned ? DataTypes.SMALLINT() : DataTypes.TINYINT();
             case "SMALLINT":
                 return unsigned ? DataTypes.INT() : DataTypes.SMALLINT();
             case "MEDIUMINT":
+            case "YEAR":
                 return DataTypes.INT();
             case "INT":
             case "INTEGER":
                 return unsigned ? DataTypes.BIGINT() : DataTypes.INT();
-            case "YEAR":
-                return DataTypes.INT();
             case "BIGINT":
             case "SERIAL":
                 return unsigned ? DataTypes.DECIMAL(20, 0) : DataTypes.BIGINT();

@@ -67,9 +67,13 @@ class KafkaJsonTypeUtilsTest {
     }
 
     @Test
-    void testTinyIntBoolean() {
-        // tinyint(1) represents boolean
-        assertEquals("BOOLEAN", KafkaJsonTypeUtils.fromDbzColumn(column("TINYINT", 1)).toString());
+    void testTinyIntStaysNumeric() {
+        // tinyint(1) legally holds -128..127: mapping it to BOOLEAN collapsed 2/3 to 1 (the
+        // record layer keeps the number while the sink read the SMALLINT slot through the
+        // BOOLEAN getter's non-zero test). Only a real bit(1) stays BOOLEAN.
+        assertEquals("TINYINT", KafkaJsonTypeUtils.fromDbzColumn(column("TINYINT", 1)).toString());
+        assertEquals(
+                "SMALLINT", KafkaJsonTypeUtils.fromDbzColumn(column("TINYINT UNSIGNED", 1)).toString());
     }
 
     @Test

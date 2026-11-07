@@ -54,7 +54,11 @@ class KafkaJsonColumnMetaTest {
         assertEquals("SMALLINT", toCdc("SMALLINT", 6));
         assertEquals("TINYINT", toCdc("TINYINT", 4));
         assertEquals("INT", toCdc("YEAR", 4));
-        assertEquals("BOOLEAN", toCdc("TINYINT", 1));
+        // tinyint(1) is a number like any other tinyint: mapping it to BOOLEAN collapsed 2/3
+        // to 1, because the record layer keeps the number while the sink read the SMALLINT
+        // slot through the BOOLEAN getter's non-zero test. Only bit(1) stays BOOLEAN.
+        assertEquals("TINYINT", toCdc("TINYINT", 1));
+        assertEquals("SMALLINT", toCdc("TINYINT UNSIGNED", 1));
     }
 
     @Test
