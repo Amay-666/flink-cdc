@@ -27,12 +27,18 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.sql.Connection;
 import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Types;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -168,6 +174,166 @@ class KafkaJsonJdbcConnectionTest {
         Column passed = connection.overrideColumn(bigint).create();
         assertThat(passed.jdbcType()).isEqualTo(Types.BIGINT);
         assertThat(passed.length()).isEqualTo(20);
+    }
+
+    @Test
+    void readTableNamesDropsKeylessTables() throws Exception {
+        // readTableNames is where the connector captures its table set (discovery, schema read):
+        // a table with a unique key but no primary key stays captured — readTableSchema promotes
+        // it to key semantics (TiDB/TiCDC keys its tables on a unique index) — while a table with
+        // no key at all cannot be chunked or backfilled and is dropped here: no schema, no sink
+        // table, no data. Matching is case-insensitive, and one constraints query (deduplicated
+        // by DISTINCT and the Set) answers the whole catalog.
+        List<String> sqlLog = new ArrayList<>();
+        List<String[]> tableRows =
+                Arrays.asList(
+                        new String[] {"test", null, "Users"},
+                        new String[] {"test", null, "no_pk"},
+                        new String[] {"test", null, "UniqueKeyOnly"});
+        List<String> keyConstraintRows = Arrays.asList("users", "UniqueKeyOnly", "UniqueKeyOnly");
+        Connection connection =
+                mockConnection(
+                        sqlLog,
+                        tableRows,
+                        keyConstraintRows,
+                        new AtomicInteger(-1),
+                        new AtomicInteger(-1));
+        KafkaJsonJdbcConnection jdbcConnection =
+                new KafkaJsonJdbcConnection(
+                        JdbcConfiguration.create().with("database.hostname", "localhost").build(),
+                        (ConnectionFactory) config -> connection,
+                        "`",
+                        "`");
+
+        Set<TableId> tables =
+                jdbcConnection.readTableNames("test", null, null, new String[] {"TABLE"});
+
+        assertThat(tables)
+                .containsExactlyInAnyOrder(
+                        new TableId("test", null, "Users"),
+                        new TableId("test", null, "UniqueKeyOnly"));
+        assertThat(sqlLog).hasSize(1);
+        assertThat(sqlLog.get(0))
+                .contains("TABLE_CONSTRAINTS")
+                .contains("'PRIMARY KEY'")
+                .contains("'UNIQUE'")
+                .contains("DISTINCT");
+    }
+
+    /**
+     * Builds the {@link Connection} behind the constraints query of {@link
+     * KafkaJsonJdbcConnection#readTableNames}: {@code getMetaData().getTables(...)} answers the
+     * three-column table rows, {@code prepareStatement(...)} answers the single-column
+     * primary-key rows and records the SQL.
+     */
+    private static Connection mockConnection(
+            List<String> sqlLog,
+            List<String[]> tableRows,
+            List<String> primaryKeyRows,
+            AtomicInteger tableRowIndex,
+            AtomicInteger primaryKeyRowIndex) {
+        ResultSet tablesResultSet =
+                (ResultSet)
+                        Proxy.newProxyInstance(
+                                ResultSet.class.getClassLoader(),
+                                new Class<?>[] {ResultSet.class},
+                                (proxy, method, args) -> {
+                                    switch (method.getName()) {
+                                        case "next":
+                                            return tableRowIndex.incrementAndGet()
+                                                    < tableRows.size();
+                                        case "getString":
+                                            return tableRows.get(tableRowIndex.get())[
+                                                    (Integer) args[0] - 1];
+                                        default:
+                                            return defaultValue(method.getReturnType());
+                                    }
+                                });
+        ResultSet primaryKeyResultSet =
+                (ResultSet)
+                        Proxy.newProxyInstance(
+                                ResultSet.class.getClassLoader(),
+                                new Class<?>[] {ResultSet.class},
+                                (proxy, method, args) -> {
+                                    switch (method.getName()) {
+                                        case "next":
+                                            return primaryKeyRowIndex.incrementAndGet()
+                                                    < primaryKeyRows.size();
+                                        case "getString":
+                                            return primaryKeyRows.get(primaryKeyRowIndex.get());
+                                        default:
+                                            return defaultValue(method.getReturnType());
+                                    }
+                                });
+        PreparedStatement constraintsStatement =
+                (PreparedStatement)
+                        Proxy.newProxyInstance(
+                                PreparedStatement.class.getClassLoader(),
+                                new Class<?>[] {PreparedStatement.class},
+                                (proxy, method, args) -> {
+                                    switch (method.getName()) {
+                                        case "setString":
+                                            return null;
+                                        case "executeQuery":
+                                            return primaryKeyResultSet;
+                                        default:
+                                            return defaultValue(method.getReturnType());
+                                    }
+                                });
+        DatabaseMetaData metadata =
+                (DatabaseMetaData)
+                        Proxy.newProxyInstance(
+                                DatabaseMetaData.class.getClassLoader(),
+                                new Class<?>[] {DatabaseMetaData.class},
+                                (proxy, method, args) -> {
+                                    if ("getTables".equals(method.getName())) {
+                                        return tablesResultSet;
+                                    }
+                                    return defaultValue(method.getReturnType());
+                                });
+        return (Connection)
+                Proxy.newProxyInstance(
+                        Connection.class.getClassLoader(),
+                        new Class<?>[] {Connection.class},
+                        (proxy, method, args) -> {
+                            switch (method.getName()) {
+                                case "getMetaData":
+                                    return metadata;
+                                case "prepareStatement":
+                                    sqlLog.add((String) args[0]);
+                                    return constraintsStatement;
+                                default:
+                                    return defaultValue(method.getReturnType());
+                            }
+                        });
+    }
+
+    private static Object defaultValue(Class<?> type) {
+        if (!type.isPrimitive()) {
+            return null;
+        }
+        if (type == boolean.class) {
+            return false;
+        }
+        if (type == int.class) {
+            return 0;
+        }
+        if (type == long.class) {
+            return 0L;
+        }
+        if (type == double.class) {
+            return 0.0d;
+        }
+        if (type == float.class) {
+            return 0.0f;
+        }
+        if (type == short.class) {
+            return (short) 0;
+        }
+        if (type == byte.class) {
+            return (byte) 0;
+        }
+        return null;
     }
 
     private static KafkaJsonJdbcConnection connection() {

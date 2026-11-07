@@ -40,13 +40,15 @@ public class KafkaJsonTableDiscoveryUtils {
             throws SQLException {
         Set<TableId> allTableIds =
                 jdbc.readTableNames(database, null, null, new String[] {"TABLE"});
+        LOG.info("JdbcConnection read all table names from database '{}', tableListSize : {}", database, allTableIds.size());
 
         Set<TableId> capturedTables =
                 allTableIds.stream()
                         .filter(t -> tableFilters.dataCollectionFilter().isIncluded(t))
                         .collect(Collectors.toSet());
         LOG.info(
-                "Canal captured tables : {} .",
+                "Captured tables for database '{}': [{}].",
+                database,
                 capturedTables.stream().map(TableId::toString).collect(Collectors.joining(",")));
 
         return new ArrayList<>(capturedTables);

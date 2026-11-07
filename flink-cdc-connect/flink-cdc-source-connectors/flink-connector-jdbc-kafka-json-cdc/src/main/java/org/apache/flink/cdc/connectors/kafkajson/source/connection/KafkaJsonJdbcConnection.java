@@ -351,4 +351,68 @@ public class KafkaJsonJdbcConnection extends JdbcConnection {
         String typeName = column.typeName().toUpperCase(Locale.ROOT);
         return "ENUM".equals(typeName) || "SET".equals(typeName);
     }
+
+    /**
+     * Reads the table names like the base implementation but drops the tables that have neither a
+     * primary key nor a unique key: a unique-key-only table is promoted to key semantics by {@code
+     * KafkaJsonSchema#readTableSchema} (TiDB/TiCDC keys its tables on a unique index), so it
+     * chunks and backfills fine, while a table with no key at all cannot. A dropped table is
+     * never captured — no schema, no sink table, no data for it.
+     */
+    @Override
+    public Set<TableId> readTableNames(
+            String databaseCatalog,
+            String schemaNamePattern,
+            String tableNamePattern,
+            String[] tableTypes)
+            throws SQLException {
+        Set<TableId> tableIds =
+                super.readTableNames(
+                        databaseCatalog, schemaNamePattern, tableNamePattern, tableTypes);
+        if (tableIds.isEmpty()) {
+            return tableIds;
+        }
+        Map<String, Set<String>> keyConstraintTables = new HashMap<>();
+        Set<TableId> result = new HashSet<>();
+        for (TableId tableId : tableIds) {
+            String catalog = tableId.catalog();
+            if (catalog == null || catalog.isEmpty()) {
+                // no catalog to query constraints for: keep the table (fail soft)
+                result.add(tableId);
+                continue;
+            }
+            Set<String> keyedTableNames = keyConstraintTables.get(catalog);
+            if (keyedTableNames == null) {
+                keyedTableNames = queryTableNamesWithKeyConstraint(catalog);
+                keyConstraintTables.put(catalog, keyedTableNames);
+            }
+            if (keyedTableNames.contains(tableId.table().toUpperCase(Locale.ROOT))) {
+                result.add(tableId);
+            } else {
+                LOGGER.warn(
+                        "Table '{}' has neither a primary key nor a unique key; skipping it:"
+                                + " no schema, no sink table, and no data for it.",
+                        tableId);
+            }
+        }
+        return result;
+    }
+
+    /** Returns the upper-cased table names of {@code database} that have a primary or unique key. */
+    private Set<String> queryTableNamesWithKeyConstraint(String database) throws SQLException {
+        String query =
+                "SELECT DISTINCT TABLE_NAME FROM information_schema.TABLE_CONSTRAINTS "
+                        + "WHERE CONSTRAINT_SCHEMA = ? AND CONSTRAINT_TYPE IN ('PRIMARY KEY',"
+                        + " 'UNIQUE')";
+        Set<String> names = new HashSet<>();
+        try (PreparedStatement statement = connection().prepareStatement(query)) {
+            statement.setString(1, database);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    names.add(resultSet.getString(1).toUpperCase(Locale.ROOT));
+                }
+            }
+        }
+        return names;
+    }
 }
