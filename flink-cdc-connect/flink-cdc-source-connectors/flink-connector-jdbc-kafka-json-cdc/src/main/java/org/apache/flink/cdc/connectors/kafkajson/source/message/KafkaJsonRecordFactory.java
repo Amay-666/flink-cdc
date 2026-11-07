@@ -40,6 +40,8 @@ import io.debezium.util.SchemaNameAdjuster;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -67,6 +69,8 @@ public class KafkaJsonRecordFactory implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
+    private static final Logger LOG = LoggerFactory.getLogger(KafkaJsonRecordFactory.class);
+
     // Both maps are written by the stream fetch task's executor thread (a DDL is applied as it is
     // consumed) and read by the split reader's thread (the schema-store fallback of shouldEmit and
     // the record converter), so they must be concurrent: a plain HashMap could hand a reader a
@@ -90,7 +94,27 @@ public class KafkaJsonRecordFactory implements Serializable {
                 new TableSchemaBuilder(
                         valueConverters,
                         null,
-                        SchemaNameAdjuster.create(),
+                        SchemaNameAdjuster.create(
+                                "_",
+                                (original, replacement, conflictsWith) -> {
+                                    if (conflictsWith != null) {
+                                        LOG.warn(
+                                                "The Kafka Connect schema name '{}' is not a"
+                                                        + " valid Avro schema name and its"
+                                                        + " replacement '{}' conflicts with"
+                                                        + " another different schema '{}'",
+                                                original,
+                                                replacement,
+                                                conflictsWith);
+                                    } else {
+                                        LOG.debug(
+                                                "The Kafka Connect schema name '{}' is not a"
+                                                        + " valid Avro schema name, so replacing"
+                                                        + " with '{}'",
+                                                original,
+                                                replacement);
+                                    }
+                                }),
                         new CustomConverterRegistry(Collections.emptyList()),
                         sourceInfoSchema,
                         false,
