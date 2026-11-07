@@ -18,6 +18,7 @@
 package org.apache.flink.cdc.connectors.kafkajson.source.utils;
 
 import org.apache.flink.cdc.connectors.kafkajson.source.config.KafkaJsonSourceConfig;
+import org.apache.flink.cdc.connectors.kafkajson.source.connection.KafkaJsonConnectionPoolFactory;
 import org.apache.flink.cdc.connectors.kafkajson.source.offset.KafkaJsonOffset;
 
 import org.slf4j.Logger;
@@ -31,6 +32,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
+import java.util.Properties;
 
 /**
  * Queries the TiDB cluster's current TSO as the snapshot low/high watermark.
@@ -67,13 +69,6 @@ public class KafkaJsonTidbOffsetUtils {
     /** SQL to fetch the current TSO; must run inside a transaction to return a non-zero value. */
     private static final String SELECT_CURRENT_TSO = "SELECT TIDB_CURRENT_TSO()";
 
-    // Mirrors KafkaJsonConnectionPoolFactory's URL (sslMode=DISABLED keeps the handshake
-    // deterministic for containers, allowPublicKeyRetrieval is needed by caching_sha2_password
-    // accounts) without the cursor-fetch/batch flags that only matter for the snapshot reads.
-    private static final String JDBC_URL_PATTERN =
-            "jdbc:mysql://%s:%s/?sslMode=DISABLED&allowPublicKeyRetrieval=true"
-                    + "&useUnicode=true&characterEncoding=UTF-8&connectTimeout=%d";
-
     private KafkaJsonTidbOffsetUtils() {}
 
     /**
@@ -103,7 +98,7 @@ public class KafkaJsonTidbOffsetUtils {
             if (tso <= 0) {
                 LOG.warn(
                         "{} returned {} (a TSO is only returned inside a transaction); refusing to"
-                                + " use it as the snapshot boundary",
+                        + " use it as the snapshot boundary",
                         SELECT_CURRENT_TSO,
                         tso);
                 return null;
@@ -129,15 +124,21 @@ public class KafkaJsonTidbOffsetUtils {
 
     private static Connection openConnection(KafkaJsonSourceConfig sourceConfig)
             throws SQLException {
+        // Reuse the pool factory's single URL template: every flag it carries — sslMode,
+        // allowPublicKeyRetrieval, tinyInt1isBit, ... — then applies here too, and the probe
+        // can no longer drift from the discovery path's connection behaviour. The
+        // cursor-fetch/batch flags are harmless for a one-shot TSO query; the short probe
+        // timeout rides the connection Properties instead of a second URL pattern.
+        String url = new KafkaJsonConnectionPoolFactory().getJdbcUrl(sourceConfig);
+        Properties props = new Properties();
+        props.setProperty("user", sourceConfig.getUsername());
+        props.setProperty(
+                "password", sourceConfig.getPassword() == null ? "" : sourceConfig.getPassword());
         Duration connectTimeout = sourceConfig.getConnectTimeout();
-        String url =
-                String.format(
-                        JDBC_URL_PATTERN,
-                        sourceConfig.getHostname(),
-                        sourceConfig.getPort(),
-                        connectTimeout == null ? 30_000L : connectTimeout.toMillis());
-        return DriverManager.getConnection(
-                url, sourceConfig.getUsername(), sourceConfig.getPassword());
+        if (connectTimeout != null) {
+            props.setProperty("connectTimeout", String.valueOf(connectTimeout.toMillis()));
+        }
+        return DriverManager.getConnection(url, props);
     }
 
     private static void rollbackQuietly(Connection connection) {
