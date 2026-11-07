@@ -150,7 +150,7 @@ public class DorisDdlBuilderTest {
         assertThat(sqls.get(0))
                 .isEqualTo(
                         "CREATE TABLE IF NOT EXISTS `shop`.`orders` "
-                                + "(`c_char` CHAR(8), `c_bool` BOOLEAN, `c_dec` DECIMAL(20, 4), "
+                                + "(`c_char` CHAR(24), `c_bool` BOOLEAN, `c_dec` DECIMAL(20, 4), "
                                 + "`c_date` DATE, `c_time` STRING, `c_ts` DATETIMEV2(6), "
                                 + "`c_ltz` DATETIMEV2(3), `c_tz` DATETIMEV2(6), "
                                 + "`c_bin` STRING, `c_varbin` STRING, "
@@ -295,7 +295,8 @@ public class DorisDdlBuilderTest {
     @Test
     public void testAlterColumnTypeCrossFamilyIsNotAShrink() {
         // VARCHAR -> CHAR is a type conversion, not a same-family length reduction; the shrink test
-        // only compares equal type roots, so the change is emitted.
+        // only compares equal type roots, so the change is emitted. CHAR(80) stays under the
+        // 255-byte CHAR cap, so it maps to CHAR(240) rather than the STRING fallback.
         Schema oldSchema =
                 Schema.newBuilder()
                         .physicalColumn("id", DataTypes.INT())
@@ -307,18 +308,19 @@ public class DorisDdlBuilderTest {
                 defaultBuilder()
                         .buildAlterColumnTypeSql(
                                 new AlterColumnTypeEvent(
-                                        ORDERS,
-                                        Collections.singletonMap("name", DataTypes.CHAR(100))),
+                                        ORDERS, Collections.singletonMap("name", DataTypes.CHAR(80))),
                                 Optional.of(oldSchema));
 
         assertThat(sqls)
-                .containsExactly("ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` CHAR(100)");
+                .containsExactly("ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` CHAR(240)");
     }
 
     @Test
-    public void testCreateTableVarcharLengthMappingCapsAtDorisMaximum() {
+    public void testCreateTableVarcharLengthMappingFallsBackToStringAboveCap() {
         // A MySQL/TiDB VARCHAR counts characters; Doris measures bytes (max 3/char). The largest
-        // value still under the cap is 21844 chars (65532 bytes); anything larger clamps to 65533.
+        // value still under the cap is 21844 chars (65532 bytes); anything larger takes the
+        // STRING fallback instead of a 65533 clamp: a clamp would fail loads on the rare values
+        // that really need the bytes (a utf8mb3 VARCHAR(21845) holds 65535).
         Schema belowCap =
                 Schema.newBuilder()
                         .physicalColumn("id", DataTypes.INT())
@@ -337,7 +339,226 @@ public class DorisDdlBuilderTest {
         assertThat(sqls.get(0)).contains("`name` VARCHAR(65532)");
 
         sqls = defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, aboveCap));
-        assertThat(sqls.get(0)).contains("`name` VARCHAR(65533)");
+        assertThat(sqls.get(0)).contains("`name` STRING");
+    }
+
+    @Test
+    public void testStringKeyColumnsDegradeToKeyLegalVarchar() {
+        // Doris rejects a STRING column in every key position (UNIQUE KEY, DUPLICATE KEY, the
+        // hash distribution), but MySQL happily declares an ENUM/SET primary key — which the
+        // CDC mapping delivers as STRING. The key column must degrade to VARCHAR(65533), the
+        // widest key-legal form, whose capacity covers any label list.
+        Schema enumPk =
+                Schema.newBuilder()
+                        .physicalColumn("e", DataTypes.STRING())
+                        .physicalColumn("v", DataTypes.STRING())
+                        .primaryKey("e")
+                        .build();
+
+        List<String> sqls =
+                defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, enumPk));
+        // the key degrades; the non-key value column stays STRING
+        assertThat(sqls.get(0)).contains("`e` VARCHAR(65533)");
+        assertThat(sqls.get(0)).contains("`v` STRING");
+        assertThat(sqls.get(0)).contains("UNIQUE KEY(`e`) DISTRIBUTED BY HASH(`e`)");
+
+        // a table without a primary key keys on its first physical column: a TEXT column
+        // first would put STRING into the DUPLICATE KEY and the hash distribution
+        Schema textFirstNoPk =
+                Schema.newBuilder()
+                        .physicalColumn("remark", DataTypes.STRING())
+                        .physicalColumn("id", DataTypes.INT())
+                        .build();
+        sqls =
+                defaultBuilder()
+                        .buildCreateTableSql(new CreateTableEvent(ORDERS, textFirstNoPk));
+        assertThat(sqls.get(0)).contains("`remark` VARCHAR(65533)");
+        assertThat(sqls.get(0)).contains("DUPLICATE KEY(`remark`) DISTRIBUTED BY HASH(`remark`)");
+
+        // a long CHAR on a key takes the same degradation: CHAR(100) exceeds Doris's 255-byte
+        // CHAR budget, so the plain-column STRING fallback is not key-legal
+        Schema longCharPk =
+                Schema.newBuilder()
+                        .physicalColumn("c", DataTypes.CHAR(100))
+                        .physicalColumn("v", DataTypes.CHAR(100))
+                        .primaryKey("c")
+                        .build();
+        sqls = defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, longCharPk));
+        assertThat(sqls.get(0)).contains("`c` VARCHAR(65533)");
+        assertThat(sqls.get(0)).contains("`v` STRING");
+
+        // a MODIFY COLUMN on a key column keeps the type key-legal and carries Doris's KEY
+        // marker: without it the statement is rejected or the column demoted to a value column
+        Schema oldSchema =
+                Schema.newBuilder()
+                        .physicalColumn("c", DataTypes.CHAR(10))
+                        .physicalColumn("v", DataTypes.CHAR(100))
+                        .primaryKey("c")
+                        .build();
+        List<String> modify =
+                defaultBuilder()
+                        .buildAlterColumnTypeSql(
+                                new AlterColumnTypeEvent(
+                                        ORDERS, Collections.singletonMap("c", DataTypes.STRING())),
+                                Optional.of(oldSchema));
+        assertThat(modify)
+                .containsExactly(
+                        "ALTER TABLE `shop`.`orders` MODIFY COLUMN `c` VARCHAR(65533) KEY");
+    }
+
+    @Test
+    public void testAlterColumnTypeCarriesTheColumnComment() {
+        // Doris's MODIFY COLUMN redefines the whole column: without a COMMENT clause the
+        // statement resets the column's comment, so the old schema's comment rides along —
+        // for key columns behind the KEY marker, and for plain columns as-is.
+        Schema oldSchema =
+                Schema.newBuilder()
+                        .physicalColumn("c", DataTypes.CHAR(10), "the key")
+                        .physicalColumn("name", DataTypes.VARCHAR(20), "the name")
+                        .primaryKey("c")
+                        .build();
+
+        List<String> keyModify =
+                defaultBuilder()
+                        .buildAlterColumnTypeSql(
+                                new AlterColumnTypeEvent(
+                                        ORDERS, Collections.singletonMap("c", DataTypes.CHAR(50))),
+                                Optional.of(oldSchema));
+        assertThat(keyModify)
+                .containsExactly(
+                        "ALTER TABLE `shop`.`orders` MODIFY COLUMN `c` CHAR(150) KEY"
+                                + " COMMENT 'the key'");
+
+        List<String> plainModify =
+                defaultBuilder()
+                        .buildAlterColumnTypeSql(
+                                new AlterColumnTypeEvent(
+                                        ORDERS,
+                                        Collections.singletonMap("name", DataTypes.VARCHAR(50))),
+                                Optional.of(oldSchema));
+        assertThat(plainModify)
+                .containsExactly(
+                        "ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` VARCHAR(150)"
+                                + " COMMENT 'the name'");
+
+        // no old schema (or no comment on the column) — nothing to preserve
+        List<String> noComment =
+                defaultBuilder()
+                        .buildAlterColumnTypeSql(
+                                new AlterColumnTypeEvent(
+                                        ORDERS, Collections.singletonMap("c", DataTypes.CHAR(50))));
+        assertThat(noComment)
+                .containsExactly("ALTER TABLE `shop`.`orders` MODIFY COLUMN `c` CHAR(150)");
+    }
+
+    @Test
+    public void testCreateTableCharLengthMappingMultipliesByUtf8Bytes() {
+        // A MySQL/TiDB CHAR counts characters; Doris measures CHAR(n) in bytes (max 3/char, the
+        // same factor as VARCHAR). A tiny flag column like is_disabled CHAR(1) — which used to
+        // arrive as Doris CHAR(1) and reject any multi-byte value — becomes CHAR(3).
+        Schema schema =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("is_disabled", DataTypes.CHAR(1))
+                        .physicalColumn("c_char", DataTypes.CHAR(8))
+                        .primaryKey("id")
+                        .build();
+
+        List<String> sqls =
+                defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
+
+        assertThat(sqls.get(0)).contains("`is_disabled` CHAR(3)");
+        assertThat(sqls.get(0)).contains("`c_char` CHAR(24)");
+    }
+
+    @Test
+    public void testCreateTableCharLengthMappingFallsBackToStringAboveDorisMaximum() {
+        // Doris CHAR caps at 255 bytes: CHAR(85) = 255 bytes still fits; CHAR(86) = 258 bytes and
+        // MySQL's maximum CHAR(255) = 765 bytes have no CHAR counterpart and become STRING.
+        Schema atCap =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("flag", DataTypes.CHAR(85))
+                        .primaryKey("id")
+                        .build();
+        Schema overCap =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("flag", DataTypes.CHAR(86))
+                        .primaryKey("id")
+                        .build();
+        Schema mySqlMaximum =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("flag", DataTypes.CHAR(255))
+                        .primaryKey("id")
+                        .build();
+
+        List<String> sqls =
+                defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, atCap));
+        assertThat(sqls.get(0)).contains("`flag` CHAR(255)");
+
+        sqls = defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, overCap));
+        assertThat(sqls.get(0)).contains("`flag` STRING");
+
+        sqls = defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, mySqlMaximum));
+        assertThat(sqls.get(0)).contains("`flag` STRING");
+    }
+
+    @Test
+    public void testAlterColumnCharShrinkIsSkippedAcrossTheStringFallback() {
+        // The mapped capacities bracket the 255-byte STRING fallback: CHAR(100) maps to STRING
+        // (300 bytes), CHAR(50) to CHAR(150). Shrinking 100 → 50 is still a mapped-capacity
+        // reduction, so the DDL Doris would reject is skipped; growing 50 → 100 crosses the
+        // fallback and is emitted as STRING (a widening Doris accepts).
+        Schema oldSchemaOfStringFallback =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("flag", DataTypes.CHAR(100))
+                        .primaryKey("id")
+                        .build();
+        Schema oldSchemaOfChar =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("flag", DataTypes.CHAR(50))
+                        .primaryKey("id")
+                        .build();
+
+        List<String> sqls =
+                defaultBuilder()
+                        .buildAlterColumnTypeSql(
+                                new AlterColumnTypeEvent(
+                                        ORDERS,
+                                        Collections.singletonMap("flag", DataTypes.CHAR(50))),
+                                Optional.of(oldSchemaOfStringFallback));
+        assertThat(sqls).isEmpty();
+
+        sqls =
+                defaultBuilder()
+                        .buildAlterColumnTypeSql(
+                                new AlterColumnTypeEvent(
+                                        ORDERS,
+                                        Collections.singletonMap("flag", DataTypes.CHAR(100))),
+                                Optional.of(oldSchemaOfChar));
+        assertThat(sqls)
+                .containsExactly("ALTER TABLE `shop`.`orders` MODIFY COLUMN `flag` STRING");
+    }
+
+    @Test
+    public void testUnboundedVarCharMapsToDorisString() {
+        // MySQL JSON/TEXT/ENUM/SET/GEOMETRY columns arrive as DataTypes.STRING() — an unbounded
+        // VarCharType — which must become Doris STRING, not the byte-clamped VARCHAR(65533)
+        // that arbitrarily caps a JSON document or long text.
+        Schema schema =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("doc", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+
+        List<String> sqls =
+                defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, schema));
+        assertThat(sqls.get(0)).contains("`doc` STRING");
     }
 
     @Test

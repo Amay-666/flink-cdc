@@ -45,12 +45,14 @@ import javax.annotation.Nullable;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.StringJoiner;
 import java.util.stream.Collectors;
 
@@ -74,11 +76,14 @@ import static org.apache.flink.cdc.common.types.DataTypeChecks.getScale;
  * become {@code DATETIMEV2} with precision clamped to {@code [0, 6]}, and the complex types
  * (ARRAY/MAP/ROW) become {@code STRING} holding the JSON text produced by the row converter.
  *
- * <p>{@code VARCHAR} lengths are mapped from characters (the unit of a MySQL/TiDB {@code VARCHAR})
- * to bytes (the unit Doris measures them in): a source {@code VARCHAR(n)} becomes {@code
- * VARCHAR(3n)} because {@code utf8mb4} stores at most three bytes per character, clamped to Doris's
- * {@value #DORIS_VARCHAR_MAX_BYTES}-byte maximum. {@code CHAR} counts characters in both engines
- * and is left unchanged.
+ * <p>{@code VARCHAR} and {@code CHAR} lengths are mapped from characters (the unit a MySQL/TiDB
+ * length counts) to bytes (the unit Doris measures them in): a source {@code VARCHAR(n)} becomes
+ * {@code VARCHAR(3n)} because {@code utf8mb4} stores at most three bytes per character. A budget
+ * beyond Doris's {@value #DORIS_VARCHAR_MAX_BYTES}-byte VARCHAR cap falls back to {@code STRING}
+ * (like a {@code CHAR} beyond the {@value #DORIS_CHAR_MAX_BYTES}-byte CHAR cap always has):
+ * clamping to 65533 instead would fail loads on the rare values that really need the bytes (a
+ * {@code utf8mb3} {@code VARCHAR(21845)} can hold 65535). A key column never takes the STRING
+ * fallback — Doris rejects STRING keys — and degrades to {@code VARCHAR(65533)} instead.
  */
 public class DorisDdlBuilder implements Serializable {
 
@@ -88,6 +93,9 @@ public class DorisDdlBuilder implements Serializable {
 
     /** Doris measures {@code VARCHAR(n)} in bytes; {@value} is its upper bound. */
     static final int DORIS_VARCHAR_MAX_BYTES = 65533;
+
+    /** Doris measures {@code CHAR(n)} in bytes; {@value} is its upper bound. */
+    static final int DORIS_CHAR_MAX_BYTES = 255;
 
     /** Upper bound of bytes a {@code utf8mb4} character can occupy. */
     private static final int BYTES_PER_UTF8_CHAR = 3;
@@ -104,6 +112,13 @@ public class DorisDdlBuilder implements Serializable {
         StringJoiner columns = new StringJoiner(", ");
         List<String> primaryKeys = schema.primaryKeys();
         HashSet<String> pkSet = new LinkedHashSet<>(primaryKeys);
+        // The columns that occupy a key position in Doris: the UNIQUE KEY columns, or — for a
+        // table without a primary key — the first physical column, which serves as the
+        // DUPLICATE KEY and the hash distribution column. Doris rejects a STRING column in
+        // any of these positions, so the type conversion must know them.
+        String distributeKey = firstPhysicalColumn(schema);
+        Set<String> keyColumns =
+                primaryKeys.isEmpty() ? Collections.singleton(distributeKey) : pkSet;
         List<Column> orderedColumns = new ArrayList<>();
         for (String pk : primaryKeys) {
             schema.getColumn(pk)
@@ -120,7 +135,7 @@ public class DorisDdlBuilder implements Serializable {
             columns.add(
                     quote(column.getName())
                             + " "
-                            + convertDataType(column.getType())
+                            + convertDataType(column.getType(), keyColumns.contains(column.getName()))
                             + commentSql(column.getComment()));
         }
         // Group Commit: inject a physical BIGINT sequence column for UNIQUE-model tables.
@@ -140,7 +155,6 @@ public class DorisDdlBuilder implements Serializable {
         String comment = schema.comment();
         boolean hasTableComment = comment != null && !comment.isEmpty();
         if (primaryKeys.isEmpty()) {
-            String distributeKey = firstPhysicalColumn(schema);
             sql.append(" DUPLICATE KEY(")
                     .append(quote(distributeKey))
                     .append(")")
@@ -252,6 +266,16 @@ public class DorisDdlBuilder implements Serializable {
      * source DDL already guarantees the existing rows fit the smaller type — keeping the wider
      * Doris column accepts all subsequent data. All other type changes (growth, cross-family, an
      * unknown old type) are emitted as-is.
+     *
+     * <p>A key column's statement carries Doris's {@code KEY} marker — {@code MODIFY COLUMN c T
+     * KEY} — which Doris requires to keep the column in the key (without it the statement is
+     * rejected or the column silently demoted to a value column), and the type itself stays
+     * key-legal (STRING is not, see {@link #convertDataType(DataType, boolean)}). Doris's MODIFY
+     * COLUMN redefines the whole column, so the old schema's comment is carried into the
+     * statement — without the clause Doris resets it. What Doris does not support at all —
+     * modifying a partition or bucket column, dropping a UNIQUE table's key column — is left for
+     * Doris to reject: the failure surfaces through the schema-change RPC instead of being
+     * silently skipped here.
      */
     public List<String> buildAlterColumnTypeSql(
             AlterColumnTypeEvent event, Optional<Schema> oldSchema) {
@@ -274,13 +298,29 @@ public class DorisDdlBuilder implements Serializable {
                         newType);
                 continue;
             }
+            // A key column's MODIFY needs Doris's KEY marker — `MODIFY COLUMN c T KEY` — or the
+            // statement either is rejected or silently demotes the column to a value column;
+            // the type itself must stay key-legal (STRING is not, see convertDataType).
+            // Partition/bucket-column and other restrictions Doris enforces on its own: a
+            // rejected statement surfaces as a schema-change failure instead of a silent skip.
+            boolean key = isKeyColumn(column, oldSchema);
+            // Doris's MODIFY COLUMN redefines the whole column: a statement without a COMMENT
+            // clause resets the column's comment, so the old schema's comment is carried over
+            // (the same way the fallback swap path carries it).
+            String comment =
+                    oldSchema
+                            .flatMap(schema -> schema.getColumn(column))
+                            .map(Column::getComment)
+                            .orElse(null);
             sqls.add(
                     "ALTER TABLE "
                             + qualified(tableId)
                             + " MODIFY COLUMN "
                             + quote(column)
                             + " "
-                            + convertDataType(newType));
+                            + convertDataType(newType, key)
+                            + (key ? " KEY" : "")
+                            + commentSql(comment));
         }
         return sqls;
     }
@@ -621,15 +661,45 @@ public class DorisDdlBuilder implements Serializable {
      * Maps a CDC {@link DataType} onto a Doris column type. Timestamps become {@code DATETIMEV2}
      * with precision clamped to the range Doris supports; TIME also becomes {@code STRING} (Doris
      * has no TIME type, and the row converter renders {@code HH:mm:ss} text); ARRAY/MAP/ROW become
-     * {@code STRING} that stores the JSON text rendered by {@code DorisRowConverter}.
+     * {@code STRING} that stores the JSON text rendered by {@code DorisRowConverter}; a {@code
+     * CHAR} whose ×3 byte budget exceeds Doris's {@value #DORIS_CHAR_MAX_BYTES}-byte {@code CHAR}
+     * maximum becomes {@code STRING}.
      */
     private String convertDataType(DataType type) {
+        return convertDataType(type, false);
+    }
+
+    /**
+     * The key-aware form of {@link #convertDataType(DataType)}: Doris rejects a STRING column in
+     * any key position (UNIQUE KEY, DUPLICATE KEY, the hash distribution), so a STRING-mapped
+     * type on a key column degrades to {@code VARCHAR(65533)} — the widest key-legal form. The
+     * realistic STRING keys are MySQL ENUM/SET columns (how they arrive after the CDC mapping);
+     * TEXT/JSON cannot be MySQL keys at all, so nothing wider than a label list ever rides this
+     * degradation.
+     */
+    private String convertDataType(DataType type, boolean isKey) {
         switch (type.getTypeRoot()) {
             case CHAR:
-                return "CHAR(" + ((CharType) type).getLength() + ")";
+                // Doris CHAR(n) counts bytes like VARCHAR, so a MySQL/TiDB CHAR(n) counted in
+                // characters converts with the same ×3 factor; a length whose byte budget
+                // exceeds the 255-byte CHAR cap falls back (see stringOrKeyVarchar).
+                return dorisCharType(((CharType) type).getLength(), isKey);
             case VARCHAR:
+                // An unbounded VARCHAR is DataTypes.STRING() — how MySQL TEXT/JSON/ENUM/SET/
+                // GEOMETRY columns arrive — and has no character length to convert: Doris
+                // STRING is its counterpart, not a byte-clamped VARCHAR(65533), which would
+                // cap a JSON document or long text arbitrarily.
+                int length = ((VarCharType) type).getLength();
+                if (length == VarCharType.MAX_LENGTH
+                        || (long) length * BYTES_PER_UTF8_CHAR > DORIS_VARCHAR_MAX_BYTES) {
+                    // unbounded, or a ×3 byte budget over Doris's VARCHAR cap: clamping to 65533
+                    // instead would fail loads on the rare values that really need the bytes
+                    // (a utf8mb3 VARCHAR(21845) holds 65535), so mirror the CHAR fallback and
+                    // take STRING — except on a key column, which cannot be STRING.
+                    return stringOrKeyVarchar(isKey);
+                }
                 // Doris VARCHAR(n) counts bytes; a MySQL/TiDB VARCHAR is counted in characters.
-                return "VARCHAR(" + dorisVarcharLength(((VarCharType) type).getLength()) + ")";
+                return "VARCHAR(" + dorisVarcharLength(length) + ")";
             case BOOLEAN:
                 return "BOOLEAN";
             case TINYINT:
@@ -684,9 +754,44 @@ public class DorisDdlBuilder implements Serializable {
     }
 
     /**
-     * Returns the capacity the type consumes in Doris (bytes for {@code VARCHAR} after the {@code
-     * ×3} mapping, characters for {@code CHAR}), or {@code -1} for a type outside the shrinkable
-     * family.
+     * Maps a source {@code CHAR} length in characters onto a Doris {@code CHAR} declaration: Doris
+     * measures {@code CHAR(n)} in bytes exactly like {@code VARCHAR}, so the character length
+     * converts with the same three bytes per {@code utf8mb4} character. A length whose byte budget
+     * exceeds Doris's {@value #DORIS_CHAR_MAX_BYTES}-byte {@code CHAR} maximum — any {@code
+     * CHAR(86)} or longer, as MySQL allows up to 255 characters (765 bytes) — has no {@code CHAR}
+     * counterpart and falls back to {@code STRING} on a plain column, or to the key-legal
+     * VARCHAR(65533) when the column is a key.
+     */
+    private static String dorisCharType(int sourceChars, boolean isKey) {
+        long bytes = (long) sourceChars * BYTES_PER_UTF8_CHAR;
+        return bytes > DORIS_CHAR_MAX_BYTES ? stringOrKeyVarchar(isKey) : "CHAR(" + bytes + ")";
+    }
+
+    /**
+     * STRING stores any length, but Doris rejects a STRING column in every key position (UNIQUE
+     * KEY, DUPLICATE KEY, the hash distribution). A key column therefore degrades to
+     * {@code VARCHAR(65533)}, the widest key-legal form. The realistic STRING keys are MySQL
+     * ENUM/SET columns — whose short label values the VARCHAR holds exactly; TEXT/JSON cannot be
+     * MySQL keys at all — plus a long CHAR or an overflowing VARCHAR on a key, where the capacity
+     * beats having no key-legal type at all.
+     */
+    private static String stringOrKeyVarchar(boolean isKey) {
+        return isKey ? "VARCHAR(" + DORIS_VARCHAR_MAX_BYTES + ")" : "STRING";
+    }
+
+    /**
+     * Returns the byte budget a source {@code CHAR} length occupies in Doris — three bytes per
+     * character, deliberately unclamped by {@value #DORIS_CHAR_MAX_BYTES}: a length beyond the cap
+     * maps to {@code STRING} (see {@link #dorisCharType}), whose capacity is at least as large, so
+     * reduction detection stays correct on both sides of the fallback.
+     */
+    private static int dorisCharBytes(int sourceChars) {
+        return (int) Math.min((long) sourceChars * BYTES_PER_UTF8_CHAR, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Returns the capacity the type consumes in Doris (bytes for {@code VARCHAR} and {@code CHAR}
+     * after the {@code ×3} mapping), or {@code -1} for a type outside the shrinkable family.
      */
     private static int dorisCapacity(@Nullable DataType type) {
         if (type == null) {
@@ -696,7 +801,7 @@ public class DorisDdlBuilder implements Serializable {
             case VARCHAR:
                 return dorisVarcharLength(((VarCharType) type).getLength());
             case CHAR:
-                return ((CharType) type).getLength();
+                return dorisCharBytes(((CharType) type).getLength());
             default:
                 return -1;
         }
@@ -710,8 +815,8 @@ public class DorisDdlBuilder implements Serializable {
      * <p>Recognised reductions:
      *
      * <ul>
-     *   <li><b>String length shrinking</b> (same root): {@code VARCHAR(n₁) → VARCHAR(n₂)} where the
-     *       mapped byte capacity n₂ < n₁; {@code CHAR(n₁) → CHAR(n₂)} where n₂ < n₁.
+     *   <li><b>String length shrinking</b> (same root): {@code VARCHAR(n₁) → VARCHAR(n₂)} or {@code
+     *       CHAR(n₁) → CHAR(n₂)} where the mapped byte capacity shrinks.
      *   <li><b>Integer narrowing</b> (cross-root within the integer family): {@code BIGINT → INT →
      *       SMALLINT → TINYINT}. The wider Doris integer column accepts all narrower data.
      *   <li><b>Float narrowing</b> (cross-root within the float family): {@code DOUBLE → FLOAT}.
