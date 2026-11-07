@@ -35,6 +35,7 @@ import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions;
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisGeneratedColumnValueFactory;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisRowConverter;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisWriteMetrics;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.http.DorisHttpClient;
@@ -115,6 +116,12 @@ public class DorisSinkWriter implements SinkWriter<Event> {
     /** Name of the sequence column, or {@code null} when Group Commit is disabled. */
     private final String sequenceColumnName;
 
+    /** Name of the generated column, or {@code null} when disabled. */
+    private final String generatedColumnName;
+
+    /** Value generator for the generated column; see DorisGeneratedColumnValueFactory. */
+    private final java.util.function.Function<Long, Object> generatedColumnValue;
+
     /**
      * Monotonically increasing sequence counter, one per subtask. Initialised to {@code
      * System.currentTimeMillis() * 1_000_000} so that post-restart values are always larger than
@@ -139,6 +146,8 @@ public class DorisSinkWriter implements SinkWriter<Event> {
                     !Preconditions.checkNotNull(sequenceColumnName).isEmpty(),
                     "Sequence column name must not be blank when group commit is enabled.");
         }
+        this.generatedColumnName = options.getGeneratedColumnName();
+        this.generatedColumnValue = DorisGeneratedColumnValueFactory.create(options);
         this.httpClient =
                 new DorisHttpClient(
                         options.getFenodes(),
@@ -205,6 +214,7 @@ public class DorisSinkWriter implements SinkWriter<Event> {
         if (sequenceColumnName != null) {
             row.put(sequenceColumnName, sequenceCounter.getAndIncrement());
         }
+        // Generated column (e.g. sync_time): filled at batch level in flushTable.
         buffer.computeIfAbsent(tableId, t -> new ArrayDeque<>()).add(row);
         bufferedRows++;
         metrics.recordWriteRow();
@@ -316,7 +326,9 @@ public class DorisSinkWriter implements SinkWriter<Event> {
         // Group Commit mode: pass null label so DorisHttpClient sends the group_commit header
         // instead of a label (specifying a label degrades to non-Group-Commit).
         String label = isGroupCommit ? null : newLabel(tableId);
-        doStreamLoad(options.mapDatabase(tableId), options.mapTable(tableId), label, drain(rows));
+        List<Map<String, Object>> batch = drain(rows);
+        DorisGeneratedColumnValueFactory.fillBatch(batch, generatedColumnName, generatedColumnValue);
+        doStreamLoad(options.mapDatabase(tableId), options.mapTable(tableId), label, batch);
         metrics.setBufferedRows(bufferedRows);
     }
 

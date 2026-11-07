@@ -146,6 +146,13 @@ public class DorisDdlBuilder implements Serializable {
         if (injectSequence) {
             columns.add(quote(options.getSequenceColumnName()) + " BIGINT");
         }
+        String generatedColumn = options.getGeneratedColumnName();
+        boolean injectGenerated =
+                generatedColumn != null && !schema.getColumnNames().contains(generatedColumn);
+        if (injectGenerated) {
+            columns.add(
+                    quote(generatedColumn) + " " + options.getGeneratedColumnType());
+        }
         StringBuilder sql =
                 new StringBuilder("CREATE TABLE IF NOT EXISTS ")
                         .append(qualified(tableId))

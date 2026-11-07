@@ -36,6 +36,7 @@ import org.apache.flink.cdc.connectors.kafkajson.event.DropTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.event.TruncateTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions;
+import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisGeneratedColumnValueFactory;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisRowConverter;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisWriteMetrics;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.http.DorisHttpClient;
@@ -118,6 +119,12 @@ public class StatefulDorisSinkWriter implements StatefulSinkWriter<Event, DorisW
     /** Name of the sequence column, or {@code null} when Group Commit is disabled. */
     private final String sequenceColumnName;
 
+    /** Name of the generated column, or {@code null} when disabled. */
+    private final String generatedColumnName;
+
+    /** Value generator for the generated column; see DorisGeneratedColumnValueFactory. */
+    private final java.util.function.Function<Long, Object> generatedColumnValue;
+
     /**
      * Monotonically increasing sequence counter, one per subtask. Initialised to {@code
      * System.currentTimeMillis() * 1_000_000} so that post-restart values are always larger than
@@ -138,6 +145,8 @@ public class StatefulDorisSinkWriter implements StatefulSinkWriter<Event, DorisW
         this.isGroupCommit = options.isGroupCommitEnabled();
         this.sequenceColumnName =
                 options.isGroupCommitEnabled() ? options.getSequenceColumnName() : null;
+        this.generatedColumnName = options.getGeneratedColumnName();
+        this.generatedColumnValue = DorisGeneratedColumnValueFactory.create(options);
         this.labelPrefix = options.getLabelPrefix();
         if (this.isGroupCommit) {
             Preconditions.checkArgument(
@@ -276,6 +285,7 @@ public class StatefulDorisSinkWriter implements StatefulSinkWriter<Event, DorisW
         if (sequenceColumnName != null) {
             row.put(sequenceColumnName, sequenceCounter.getAndIncrement());
         }
+        // Generated column (e.g. sync_time): filled at batch level in flushTable.
         buffer.computeIfAbsent(tableId, t -> new ArrayDeque<>()).add(row);
         bufferedRows++;
         metrics.recordWriteRow();
@@ -384,7 +394,9 @@ public class StatefulDorisSinkWriter implements StatefulSinkWriter<Event, DorisW
             return;
         }
         bufferedRows -= rows.size();
-        landBatch(options.mapDatabase(tableId), options.mapTable(tableId), drain(rows));
+        List<Map<String, Object>> batch = drain(rows);
+        DorisGeneratedColumnValueFactory.fillBatch(batch, generatedColumnName, generatedColumnValue);
+        landBatch(options.mapDatabase(tableId), options.mapTable(tableId), batch);
         metrics.setBufferedRows(bufferedRows);
     }
 
