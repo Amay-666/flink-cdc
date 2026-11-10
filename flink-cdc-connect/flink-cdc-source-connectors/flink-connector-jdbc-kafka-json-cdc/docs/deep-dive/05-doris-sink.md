@@ -276,6 +276,58 @@ applySchemaChange(event)
 - **HTTP client 懒创建**：`DorisMetadataApplier` 从 client 序列化到 JobManager，`OkHttpClient` 不可序列化，
   所以字段是 `transient`、首次用时 `synchronized` 建。
 
+### 5.1.1 前置判断：checkpoint 恢复后的 DDL 重放
+
+coordinator 的 schema 状态随 checkpoint 保存，但 DDL 在 **round 提交之前**执行；failover 后状态回退到最后一个完成的
+checkpoint，之后执行过的每个 round 都会再交付一次。其中一部分 DDL 不幂等：第二次 `ADD COLUMN` 会被 Doris 拒绝并让作业
+失败；`DROP`/`RENAME` 的源已经不存在；开启 `sink.is-drop-table-before-create` 时重放的 `DROP+CREATE` 会丢掉 checkpoint
+之后写入的数据。因此 applier 在执行前先用 `SHOW FULL COLUMNS FROM db.tbl` 读当前列（`DorisMetadataInspector` →
+`DorisTableMetadata`），跳过 Doris 已经体现的操作：
+
+| 事件 | 已应用 / 冲突时的处理 |
+|---|---|
+| `CREATE TABLE` | 无 drop-before-create：`IF NOT EXISTS` 本身幂等，直接执行；有 drop-before-create 且表存在、期望列（含注入的 sequence/generated 列）齐全：跳过 `DROP+CREATE`（INFO）；表存在但缺列：**不 drop**，WARNING |
+| `ADD COLUMN` | 逐列判断：列已存在 → 跳过（INFO）；其余列组成过滤后的事件继续执行 |
+| `DROP COLUMN` | 列已不存在 → 跳过（INFO） |
+| `RENAME COLUMN` | 源不存在、目标存在 → 已应用（INFO）；源和目标都存在或都不存在 → WARNING skip |
+| `MODIFY COLUMN` | 先过滤主键列与容量收缩（WARNING）；再查元数据：列不存在（WARNING）、已是目标类型（INFO） |
+| `RENAME TABLE` | 所有旧名都在 → 整条事件照常执行（交换/环语义只有整体执行才成立）；所有旧名都不在且新名都在 → INFO skip；混合状态 → 执行可执行的部分并 WARNING |
+| `TRUNCATE` / `ALTER COLUMN COMMENT` | 表不存在 / 注释已一致 → skip |
+| `DROP TABLE` | `IF EXISTS` 幂等，不查 |
+
+关键点：
+
+- 元数据查询失败（网络、权限）**向上抛**，不当作"表不存在"——否则会重放非幂等 DDL；
+- 只有 Doris 明确报 `Unknown table` / `Unknown database` / `does not exist` 才视为表不存在；
+- 类型比较前归一化（`decimalv3(10, 2)` ↔ `DECIMAL(10,2)`、整数显示宽度、`tinyint(1)` ↔ `BOOLEAN`）；
+- `sink.schema-change.pre-check`（默认 `true`）可关闭；关闭后不再查询元数据，重放的非幂等 DDL 仍可能失败。
+
+### 5.1.2 告警：只告警非幂等 skip
+
+两类 skip 的等级不同：
+
+- **DUPLICATE（INFO）**：DDL 已经生效（列已存在、改名目标已就位、类型已是目标）。跳过是幂等的，只记 INFO，**不会进用户
+  handler**；
+- **非幂等 skip（WARNING）**：改不了、且目标 schema 会持续偏离——主键列 `MODIFY`、容量收缩、源/目标都缺失的 `RENAME`、
+  表缺失。记 WARN 并交给 `SchemaEvolutionAlertHandler`。
+
+用户通过 `sink.schema-change.alert-handler` 配置实现
+`org.apache.flink.cdc.connectors.kafkajson.sink.schema.alert.SchemaEvolutionAlertHandler` 的全限定类名（public 无参构造），
+在 JobManager 上懒加载。
+
+为什么不用侧输出流：
+
+| | 侧输出流 | applier 直接回调（选用） |
+|---|---|---|
+| 可达性 | `MetadataApplier` 在 JobManager 的 coordinator 内，不在流算子中；要新增算子/协议把告警送回流图 | 直接在 coordinator 线程回调 |
+| 语义 | 侧输出随流走，需要额外算子消费；不随 checkpoint 保存，恢复时已发出的告警不会重放 | 同步调用；handler 失败被吞掉只记日志，不影响作业 |
+| 重复 | 未提交 round 恢复后会再发一次 | 同样 at-least-once；`getAlertId()` 确定性，供接收端去重 |
+| 复杂度 | 需要修改 schema registry 协议与序列化 | 一个 SPI + 一个配置项 |
+
+告警在 round 的 DDL 执行时发出，而 round 可能因失败未提交，恢复后 DDL 会重放，因此**告警至少一次**；handler 若要求
+精确一次应按 `alertId`（`kind|table|eventType|column|messageHash`）去重。handler 抛异常只记 WARN，不影响 pipeline；
+未配置 handler 时 WARNING 只落日志。
+
 ### 5.2 DorisDdlBuilder（事件 → Doris SQL）
 
 - **CREATE TABLE**：`CREATE TABLE IF NOT EXISTS db.tbl (cols + COMMENT)`；有主键 → **UNIQUE KEY(pk)
@@ -291,11 +343,13 @@ applySchemaChange(event)
 ### 5.3 DDL 的重试策略（与 StreamLoad 不同）
 
 ```
-executeSql：网络层失败按 max-retries 重试；应用层失败（HTTP code != 0）立即抛、不重试
+executeSql / executeQuery：网络层失败按 max-retries 重试；应用层失败（HTTP code != 0）立即抛、不重试
 ```
 
 **为什么 DDL 不重试**：DDL 不是幂等的（比如 CREATE TABLE 只生效一次，RENAME 重放会把表再挪一次）。
-所以只对网络层错误重试。
+所以只对网络层错误重试。查询同理：`executeQuery` 的应用层失败抛 `DorisHttpException`（而非普通 `IOException`），
+否则 `executeWithRetry` 会把 "unknown table" 这类明确拒绝当成瞬时错误重试 `max-retries` 次——前置判断会为每张
+尚不存在的表白等项目。
 
 ### 5.4 表改名（RENAME）的 SQL 生成
 
@@ -364,7 +418,9 @@ sink/engine/doris/
 | `DorisCommitter` | `commit/` | checkpoint 完成后逐条 `commit`；失败**抛异常**（FLINK-25857） |
 | `DorisHttpClient` | `http/` | OkHttp：`streamLoad`（307 两步走 + label 幂等重试）+ `precommitStreamLoad` / `commitTransaction` / `abortTransaction` + `executeSql` |
 | `DorisDdlBuilder` | `ddl/` | 10 事件 → Doris SQL |
-| `DorisMetadataApplier` | `ddl/` | coordinator 内执行 DDL |
+| `DorisMetadataApplier` | `ddl/` | coordinator 内执行 DDL；前置判断、过滤重放事件、发出告警 |
+| `DorisMetadataInspector` / `DorisTableMetadata` | `ddl/` | `SHOW FULL COLUMNS` 前置判断（列名/类型/Key/注释、缺表识别、类型归一化） |
+| `SchemaEvolutionAlert` / `SchemaEvolutionAlertHandler` | `sink/schema/alert/`（不在 `engine/doris` 下） | 非幂等 skip 的结构化告警与用户 SPI |
 | `DorisDataSinkOptions` | 包根 | Doris 配置（FENODES/USERNAME/PASSWORD/buffer/flush/前缀后缀/max-retries/**`sink.writer`**/**`sink.label-prefix`**） |
 | `DorisDataSinkDialect` | 包根 | extends `KafkaJsonDataSinkDialect`，组装 sink/applier/converter；按档分派 sink |
 | `DorisRowConverter` / `DorisWriteMetrics` | 包根 | 行转换 / 写吞吐指标 |
@@ -388,6 +444,11 @@ sink/engine/doris/
 | Doris 2.x 拒绝 `enable_batch_delete_by_default` | 改用 `hidden_columns=__DORIS_DELETE_SIGN__` header |
 | OkHttp 不可序列化（MetadataApplier 跨 client→JM 序列化） | `transient` + 懒初始化 |
 | `is_execute_sql_in_http` 不可用时 DDL 全挂 | 阻塞协议会把作业卡死在 APPLYING → 需按上表切换 JDBC |
+| 前置判断的元数据查询失败（网络/权限） | **向上抛、作业失败**：不能把"查不到"当成"尚未应用"，否则会重放非幂等 DDL |
+| `DROP TABLE` + `CREATE TABLE` 重放 | 开了 `sink.is-drop-table-before-create` 时，若表已存在且期望列齐全，跳过整对 SQL。注意首次运行遇到"表已存在且列齐全"也会跳过（这是有意的保护）；确需重建请手工 `DROP TABLE` |
+| MODIFY 已下发、Doris 异步 schema change 尚未可见时 failover | 当前列类型仍是旧值，前置判断看不出"已应用"，重放会再发 `MODIFY`，Doris 以 "pending schema change" 拒绝 → 作业失败重放。已知边界：前置判断只看列元数据，不查 `SHOW ALTER TABLE COLUMN` 的在途作业 |
+| 告警重复 | 告警至少一次（未提交 round 会重放）；`SchemaEvolutionAlert.getAlertId()` 对同一事件/列/原因稳定，接收端按它去重 |
+| 告警 handler 自身失败 | applier 捕获并记 WARN，**不让告警失败影响数据链路**；未配置 handler 时 WARNING 只落日志 |
 
 ---
 
@@ -413,6 +474,20 @@ hidden_columns、Authorization）/body、`Status!=Success` 时按 label 幂等�
 | `StatefulDorisSinkWriterTest` | 状态 round-trip、恢复取 `max(状态+1, 墙钟)`、1PC 档仍是普通 PUT |
 | `DorisCommitterTest` | 逐条 commit、空集合不发请求、失败**抛异常而非 signal**（断言 `signals` 为空） |
 | `DorisTwoPhaseCommitITCase`（MiniCluster + 真实 sink 链） | ① `stateful` 档一次都不碰 `_stream_load_2pc`；② `stateful-2pc` **不开 checkpoint 时行永远不可见**；③ 开 checkpoint 后行可见、无重复 commit、label 形状正确；④ **故障重启**：死掉那次尝试的 6 个事务被逐个 abort，同 label 重载后可见 |
+
+§5.1 新增的验证（`DorisMetadataApplierTest`）：
+
+| 测试 | 断言什么 |
+|---|---|
+| `testReplayedCreateTableWithDropBeforeCreateIsSkipped` | 表已存在且列齐全时不发 `DROP`/`CREATE`，只发前置查询 |
+| `testCreateTableWithDropBeforeCreateAppliesWhenTableIsAbsent` | `Unknown table` 被识别为缺表，照常 `DROP+CREATE`；且查询不重试 |
+| `testAddColumnSkipsColumnsThatAlreadyExist` | 只对缺失列生成 `ADD COLUMN` |
+| `testDuplicateAddColumnIsSkippedWithoutAlert` | 重复 DDL 是 INFO，handler 一次都没被调用 |
+| `testAlterColumnTypeOnKeyColumnIsSkippedAndAlerted` | 主键列 `MODIFY` 不发请求，WARNING + `MODIFY_KEY_COLUMN` |
+| `testCapacityReductionIsSkippedAndAlerted` | 容量收缩 WARNING + `CAPACITY_REDUCTION` |
+| `testAlterColumnTypeAlreadyAtTargetTypeIsSkipped` | 类型已是目标值只发前置查询，不发 DDL、不告警 |
+| `testPreCheckDisabledAppliesWithoutMetadataQuery` | 关掉 `sink.schema-change.pre-check` 后恢复旧行为 |
+| `testFailingAlertHandlerDoesNotFailThePipeline` | handler 抛异常被吞掉，作业不失败 |
 
 > 运行方式：本仓库 `test` 阶段只跑 `**/*Test.java`，`*ITCase` 在 `integration-test` 阶段跑。只想验证 2PC 时
 > `mvn -o -pl .../flink-cdc-pipeline-connector-jdbc-kafka-json test -Dtest=DorisTwoPhaseCommitITCase` 即可
