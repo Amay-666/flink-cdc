@@ -32,6 +32,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -972,8 +973,10 @@ public class DorisHttpClient implements Closeable {
             throws IOException {
         String responseBody = response.body() != null ? response.body().string() : "";
         if (!response.isSuccessful()) {
-            String error = String.format( "HTTP %d for StreamLoad of %s.%s: %s",
-                    response.code(), database, table, truncateForLog(responseBody));
+            String error =
+                    String.format(
+                            "HTTP %d for StreamLoad of %s.%s: %s",
+                            response.code(), database, table, truncateForLog(responseBody));
             throw new IOException(error);
         }
         JsonNode root = OBJECT_MAPPER.readTree(responseBody);

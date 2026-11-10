@@ -17,7 +17,6 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.example;
 
-import com.google.common.base.Joiner;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.cdc.common.event.Event;
 import org.apache.flink.cdc.common.pipeline.SchemaChangeBehavior;
@@ -33,6 +32,8 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.connector.sink2.CommittableMessage;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+
+import org.apache.flink.shaded.guava31.com.google.common.base.Joiner;
 
 import java.time.Duration;
 import java.time.ZoneId;

@@ -194,7 +194,8 @@ public class DorisE2ETest extends TestLogger {
         Assume.assumeTrue(
                 "DorisE2ETest is opt-in: run it with -Dkafkajson.e2e.enabled=true "
                         + "(it drives a real TiDB/Doris/Kafka environment)",
-                Boolean.getBoolean("kafkajson.e2e.enabled"));
+                Boolean.parseBoolean(
+                        System.getProperties().getProperty("kafkajson.e2e.enabled")));
         Optional<E2eConfig> config = E2eConfig.find();
         Assume.assumeTrue(
                 "E2E environment not configured: copy src/test/resources/e2e/env.yaml.template "
