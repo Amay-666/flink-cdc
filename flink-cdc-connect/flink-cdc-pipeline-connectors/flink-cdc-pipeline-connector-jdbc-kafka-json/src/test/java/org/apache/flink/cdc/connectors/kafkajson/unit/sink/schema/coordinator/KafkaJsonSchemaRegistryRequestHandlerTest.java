@@ -163,14 +163,14 @@ public class KafkaJsonSchemaRegistryRequestHandlerTest {
             long nonce = nextNonce();
             handler.flushSuccess(0, nonce);
             assertThat(
-                    send(
-                            handler,
-                            new KafkaJsonSchemaChangeRequest(
-                                    ORDERS,
-                                    new CreateTableEvent(ORDERS, SCHEMA),
-                                    0,
-                                    nonce))
-                            .isAccepted())
+                            send(
+                                            handler,
+                                            new KafkaJsonSchemaChangeRequest(
+                                                    ORDERS,
+                                                    new CreateTableEvent(ORDERS, SCHEMA),
+                                                    0,
+                                                    nonce))
+                                    .isAccepted())
                     .isTrue();
             awaitResult(handler, nonce);
 

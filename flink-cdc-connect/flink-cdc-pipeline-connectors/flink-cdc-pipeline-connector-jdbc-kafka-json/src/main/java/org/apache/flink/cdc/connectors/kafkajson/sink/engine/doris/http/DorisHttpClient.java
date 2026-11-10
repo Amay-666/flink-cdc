@@ -216,9 +216,9 @@ public class DorisHttpClient implements Closeable {
     /**
      * Sink for the per-load row accounting Doris reports on every committed load ({@code
      * NumberLoadedRows}/{@code NumberFilteredRows}), or {@code null} for load-free clients (DDL,
-     * commit/abort). With a {@code max_filter_ratio} above zero Doris filters rows under a
-     * {@code Status: Success}; the counters (plus the WARN logged on any filtered row) are the
-     * only thing that keeps such drops visible.
+     * commit/abort). With a {@code max_filter_ratio} above zero Doris filters rows under a {@code
+     * Status: Success}; the counters (plus the WARN logged on any filtered row) are the only thing
+     * that keeps such drops visible.
      */
     @Nullable private final DorisWriteMetrics loadMetrics;
 
@@ -311,9 +311,9 @@ public class DorisHttpClient implements Closeable {
 
     /**
      * @param maxBatchBytes the serialized-size cap one StreamLoad request body must respect; a
-     *     larger batch is split internally and landed as several sequential loads (labelled
-     *     {@code <label>_c1}, {@code _c2}, ...; the first chunk keeps the plain label). {@code 0}
-     *     or less disables the cap. See {@code sink.buffer.max-batch-bytes}.
+     *     larger batch is split internally and landed as several sequential loads (labelled {@code
+     *     <label>_c1}, {@code _c2}, ...; the first chunk keeps the plain label). {@code 0} or less
+     *     disables the cap. See {@code sink.buffer.max-batch-bytes}.
      * @see #DorisHttpClient(String, String, String, int, Map, String, String, DorisWriteMetrics)
      */
     public DorisHttpClient(
@@ -372,8 +372,8 @@ public class DorisHttpClient implements Closeable {
      * smaller" semantics make the retry a no-op for keys that already committed.
      *
      * <p>A batch whose estimated serialized size exceeds {@code sink.buffer.max-batch-bytes} is
-     * split and landed as several sequential loads: one giant body cannot pass the JVM's 2GB
-     * array limit, which a row-count cap cannot prevent for wide rows.
+     * split and landed as several sequential loads: one giant body cannot pass the JVM's 2GB array
+     * limit, which a row-count cap cannot prevent for wide rows.
      *
      * @param database target database (already mapped via the dialect options)
      * @param table target table (already mapped via the dialect options)
@@ -412,14 +412,14 @@ public class DorisHttpClient implements Closeable {
      * not one char) and escape aware (quotes and backslashes double, control characters become
      * six-character unicode escapes), so it over-counts rather than under-counts — an error of a
      * few percent in the safe direction, irrelevant with the default 100MB cap against the 2GB
-     * array limit.
-     * Each chunk is later serialized whole by {@code writeValueAsBytes(chunk)}: the estimate
-     * picks the boundary, the real serializer produces the body, so there is no hand-assembled
-     * JSON anywhere. A single row whose estimate alone exceeds the cap forms its own chunk and
-     * logs a WARN — a row cannot be split, so an oversized blob still goes out as one request.
+     * array limit. Each chunk is later serialized whole by {@code writeValueAsBytes(chunk)}: the
+     * estimate picks the boundary, the real serializer produces the body, so there is no
+     * hand-assembled JSON anywhere. A single row whose estimate alone exceeds the cap forms its own
+     * chunk and logs a WARN — a row cannot be split, so an oversized blob still goes out as one
+     * request.
      *
-     * @param maxBytes the byte cap per body; {@code 0} or less returns the whole batch as one
-     *     chunk (the legacy unbounded behaviour)
+     * @param maxBytes the byte cap per body; {@code 0} or less returns the whole batch as one chunk
+     *     (the legacy unbounded behaviour)
      */
     private List<List<Map<String, Object>>> partitionByBatchBytes(
             String database, String table, List<Map<String, Object>> rows, long maxBytes) {
@@ -459,8 +459,8 @@ public class DorisHttpClient implements Closeable {
      * #partitionByBatchBytes}. Character inspection only — no serialization pass, no allocation.
      *
      * <p>The value types are the closed set {@code DorisRowConverter} produces: strings (including
-     * complex columns, which arrive as their rendered JSON text — its embedded quotes are
-     * accounted by the escape doubling), the numeric types, booleans, and {@code byte[]} for
+     * complex columns, which arrive as their rendered JSON text — its embedded quotes are accounted
+     * by the escape doubling), the numeric types, booleans, and {@code byte[]} for
      * BINARY/VARBINARY, which Jackson serializes as Base64 (a 4/3 inflation).
      */
     private static long estimatedSerializedBytes(Map<String, Object> row) {
@@ -485,11 +485,10 @@ public class DorisHttpClient implements Closeable {
     }
 
     /**
-     * The UTF-8 byte length of the JSON-escaped form of a string: an ASCII character is one byte,
-     * a CJK character three, a quote or backslash doubles (escaped), and a control character
-     * becomes a six-character unicode escape. Supplementary characters (two surrogate
-     * chars) count as six, above their real four — the estimate errs high, which is the safe
-     * direction for a cap.
+     * The UTF-8 byte length of the JSON-escaped form of a string: an ASCII character is one byte, a
+     * CJK character three, a quote or backslash doubles (escaped), and a control character becomes
+     * a six-character unicode escape. Supplementary characters (two surrogate chars) count as six,
+     * above their real four — the estimate errs high, which is the safe direction for a cap.
      */
     private static long utf8EscapedLength(String s) {
         long bytes = 0L;
@@ -513,8 +512,8 @@ public class DorisHttpClient implements Closeable {
     /**
      * The label of chunk {@code index}: the first chunk keeps the plain {@code label} (single-chunk
      * batches — the overwhelmingly common case — are byte-identical to the uncapped behaviour),
-     * later chunks append {@code _c<index>} so every request of one batch carries a unique label.
-     * A {@code null} label (Group Commit, where Doris assigns labels) stays {@code null}.
+     * later chunks append {@code _c<index>} so every request of one batch carries a unique label. A
+     * {@code null} label (Group Commit, where Doris assigns labels) stays {@code null}.
      */
     private static String chunkLabel(String label, int index) {
         if (label == null || index == 0) {
@@ -757,7 +756,10 @@ public class DorisHttpClient implements Closeable {
             throws IOException {
         String responseBody = response.body() != null ? response.body().string() : "";
         if (!response.isSuccessful()) {
-            String error = String.format("HTTP %d for 2PC precommit of %s.%s: %s", response.code(), database, table, truncateForLog(responseBody));
+            String error =
+                    String.format(
+                            "HTTP %d for 2PC precommit of %s.%s: %s",
+                            response.code(), database, table, truncateForLog(responseBody));
             throw new IOException(error);
         }
         JsonNode root = OBJECT_MAPPER.readTree(responseBody);
@@ -853,9 +855,13 @@ public class DorisHttpClient implements Closeable {
             throws IOException {
         String responseBody = response.body() != null ? response.body().string() : "";
         if (!response.isSuccessful()) {
-            String error = String.format(
-                    "HTTP %d for 2PC %s of transaction %d: %s",
-                    response.code(), operation, transactionId, truncateForLog(responseBody));
+            String error =
+                    String.format(
+                            "HTTP %d for 2PC %s of transaction %d: %s",
+                            response.code(),
+                            operation,
+                            transactionId,
+                            truncateForLog(responseBody));
             throw new IOException(error);
         }
         JsonNode root = OBJECT_MAPPER.readTree(responseBody);
@@ -946,8 +952,7 @@ public class DorisHttpClient implements Closeable {
             headers.put("group_commit", groupCommitMode);
             Preconditions.checkArgument(
                     sequenceColumnName != null && !sequenceColumnName.isEmpty(),
-                    "sequenceColumnName must be non-empty " +
-                    "when Group Commit is enabled");
+                    "sequenceColumnName must be non-empty " + "when Group Commit is enabled");
             headers.put("function_column.sequence_col", sequenceColumnName);
         }
         // sink.properties pass-through: user-supplied StreamLoad properties (columns=...,
@@ -1046,12 +1051,12 @@ public class DorisHttpClient implements Closeable {
 
     /**
      * Records Doris's own row accounting of a committed load: {@code NumberLoadedRows} into the
-     * {@code loadedRows} counter, {@code NumberFilteredRows} into {@code filteredRows}, plus a
-     * WARN when rows were filtered. A {@code Status: Success} with filtered rows is only possible
-     * with a {@code max_filter_ratio} above zero, and it is a silent data loss in progress
-     * whatever the configuration intent was; the response body names the reason (Doris reports
-     * an {@code ErrorURL} pointing at the rejected rows). The "Label Already Exists / FINISHED"
-     * path deliberately skips this: those rows were counted by the original load of that label.
+     * {@code loadedRows} counter, {@code NumberFilteredRows} into {@code filteredRows}, plus a WARN
+     * when rows were filtered. A {@code Status: Success} with filtered rows is only possible with a
+     * {@code max_filter_ratio} above zero, and it is a silent data loss in progress whatever the
+     * configuration intent was; the response body names the reason (Doris reports an {@code
+     * ErrorURL} pointing at the rejected rows). The "Label Already Exists / FINISHED" path
+     * deliberately skips this: those rows were counted by the original load of that label.
      */
     private void recordLoadStats(
             JsonNode root, String database, String table, String label, String responseBody) {
@@ -1285,8 +1290,15 @@ public class DorisHttpClient implements Closeable {
                     if (!response.isSuccessful()
                             && !isRetryableStatus(status)
                             && !isHandledStatus(status, handledStatuses)) {
-                        String responseBody = response.body() != null ? response.body().string() : null;
-                        throw new DorisHttpException("HTTP " + status + " for " + operation + " :" + truncateForLog(responseBody));
+                        String responseBody =
+                                response.body() != null ? response.body().string() : null;
+                        throw new DorisHttpException(
+                                "HTTP "
+                                        + status
+                                        + " for "
+                                        + operation
+                                        + " :"
+                                        + truncateForLog(responseBody));
                     }
                     return handler.handle(response);
                 }
@@ -1342,7 +1354,9 @@ public class DorisHttpClient implements Closeable {
     }
 
     private static String truncateForLog(String body) {
-        return body != null && body.length() > 2048 ? body.substring(0, 2048) + "...(" + body.length() + " chars)" : body;
+        return body != null && body.length() > 2048
+                ? body.substring(0, 2048) + "...(" + body.length() + " chars)"
+                : body;
     }
 
     /** Raised when Doris rejects a request at the application level (non-retryable). */

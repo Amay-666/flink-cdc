@@ -157,10 +157,10 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
     /**
      * Converts epoch timestamps with floor division: a value before the epoch splits into a
      * negative millisecond and a NON-NEGATIVE nano-of-millisecond, which is what {@link
-     * TimestampData}'s contract requires. The shared parent truncates toward zero, so a
-     * pre-1970 {@code MicroTimestamp}/{@code NanoTimestamp} column value (a DATETIME with
-     * fractional precision older than the epoch) yielded a negative nanosecond field and
-     * failed the whole deserialization with an {@code IllegalArgumentException}.
+     * TimestampData}'s contract requires. The shared parent truncates toward zero, so a pre-1970
+     * {@code MicroTimestamp}/{@code NanoTimestamp} column value (a DATETIME with fractional
+     * precision older than the epoch) yielded a negative nanosecond field and failed the whole
+     * deserialization with an {@code IllegalArgumentException}.
      */
     @Override
     protected Object convertToTimestamp(Object dbzObj, Schema schema) {
@@ -169,13 +169,11 @@ public class KafkaJsonEventDeserializer extends DebeziumEventDeserializationSche
                 case MicroTimestamp.SCHEMA_NAME:
                     long micro = (long) dbzObj;
                     return TimestampData.fromMillis(
-                            Math.floorDiv(micro, 1000),
-                            (int) (Math.floorMod(micro, 1000) * 1000));
+                            Math.floorDiv(micro, 1000), (int) (Math.floorMod(micro, 1000) * 1000));
                 case NanoTimestamp.SCHEMA_NAME:
                     long nano = (long) dbzObj;
                     return TimestampData.fromMillis(
-                            Math.floorDiv(nano, 1_000_000),
-                            (int) Math.floorMod(nano, 1_000_000));
+                            Math.floorDiv(nano, 1_000_000), (int) Math.floorMod(nano, 1_000_000));
             }
         }
         return super.convertToTimestamp(dbzObj, schema);

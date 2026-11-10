@@ -138,8 +138,7 @@ public class DorisSinkWriter implements SinkWriter<Event> {
         this.options = options;
         this.pipelineZoneId = pipelineZoneId;
         this.metrics =
-                new DorisWriteMetrics(
-                        initContext.metricGroup(), options.isGroupCommitEnabled());
+                new DorisWriteMetrics(initContext.metricGroup(), options.isGroupCommitEnabled());
         this.isGroupCommit = options.isGroupCommitEnabled();
         this.sequenceColumnName =
                 options.isGroupCommitEnabled() ? options.getSequenceColumnName() : null;
@@ -158,9 +157,7 @@ public class DorisSinkWriter implements SinkWriter<Event> {
                         options.getMaxRetries(),
                         options.getStreamLoadProperties(),
                         options.getGroupCommitMode().headerValue(),
-                        options.isGroupCommitEnabled()
-                                ? options.getSequenceColumnName()
-                                : null,
+                        options.isGroupCommitEnabled() ? options.getSequenceColumnName() : null,
                         metrics,
                         options.getMaxBatchBytes());
         schedulePeriodicFlush(initContext);
@@ -334,7 +331,8 @@ public class DorisSinkWriter implements SinkWriter<Event> {
         // instead of a label (specifying a label degrades to non-Group-Commit).
         String label = isGroupCommit ? null : newLabel(tableId);
         List<Map<String, Object>> batch = drain(rows);
-        DorisGeneratedColumnValueFactory.fillBatch(batch, generatedColumnName, generatedColumnValue);
+        DorisGeneratedColumnValueFactory.fillBatch(
+                batch, generatedColumnName, generatedColumnValue);
         doStreamLoad(options.mapDatabase(tableId), options.mapTable(tableId), label, batch);
         metrics.setBufferedRows(bufferedRows);
     }
@@ -363,13 +361,13 @@ public class DorisSinkWriter implements SinkWriter<Event> {
     /**
      * Registers the periodic flush timer.
      *
-     * <p>The callback does <b>not</b> run on the timer pool thread: since FLINK-12481 (Flink
-     * 1.10), the {@code ProcessingTimeService} given to sink writers defers every timer callback
-     * to the mailbox, so {@code flushBuffered()} executes on the stream task's main thread —
-     * the same single thread that also runs {@code write}, {@code flush}, {@code snapshotState}
-     * and {@code close} (observed at runtime: the thread is the operator-chain thread, e.g.
-     * {@code PostPartition -> kafka-json-sink-writer (1/1)#0}). All buffer access is therefore
-     * serialized by construction and needs no lock.
+     * <p>The callback does <b>not</b> run on the timer pool thread: since FLINK-12481 (Flink 1.10),
+     * the {@code ProcessingTimeService} given to sink writers defers every timer callback to the
+     * mailbox, so {@code flushBuffered()} executes on the stream task's main thread — the same
+     * single thread that also runs {@code write}, {@code flush}, {@code snapshotState} and {@code
+     * close} (observed at runtime: the thread is the operator-chain thread, e.g. {@code
+     * PostPartition -> kafka-json-sink-writer (1/1)#0}). All buffer access is therefore serialized
+     * by construction and needs no lock.
      */
     private void schedulePeriodicFlush(Sink.InitContext initContext) {
         if (options.getFlushInterval().isZero() || options.getFlushInterval().isNegative()) {

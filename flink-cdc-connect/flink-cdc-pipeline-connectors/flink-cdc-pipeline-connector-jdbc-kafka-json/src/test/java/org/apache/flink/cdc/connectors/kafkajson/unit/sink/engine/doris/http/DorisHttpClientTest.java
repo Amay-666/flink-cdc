@@ -85,8 +85,15 @@ public class DorisHttpClientTest {
                 new MockDorisServer(req -> Response.ok("{\"Status\":\"Success\"}"))) {
             DorisHttpClient client =
                     new DorisHttpClient(
-                            server.endpoint(), "root", "123456", 1, Collections.emptyMap(),
-                            "off", null, null, 1000L);
+                            server.endpoint(),
+                            "root",
+                            "123456",
+                            1,
+                            Collections.emptyMap(),
+                            "off",
+                            null,
+                            null,
+                            1000L);
 
             client.streamLoad(
                     "shop", "orders", "cdc_binary", Arrays.asList(binaryRow1, binaryRow2));
@@ -178,7 +185,10 @@ public class DorisHttpClientTest {
 
             // a null label marks the load as a Group-Commit load
             client.streamLoad(
-                    "shop", "orders", null, Collections.singletonList(Collections.singletonMap("id", 1)));
+                    "shop",
+                    "orders",
+                    null,
+                    Collections.singletonList(Collections.singletonMap("id", 1)));
 
             assertThat(used.get()).isEqualTo(Boolean.TRUE);
         }
@@ -207,7 +217,10 @@ public class DorisHttpClientTest {
                             metrics);
 
             client.streamLoad(
-                    "shop", "orders", null, Collections.singletonList(Collections.singletonMap("id", 1)));
+                    "shop",
+                    "orders",
+                    null,
+                    Collections.singletonList(Collections.singletonMap("id", 1)));
 
             assertThat(used.get()).isEqualTo(Boolean.FALSE);
         }
@@ -239,8 +252,15 @@ public class DorisHttpClientTest {
                 new MockDorisServer(req -> Response.ok("{\"Status\":\"Success\"}"))) {
             DorisHttpClient cjkClient =
                     new DorisHttpClient(
-                            server.endpoint(), "root", "123456", 1, Collections.emptyMap(),
-                            "off", null, null, 700L);
+                            server.endpoint(),
+                            "root",
+                            "123456",
+                            1,
+                            Collections.emptyMap(),
+                            "off",
+                            null,
+                            null,
+                            700L);
             cjkClient.streamLoad(
                     "shop", "orders", "cdc_cjk", Arrays.asList(cjkRow1, cjkRow2, cjkRow3));
 
@@ -255,8 +275,15 @@ public class DorisHttpClientTest {
                 new MockDorisServer(req -> Response.ok("{\"Status\":\"Success\"}"))) {
             DorisHttpClient asciiClient =
                     new DorisHttpClient(
-                            server.endpoint(), "root", "123456", 1, Collections.emptyMap(),
-                            "off", null, null, 700L);
+                            server.endpoint(),
+                            "root",
+                            "123456",
+                            1,
+                            Collections.emptyMap(),
+                            "off",
+                            null,
+                            null,
+                            700L);
             asciiClient.streamLoad(
                     "shop", "orders", "cdc_ascii", Arrays.asList(asciiRow1, asciiRow2, asciiRow3));
 

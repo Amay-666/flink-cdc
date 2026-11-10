@@ -98,7 +98,7 @@ public class KafkaJsonTidbOffsetUtils {
             if (tso <= 0) {
                 LOG.warn(
                         "{} returned {} (a TSO is only returned inside a transaction); refusing to"
-                        + " use it as the snapshot boundary",
+                                + " use it as the snapshot boundary",
                         SELECT_CURRENT_TSO,
                         tso);
                 return null;

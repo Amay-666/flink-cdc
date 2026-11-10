@@ -238,8 +238,9 @@ public class KafkaJsonQueryUtils {
             throws SQLException {
         final Connection connection = jdbc.connection();
         connection.setAutoCommit(false);
-        final PreparedStatement statement = connection.prepareStatement(
-                sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
+        final PreparedStatement statement =
+                connection.prepareStatement(
+                        sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
         statement.setFetchSize(fetchSize);
         return statement;
     }

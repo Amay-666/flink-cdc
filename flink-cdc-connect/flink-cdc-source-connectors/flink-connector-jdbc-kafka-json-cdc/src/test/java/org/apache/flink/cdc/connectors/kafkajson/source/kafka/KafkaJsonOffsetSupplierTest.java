@@ -78,8 +78,7 @@ class KafkaJsonOffsetSupplierTest {
         KafkaJsonOffsetSupplier supplier =
                 new KafkaJsonOffsetSupplier(
                         config(EventTime.ES), new FakeKafkaConsumer(log, endingOffsets));
-        FlinkRuntimeException e =
-                assertThrows(FlinkRuntimeException.class, supplier::current);
+        FlinkRuntimeException e = assertThrows(FlinkRuntimeException.class, supplier::current);
         assertTrue(
                 e.getMessage().contains("No Kafka partition found for topics: [t]"),
                 e.getMessage());
@@ -101,8 +100,7 @@ class KafkaJsonOffsetSupplierTest {
                 };
         KafkaJsonOffsetSupplier supplier =
                 new KafkaJsonOffsetSupplier(config(EventTime.ES), unknownTopicConsumer);
-        FlinkRuntimeException e =
-                assertThrows(FlinkRuntimeException.class, supplier::current);
+        FlinkRuntimeException e = assertThrows(FlinkRuntimeException.class, supplier::current);
         assertTrue(e.getMessage().contains("Kafka topic 't' does not exist"), e.getMessage());
     }
 

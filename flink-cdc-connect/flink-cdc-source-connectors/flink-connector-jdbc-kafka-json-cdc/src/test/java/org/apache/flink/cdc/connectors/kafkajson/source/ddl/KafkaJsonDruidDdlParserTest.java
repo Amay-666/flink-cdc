@@ -90,14 +90,14 @@ class KafkaJsonDruidDdlParserTest {
     }
 
     /**
-     * A DBeaver-issued CREATE TABLE, verbatim: leading tool comment, CRLF separators, a TEXT
-     * column with {@code CHARACTER SET}/{@code COLLATE} decorators, a {@code bit(1) DEFAULT
-     * b'1'} and a composite unique key.
+     * A DBeaver-issued CREATE TABLE, verbatim: leading tool comment, CRLF separators, a TEXT column
+     * with {@code CHARACTER SET}/{@code COLLATE} decorators, a {@code bit(1) DEFAULT b'1'} and a
+     * composite unique key.
      *
      * <p>The column this test exists for is {@code extend_attr}: the TEXT family mirrors the JDBC
-     * metadata path — TYPE_NAME carries the flavor and COLUMN_SIZE the flavor's byte limit —
-     * so {@code KafkaJsonColumnMeta} maps it to STRING exactly like a JDBC-discovered column,
-     * at every layer this assertion can reach.
+     * metadata path — TYPE_NAME carries the flavor and COLUMN_SIZE the flavor's byte limit — so
+     * {@code KafkaJsonColumnMeta} maps it to STRING exactly like a JDBC-discovered column, at every
+     * layer this assertion can reach.
      */
     @Test
     void testParseDbeaverCreateTableWithTextColumn() {
@@ -149,9 +149,7 @@ class KafkaJsonDruidDdlParserTest {
         assertEquals("扩展属性", extendAttr.comment());
         // ... and therefore maps to the same CDC type a JDBC-discovered column maps to, which
         // the sink renders as Doris's unbounded `string` — not a one-character VARCHAR
-        assertEquals(
-                "STRING",
-                KafkaJsonTypeUtils.fromDbzColumn(extendAttr).toString());
+        assertEquals("STRING", KafkaJsonTypeUtils.fromDbzColumn(extendAttr).toString());
 
         Column field = table.columnWithName("extend_attr_field");
         assertEquals("VARCHAR", field.typeName());

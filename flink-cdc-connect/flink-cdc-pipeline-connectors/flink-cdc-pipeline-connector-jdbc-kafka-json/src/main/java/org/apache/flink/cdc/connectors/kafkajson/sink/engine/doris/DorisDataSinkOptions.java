@@ -209,8 +209,8 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
      * Name of the physical {@code BIGINT} column injected into the Doris DDL as the sequence
      * column. The DDL builder declares its type via {@code "function_column.sequence_type" =
      * "BIGINT"} in the table PROPERTIES, and every Group-Commit StreamLoad carries {@code
-     * function_column.sequence_col = <this value>} as a header so Doris orders by this column.
-     * Only takes effect when {@link #GROUP_COMMIT_MODE} is not {@code OFF}.
+     * function_column.sequence_col = <this value>} as a header so Doris orders by this column. Only
+     * takes effect when {@link #GROUP_COMMIT_MODE} is not {@code OFF}.
      */
     public static final ConfigOption<String> SEQUENCE_COLUMN_NAME =
             ConfigOptions.key("sink.group-commit.sequence-column")
@@ -218,8 +218,8 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
                     .defaultValue("cdc_sequence");
 
     /**
-     * Name of a business-level generated column the sink adds to the Doris table and fills at
-     * write time, e.g. a sync_time column that records when each row was written. Disabled when
+     * Name of a business-level generated column the sink adds to the Doris table and fills at write
+     * time, e.g. a sync_time column that records when each row was written. Disabled when
      * null/blank. The DDL builder appends the column to CREATE TABLE; the writer generates the
      * value for every row (INSERT and UPDATE carry the fresh value, DELETE the value of the
      * pre-image at the time of deletion).
@@ -228,39 +228,32 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
      * column; this one is a user-facing column with a user-chosen name, type and value).
      */
     public static final ConfigOption<String> GENERATED_COLUMN_NAME =
-            ConfigOptions.key("sink.generated-column")
-                    .stringType()
-                    .noDefaultValue();
+            ConfigOptions.key("sink.generated-column").stringType().noDefaultValue();
 
     /**
-     * Doris column type of the generated column. Examples: {@code DATETIME}, {@code BIGINT},
-     * {@code INT}, {@code VARCHAR(64)}. The DDL builder embeds it verbatim into the CREATE
-     * TABLE column definition.
+     * Doris column type of the generated column. Examples: {@code DATETIME}, {@code BIGINT}, {@code
+     * INT}, {@code VARCHAR(64)}. The DDL builder embeds it verbatim into the CREATE TABLE column
+     * definition.
      */
     public static final ConfigOption<String> GENERATED_COLUMN_TYPE =
-            ConfigOptions.key("sink.generated-column.type")
-                    .stringType()
-                    .defaultValue("DATETIME");
+            ConfigOptions.key("sink.generated-column.type").stringType().defaultValue("DATETIME");
 
     /**
      * How the writer fills the generated column. Supported:
      *
      * <ul>
-     *   <li>{@code NOW} (default) — current timestamp. For a {@code DATETIME} column the JSON
-     *       value is {@code "2026-10-29 10:30:00"} (Doris's accepted string form); for a
-     *       {@code BIGINT} column the value is {@code System.currentTimeMillis()}.
-     *   <li>{@code COUNTER} — a monotonically increasing {@code BIGINT} counter, one per
-     *       subtask, seeded from the wall clock like the Group Commit counter. Only useful for
-     *       numeric columns.
-     *   <li>
-     *     {@code className} — user-supplied function class name implementing {@code
-     *         java.util.function.Function<Long, Object>}.
+     *   <li>{@code NOW} (default) — current timestamp. For a {@code DATETIME} column the JSON value
+     *       is {@code "2026-10-29 10:30:00"} (Doris's accepted string form); for a {@code BIGINT}
+     *       column the value is {@code System.currentTimeMillis()}.
+     *   <li>{@code COUNTER} — a monotonically increasing {@code BIGINT} counter, one per subtask,
+     *       seeded from the wall clock like the Group Commit counter. Only useful for numeric
+     *       columns.
+     *   <li>{@code className} — user-supplied function class name implementing {@code
+     *       java.util.function.Function<Long, Object>}.
      * </ul>
      */
     public static final ConfigOption<String> GENERATED_COLUMN_FUNCTION =
-            ConfigOptions.key("sink.function")
-                    .stringType()
-                    .defaultValue("NOW");
+            ConfigOptions.key("sink.function").stringType().defaultValue("NOW");
 
     /**
      * Group Commit auto-commit interval in milliseconds. Doris commits a batch when either this

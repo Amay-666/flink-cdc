@@ -453,8 +453,7 @@ public class DorisMetadataApplierTest {
                             alert ->
                                     assertThat(alert.getKind())
                                             .isEqualTo(
-                                                    SchemaEvolutionAlert.Kind
-                                                            .INCONSISTENT_STATE));
+                                                    SchemaEvolutionAlert.Kind.INCONSISTENT_STATE));
         }
     }
 

@@ -61,8 +61,8 @@ import java.util.Properties;
  * <p>The probe is as strict as the stream phase's {@code assignAndSeek}: a configured topic that
  * does not exist or yields no partitions fails immediately instead of silently degrading the
  * watermark to {@link KafkaJsonOffset#INITIAL_OFFSET}. The lenient variant let a misconfigured
- * topic run the whole snapshot as a JDBC dump and surface only when the stream split was assigned
- * — hours later, and with a boundary that may skip the changes made during the snapshot. The
+ * topic run the whole snapshot as a JDBC dump and surface only when the stream split was assigned —
+ * hours later, and with a boundary that may skip the changes made during the snapshot. The
  * legitimate INITIAL cases are unaffected: the snapshot-only / no-topics short-circuit happens
  * before any Kafka call, and a real topic that exists but carries no message yet still has no
  * watermark to sample.

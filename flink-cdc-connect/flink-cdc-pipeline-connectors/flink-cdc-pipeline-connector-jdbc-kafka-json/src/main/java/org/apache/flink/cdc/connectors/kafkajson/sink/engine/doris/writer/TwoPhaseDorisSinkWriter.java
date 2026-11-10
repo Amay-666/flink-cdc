@@ -167,8 +167,8 @@ public class TwoPhaseDorisSinkWriter extends StatefulDorisSinkWriter
 
     /**
      * Pre-commits one batch under {@code label}, first clearing the label if a previous attempt
-     * left a transaction on it. One entry per byte-capped chunk: each chunk is its own
-     * transaction under its own (derived) label.
+     * left a transaction on it. One entry per byte-capped chunk: each chunk is its own transaction
+     * under its own (derived) label.
      */
     private List<DorisHttpClient.PrecommitResult> precommit(
             String database, String table, String label, List<Map<String, Object>> rows)

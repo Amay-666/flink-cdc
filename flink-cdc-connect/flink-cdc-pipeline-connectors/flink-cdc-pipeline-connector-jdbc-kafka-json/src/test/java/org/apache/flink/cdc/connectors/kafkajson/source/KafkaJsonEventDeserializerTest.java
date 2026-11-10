@@ -28,9 +28,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Unit test for the epoch-timestamp conversion of {@link KafkaJsonEventDeserializer}: a value
- * before the epoch must split into a negative millisecond and a non-negative
- * nano-of-millisecond, which is what {@link TimestampData}'s contract requires. The shared
- * parent truncates toward zero and fails its checkArgument on pre-1970 values.
+ * before the epoch must split into a negative millisecond and a non-negative nano-of-millisecond,
+ * which is what {@link TimestampData}'s contract requires. The shared parent truncates toward zero
+ * and fails its checkArgument on pre-1970 values.
  */
 class KafkaJsonEventDeserializerTest {
 

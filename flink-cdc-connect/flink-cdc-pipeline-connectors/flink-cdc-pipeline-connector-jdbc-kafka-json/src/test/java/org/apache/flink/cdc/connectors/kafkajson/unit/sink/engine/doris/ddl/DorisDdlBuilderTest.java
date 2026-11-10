@@ -308,7 +308,8 @@ public class DorisDdlBuilderTest {
                 defaultBuilder()
                         .buildAlterColumnTypeSql(
                                 new AlterColumnTypeEvent(
-                                        ORDERS, Collections.singletonMap("name", DataTypes.CHAR(80))),
+                                        ORDERS,
+                                        Collections.singletonMap("name", DataTypes.CHAR(80))),
                                 Optional.of(oldSchema));
 
         assertThat(sqls)
@@ -369,9 +370,7 @@ public class DorisDdlBuilderTest {
                         .physicalColumn("remark", DataTypes.STRING())
                         .physicalColumn("id", DataTypes.INT())
                         .build();
-        sqls =
-                defaultBuilder()
-                        .buildCreateTableSql(new CreateTableEvent(ORDERS, textFirstNoPk));
+        sqls = defaultBuilder().buildCreateTableSql(new CreateTableEvent(ORDERS, textFirstNoPk));
         assertThat(sqls.get(0)).contains("`remark` VARCHAR(65533)");
         assertThat(sqls.get(0)).contains("DUPLICATE KEY(`remark`) DISTRIBUTED BY HASH(`remark`)");
 
@@ -540,8 +539,7 @@ public class DorisDdlBuilderTest {
                                         ORDERS,
                                         Collections.singletonMap("flag", DataTypes.CHAR(100))),
                                 Optional.of(oldSchemaOfChar));
-        assertThat(sqls)
-                .containsExactly("ALTER TABLE `shop`.`orders` MODIFY COLUMN `flag` STRING");
+        assertThat(sqls).containsExactly("ALTER TABLE `shop`.`orders` MODIFY COLUMN `flag` STRING");
     }
 
     @Test

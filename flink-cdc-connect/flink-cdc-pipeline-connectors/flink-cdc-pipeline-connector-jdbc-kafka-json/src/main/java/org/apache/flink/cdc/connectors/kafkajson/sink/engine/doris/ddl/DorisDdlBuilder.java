@@ -142,8 +142,7 @@ public class DorisDdlBuilder implements Serializable {
         boolean injectGenerated =
                 generatedColumn != null && !schema.getColumnNames().contains(generatedColumn);
         if (injectGenerated) {
-            columns.add(
-                    quote(generatedColumn) + " " + options.getGeneratedColumnType());
+            columns.add(quote(generatedColumn) + " " + options.getGeneratedColumnType());
         }
         StringBuilder sql =
                 new StringBuilder("CREATE TABLE IF NOT EXISTS ")
@@ -332,11 +331,11 @@ public class DorisDdlBuilder implements Serializable {
      * KEY} — which Doris requires to keep the column in the key (without it the statement is
      * rejected or the column silently demoted to a value column), and the type itself stays
      * key-legal (STRING is not, see {@link #convertDataType(DataType, boolean)}). Doris's MODIFY
-     * COLUMN redefines the whole column, so the old schema's comment is carried into the
-     * statement — without the clause Doris resets it. What Doris does not support at all —
-     * modifying a partition or bucket column, dropping a UNIQUE table's key column — is left for
-     * Doris to reject: the failure surfaces through the schema-change RPC instead of being
-     * silently skipped here.
+     * COLUMN redefines the whole column, so the old schema's comment is carried into the statement
+     * — without the clause Doris resets it. What Doris does not support at all — modifying a
+     * partition or bucket column, dropping a UNIQUE table's key column — is left for Doris to
+     * reject: the failure surfaces through the schema-change RPC instead of being silently skipped
+     * here.
      */
     public List<String> buildAlterColumnTypeSql(
             AlterColumnTypeEvent event, Optional<Schema> oldSchema) {
@@ -732,11 +731,10 @@ public class DorisDdlBuilder implements Serializable {
 
     /**
      * The key-aware form of {@link #convertDataType(DataType)}: Doris rejects a STRING column in
-     * any key position (UNIQUE KEY, DUPLICATE KEY, the hash distribution), so a STRING-mapped
-     * type on a key column degrades to {@code VARCHAR(65533)} — the widest key-legal form. The
-     * realistic STRING keys are MySQL ENUM/SET columns (how they arrive after the CDC mapping);
-     * TEXT/JSON cannot be MySQL keys at all, so nothing wider than a label list ever rides this
-     * degradation.
+     * any key position (UNIQUE KEY, DUPLICATE KEY, the hash distribution), so a STRING-mapped type
+     * on a key column degrades to {@code VARCHAR(65533)} — the widest key-legal form. The realistic
+     * STRING keys are MySQL ENUM/SET columns (how they arrive after the CDC mapping); TEXT/JSON
+     * cannot be MySQL keys at all, so nothing wider than a label list ever rides this degradation.
      */
     private String convertDataType(DataType type, boolean isKey) {
         switch (type.getTypeRoot()) {
@@ -830,11 +828,11 @@ public class DorisDdlBuilder implements Serializable {
 
     /**
      * STRING stores any length, but Doris rejects a STRING column in every key position (UNIQUE
-     * KEY, DUPLICATE KEY, the hash distribution). A key column therefore degrades to
-     * {@code VARCHAR(65533)}, the widest key-legal form. The realistic STRING keys are MySQL
-     * ENUM/SET columns — whose short label values the VARCHAR holds exactly; TEXT/JSON cannot be
-     * MySQL keys at all — plus a long CHAR or an overflowing VARCHAR on a key, where the capacity
-     * beats having no key-legal type at all.
+     * KEY, DUPLICATE KEY, the hash distribution). A key column therefore degrades to {@code
+     * VARCHAR(65533)}, the widest key-legal form. The realistic STRING keys are MySQL ENUM/SET
+     * columns — whose short label values the VARCHAR holds exactly; TEXT/JSON cannot be MySQL keys
+     * at all — plus a long CHAR or an overflowing VARCHAR on a key, where the capacity beats having
+     * no key-legal type at all.
      */
     private static String stringOrKeyVarchar(boolean isKey) {
         return isKey ? "VARCHAR(" + DORIS_VARCHAR_MAX_BYTES + ")" : "STRING";

@@ -61,10 +61,10 @@ import java.util.Set;
  *       boolean)} table loop fills the ENUM/SET label lists — from the TYPE_NAME itself when it
  *       carries the values (some drivers report {@code enum('a','b','c')}), otherwise from {@code
  *       information_schema.COLUMNS}'s COLUMN_TYPE (MySQL Connector/J 8.0.x and TiDB report the
- *       TYPE_NAME bare, "ENUM"/"SET"). Without the labels, TiCDC's numeric ENUM index / SET
- *       bitmask cannot be mapped back to their text (see {@code
- *       KafkaJsonValueConverter#convert}); later value changes keep the labels fresh through
- *       the schema-change path, whose DDL text carries the whole new list.
+ *       TYPE_NAME bare, "ENUM"/"SET"). Without the labels, TiCDC's numeric ENUM index / SET bitmask
+ *       cannot be mapped back to their text (see {@code KafkaJsonValueConverter#convert}); later
+ *       value changes keep the labels fresh through the schema-change path, whose DDL text carries
+ *       the whole new list.
  * </ul>
  *
  * <p>The column read also skips the {@code COLUMN_DEF} default value: {@link
@@ -282,12 +282,11 @@ public class KafkaJsonJdbcConnection extends JdbcConnection {
     /**
      * Fills the ENUM/SET label lists of the columns.
      *
-     * <p>Some drivers report the TYPE_NAME with the values ("enum('a','b','c')") — those are
-     * parsed from the type name itself, in memory and without any query. MySQL Connector/J
-     * 8.0.x (verified live against a real MySQL) and TiDB report the bare
-     * "ENUM"/"SET" type names (no values in the metadata); those fall back to a single {@code
-     * information_schema.COLUMNS} query per table; tables without ENUM/SET columns never query
-     * at all.
+     * <p>Some drivers report the TYPE_NAME with the values ("enum('a','b','c')") — those are parsed
+     * from the type name itself, in memory and without any query. MySQL Connector/J 8.0.x (verified
+     * live against a real MySQL) and TiDB report the bare "ENUM"/"SET" type names (no values in the
+     * metadata); those fall back to a single {@code information_schema.COLUMNS} query per table;
+     * tables without ENUM/SET columns never query at all.
      */
     private List<Column> fillEnumAndSetLabels(List<Column> columns, TableId tableId)
             throws SQLException {
@@ -355,9 +354,9 @@ public class KafkaJsonJdbcConnection extends JdbcConnection {
     /**
      * Reads the table names like the base implementation but drops the tables that have neither a
      * primary key nor a unique key: a unique-key-only table is promoted to key semantics by {@code
-     * KafkaJsonSchema#readTableSchema} (TiDB/TiCDC keys its tables on a unique index), so it
-     * chunks and backfills fine, while a table with no key at all cannot. A dropped table is
-     * never captured — no schema, no sink table, no data for it.
+     * KafkaJsonSchema#readTableSchema} (TiDB/TiCDC keys its tables on a unique index), so it chunks
+     * and backfills fine, while a table with no key at all cannot. A dropped table is never
+     * captured — no schema, no sink table, no data for it.
      */
     @Override
     public Set<TableId> readTableNames(
@@ -398,7 +397,9 @@ public class KafkaJsonJdbcConnection extends JdbcConnection {
         return result;
     }
 
-    /** Returns the upper-cased table names of {@code database} that have a primary or unique key. */
+    /**
+     * Returns the upper-cased table names of {@code database} that have a primary or unique key.
+     */
     private Set<String> queryTableNamesWithKeyConstraint(String database) throws SQLException {
         String query =
                 "SELECT DISTINCT TABLE_NAME FROM information_schema.TABLE_CONSTRAINTS "

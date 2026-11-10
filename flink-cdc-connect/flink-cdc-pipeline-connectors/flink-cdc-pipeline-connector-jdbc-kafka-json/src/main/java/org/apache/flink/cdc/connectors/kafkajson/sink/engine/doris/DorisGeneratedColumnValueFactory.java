@@ -40,9 +40,9 @@ import java.util.function.Function;
  *       </ul>
  *   <li><b>Custom</b> — a fully-qualified class name implementing {@code
  *       java.util.function.Function<Long, Object>}. The class must have a public no-arg
- *       constructor. The input is {@code null}; the return value is put into the row map.
- *       This lets users plug in any value source (a business timestamp, an ID sequence, a
- *       lookup, …) without touching the connector.
+ *       constructor. The input is {@code null}; the return value is put into the row map. This lets
+ *       users plug in any value source (a business timestamp, an ID sequence, a lookup, …) without
+ *       touching the connector.
  * </ul>
  */
 public class DorisGeneratedColumnValueFactory {
@@ -56,11 +56,11 @@ public class DorisGeneratedColumnValueFactory {
     private DorisGeneratedColumnValueFactory() {}
 
     /**
-     * Fills the generated column on every row of a drained batch. Called at flush time — before
-     * the rows leave the writer's buffer and reach Doris — so every send path (timer, buffer
-     * full, FlushEvent, close, TwoPhase's landBatch) is covered. All rows of a batch share one
-     * generator call (one timestamp for the batch); rows whose map already carries the column
-     * (the source provided it, or a per-row injection already ran) keep their existing value.
+     * Fills the generated column on every row of a drained batch. Called at flush time — before the
+     * rows leave the writer's buffer and reach Doris — so every send path (timer, buffer full,
+     * FlushEvent, close, TwoPhase's landBatch) is covered. All rows of a batch share one generator
+     * call (one timestamp for the batch); rows whose map already carries the column (the source
+     * provided it, or a per-row injection already ran) keep their existing value.
      *
      * @param rows the drained batch, mutated in place
      * @param columnName the generated column name, or {@code null} to no-op
@@ -80,8 +80,8 @@ public class DorisGeneratedColumnValueFactory {
     }
 
     /**
-     * Creates the value generator, or {@code null} when the generated column is not configured
-     * (no column name), so the writers can skip the put entirely.
+     * Creates the value generator, or {@code null} when the generated column is not configured (no
+     * column name), so the writers can skip the put entirely.
      */
     public static Function<Long, Object> create(DorisDataSinkOptions options) {
         String columnName = options.getGeneratedColumnName();
@@ -93,9 +93,7 @@ public class DorisGeneratedColumnValueFactory {
         return create(function, type);
     }
 
-    /**
-     * Creates the value generator from the function name and column type. Visible for tests.
-     */
+    /** Creates the value generator from the function name and column type. Visible for tests. */
     static Function<Long, Object> create(String function, String columnType) {
         String fn = function == null ? "" : function.trim();
 

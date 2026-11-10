@@ -73,7 +73,8 @@ class KafkaJsonTypeUtilsTest {
         // BOOLEAN getter's non-zero test). Only a real bit(1) stays BOOLEAN.
         assertEquals("TINYINT", KafkaJsonTypeUtils.fromDbzColumn(column("TINYINT", 1)).toString());
         assertEquals(
-                "SMALLINT", KafkaJsonTypeUtils.fromDbzColumn(column("TINYINT UNSIGNED", 1)).toString());
+                "SMALLINT",
+                KafkaJsonTypeUtils.fromDbzColumn(column("TINYINT UNSIGNED", 1)).toString());
     }
 
     @Test

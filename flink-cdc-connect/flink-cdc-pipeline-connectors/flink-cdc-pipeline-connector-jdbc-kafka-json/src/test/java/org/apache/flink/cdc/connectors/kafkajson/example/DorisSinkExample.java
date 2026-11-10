@@ -97,9 +97,10 @@ public class DorisSinkExample {
                         .eventTime(KafkaJsonSourceOptions.EventTime.ES)
                         .scanNewlyAddedTableEnabled(true)
                         .includeSchemaChanges(true)
-//                        .kafkaBootstrapServers(e2e.getString("kafka.servers"))
-//                        .kafkaGroupId(e2e.getString("kafka.group"))
-//                        .kafkaTopics(e2e.getString("kafka.topic"))
+                        //
+                        // .kafkaBootstrapServers(e2e.getString("kafka.servers"))
+                        //                        .kafkaGroupId(e2e.getString("kafka.group"))
+                        //                        .kafkaTopics(e2e.getString("kafka.topic"))
                         .startupOptions(StartupOptions.snapshot())
                         .serverTimeZone("Asia/Shanghai");
         // Consume what the source reads with:
@@ -130,7 +131,9 @@ public class DorisSinkExample {
                     String namespace = databaseAndTableNameReplace(tableId.getNamespace());
                     String schemaName = databaseAndTableNameReplace(tableId.getSchemaName());
                     String tableName = databaseAndTableNameReplace(tableId.getTableName());
-                    return Joiner.on("_").skipNulls().join("ods", namespace, schemaName, tableName, "realtime");
+                    return Joiner.on("_")
+                            .skipNulls()
+                            .join("ods", namespace, schemaName, tableName, "realtime");
                 });
         dorisDataSinkOptions.withDatabaseMapping((tableId) -> e2e.getString("doris.database"));
 

@@ -460,7 +460,8 @@ public class KafkaJsonSchemaOperator extends AbstractStreamOperator<Event>
                 NonceUtils.generateNonce(
                         getCurrentTimestamp(), subTaskId, tableId, schemaChangeEvent);
 
-        LOG.debug("{}> Sending the FlushEvent for table {} (nonce: {}).", subTaskId, tableId, nonce);
+        LOG.debug(
+                "{}> Sending the FlushEvent for table {} (nonce: {}).", subTaskId, tableId, nonce);
         output.collect(new StreamRecord<>(new FlushEvent(tableId, nonce)));
 
         // The request will block if another schema change event is being handled

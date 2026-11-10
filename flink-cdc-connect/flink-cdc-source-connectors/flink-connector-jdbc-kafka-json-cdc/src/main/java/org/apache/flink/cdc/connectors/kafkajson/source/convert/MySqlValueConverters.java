@@ -72,13 +72,12 @@ import java.util.regex.Pattern;
  *
  * <p>Line 485 & 499: add method to convert FLOAT value.
  *
- * <p>Line 466-510: parse integral String values losslessly ({@code Long.parseLong} with a
- * {@link BigDecimal} fallback) instead of {@code Math.round(Double.parseDouble(...))}. The
- * double round-trip cannot represent values beyond 2^53, so 18-digit snowflake ids delivered as
- * canal row text were silently rounded to the nearest representable double (the 64-multiple
- * grid at 2^58). In Debezium the String branch only ever sees DDL default literals, which are
- * tiny; this connector feeds canal row values (all Strings) into the same converters, so the
- * parsing must be exact.
+ * <p>Line 466-510: parse integral String values losslessly ({@code Long.parseLong} with a {@link
+ * BigDecimal} fallback) instead of {@code Math.round(Double.parseDouble(...))}. The double
+ * round-trip cannot represent values beyond 2^53, so 18-digit snowflake ids delivered as canal row
+ * text were silently rounded to the nearest representable double (the 64-multiple grid at 2^58). In
+ * Debezium the String branch only ever sees DDL default literals, which are tiny; this connector
+ * feeds canal row values (all Strings) into the same converters, so the parsing must be exact.
  */
 @Immutable
 public class MySqlValueConverters extends JdbcValueConverters {
@@ -505,23 +504,22 @@ public class MySqlValueConverters extends JdbcValueConverters {
 
     /**
      * Parses the textual form of an integral column value losslessly. An integer literal goes
-     * through {@link Long#parseLong(String)}; MySQL also permits decimal literals as default
-     * values of integer columns, and those round through {@link BigDecimal}. The value never
-     * passes through {@code double}: its 52-bit significand cannot represent values beyond
-     * 2^53, so {@code Math.round(Double.parseDouble(...))} silently corrupted snowflake-style
-     * ids (18 digits) to the nearest representable double — the 64-multiple grid at 2^58.
+     * through {@link Long#parseLong(String)}; MySQL also permits decimal literals as default values
+     * of integer columns, and those round through {@link BigDecimal}. The value never passes
+     * through {@code double}: its 52-bit significand cannot represent values beyond 2^53, so {@code
+     * Math.round(Double.parseDouble(...))} silently corrupted snowflake-style ids (18 digits) to
+     * the nearest representable double — the 64-multiple grid at 2^58.
      *
-     * <p>Whether the literal is integral is decided by a character scan up front, so the
-     * decimal fallback is not exception-driven control flow: {@code Long.parseLong} throwing
-     * on well-formed input is reserved for the genuinely exceptional overflow, and a decimal
-     * takes its path without paying for a {@link NumberFormatException} first.
+     * <p>Whether the literal is integral is decided by a character scan up front, so the decimal
+     * fallback is not exception-driven control flow: {@code Long.parseLong} throwing on well-formed
+     * input is reserved for the genuinely exceptional overflow, and a decimal takes its path
+     * without paying for a {@link NumberFormatException} first.
      *
-     * <p>Values that are neither integral nor decimal literals, and values that overflow a
-     * signed long, fail with a {@link ConnectException} instead of being silently rounded or
-     * saturated.
+     * <p>Values that are neither integral nor decimal literals, and values that overflow a signed
+     * long, fail with a {@link ConnectException} instead of being silently rounded or saturated.
      *
-     * @param value the textual value, never null — the callers reach this method only behind
-     *     an {@code instanceof String} check or an explicit null guard
+     * @param value the textual value, never null — the callers reach this method only behind an
+     *     {@code instanceof String} check or an explicit null guard
      */
     static Long parseIntegralText(Column column, String value) {
         Objects.requireNonNull(value, "value");
@@ -532,8 +530,12 @@ public class MySqlValueConverters extends JdbcValueConverters {
             } catch (NumberFormatException overflow) {
                 // integral, but beyond Long.MAX_VALUE / below Long.MIN_VALUE
                 throw new ConnectException(
-                        "Value '" + value + "' for column " + column.name()
-                                + " overflows a signed long", overflow);
+                        "Value '"
+                                + value
+                                + "' for column "
+                                + column.name()
+                                + " overflows a signed long",
+                        overflow);
             }
         }
         try {
@@ -546,9 +548,9 @@ public class MySqlValueConverters extends JdbcValueConverters {
     }
 
     /**
-     * Returns whether the text has the integral shape {@link Long#parseLong(String)} accepts —
-     * an optional sign followed by nothing but digits — so that decimals ({@code 3.5}, {@code
-     * 1e3}) and garbage take the decimal/error path without an exception round-trip.
+     * Returns whether the text has the integral shape {@link Long#parseLong(String)} accepts — an
+     * optional sign followed by nothing but digits — so that decimals ({@code 3.5}, {@code 1e3})
+     * and garbage take the decimal/error path without an exception round-trip.
      */
     private static boolean isIntegralLiteral(String text) {
         int start = 0;

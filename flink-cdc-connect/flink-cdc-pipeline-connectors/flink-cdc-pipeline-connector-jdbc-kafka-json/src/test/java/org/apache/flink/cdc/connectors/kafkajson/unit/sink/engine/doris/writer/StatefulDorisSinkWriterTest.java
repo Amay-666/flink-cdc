@@ -218,8 +218,7 @@ public class StatefulDorisSinkWriterTest {
                             .primaryKey("id")
                             .build();
             BinaryRecordDataGenerator generator =
-                    new BinaryRecordDataGenerator(
-                            RowType.of(DataTypes.INT(), DataTypes.STRING()));
+                    new BinaryRecordDataGenerator(RowType.of(DataTypes.INT(), DataTypes.STRING()));
             // Three rows of roughly 430 serialized bytes each under a 1000-byte cap: the first
             // two form one chunk, the third its own.
             String payload = new String(new char[400]).replace('\0', 'x');
@@ -306,9 +305,7 @@ public class StatefulDorisSinkWriterTest {
     }
 
     private static StatefulDorisSinkWriter writer(
-            MockDorisServer server,
-            FakeInitContext initContext,
-            Consumer<Configuration> tune)
+            MockDorisServer server, FakeInitContext initContext, Consumer<Configuration> tune)
             throws IOException {
         DorisDataSinkOptions options = DorisSinkFixtures.options(server, tune);
         StatefulDorisSink sink = new StatefulDorisSink(options, DorisSinkFixtures.ZONE);

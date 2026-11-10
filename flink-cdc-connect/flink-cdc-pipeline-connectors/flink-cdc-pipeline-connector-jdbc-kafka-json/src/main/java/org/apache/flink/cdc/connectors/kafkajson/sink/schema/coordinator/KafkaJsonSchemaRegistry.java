@@ -100,7 +100,7 @@ public class KafkaJsonSchemaRegistry implements OperatorCoordinator, Coordinatio
 
     private final SchemaChangeBehavior schemaChangeBehavior;
 
-    /** Schema Operator's current parallelism.*/
+    /** Schema Operator's current parallelism. */
     private int currentParallelism;
 
     public KafkaJsonSchemaRegistry(

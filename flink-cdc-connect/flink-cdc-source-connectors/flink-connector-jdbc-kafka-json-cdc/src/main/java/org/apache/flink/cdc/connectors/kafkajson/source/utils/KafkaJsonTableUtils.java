@@ -273,8 +273,8 @@ public class KafkaJsonTableUtils {
     /**
      * The byte limit of the TEXT/BLOB flavor families, matching what the JDBC driver reports in
      * {@code COLUMN_SIZE}: {@code tinytext}/{@code tinyblob} 2^8-1, {@code text}/{@code blob}
-     * 2^16-1, {@code mediumtext}/{@code mediumblob} 2^24-1 and {@code longtext}/{@code
-     * longblob} 2^32-1.
+     * 2^16-1, {@code mediumtext}/{@code mediumblob} 2^24-1 and {@code longtext}/{@code longblob}
+     * 2^32-1.
      */
     private static int textBlobLength(String base) {
         switch (base) {

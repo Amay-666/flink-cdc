@@ -29,24 +29,24 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Write metrics of the {@link DorisSinkWriter}, registered under the {@code doris} scope group of
  * the sink operator: {@code doris.writeRows}, {@code doris.writeBytes}, {@code
  * doris.streamLoadCount}, {@code doris.streamLoadFailed}, {@code doris.flushCount}, {@code
- * doris.loadedRows}, {@code doris.filteredRows} and the live {@code doris.bufferedRows} gauge.
- * They let a pipeline operator profile StreamLoad throughput and buffering behaviour without
- * parsing the task logs.
+ * doris.loadedRows}, {@code doris.filteredRows} and the live {@code doris.bufferedRows} gauge. They
+ * let a pipeline operator profile StreamLoad throughput and buffering behaviour without parsing the
+ * task logs.
  *
  * <p>{@code loadedRows}/{@code filteredRows} carry Doris's own per-load accounting ({@code
  * NumberLoadedRows}/{@code NumberFilteredRows} from the load responses, reported by the HTTP
  * client). With the default {@code max_filter_ratio=0} a filtered row fails the whole load, but a
- * ratio configured above zero lets Doris drop rows under a {@code Status: Success} — these
- * counters are what makes that visible: a sink whose {@code writeRows} grows while {@code
- * loadedRows} does not follow is losing rows on the Doris side.
+ * ratio configured above zero lets Doris drop rows under a {@code Status: Success} — these counters
+ * are what makes that visible: a sink whose {@code writeRows} grows while {@code loadedRows} does
+ * not follow is losing rows on the Doris side.
  *
- * <p>When Group Commit is enabled ({@code groupCommitMode != off}) two more counters appear:
- * {@code doris.groupCommitLoads} and {@code doris.groupCommitFallbackLoads}, fed from the {@code
+ * <p>When Group Commit is enabled ({@code groupCommitMode != off}) two more counters appear: {@code
+ * doris.groupCommitLoads} and {@code doris.groupCommitFallbackLoads}, fed from the {@code
  * GroupCommit} field of each load response — Doris's own answer to "was this batch really group
- * committed". A {@code groupCommitFallbackLoads} that grows means Doris silently degraded loads
- * to normal mode (missing sequence column, heavy schema change, WAL space insufficient for
- * async_mode, ...), the same condition the HTTP client logs as a WARN. With Group Commit off the
- * pair is not registered at all, so the metric tree says nothing it cannot back up.
+ * committed". A {@code groupCommitFallbackLoads} that grows means Doris silently degraded loads to
+ * normal mode (missing sequence column, heavy schema change, WAL space insufficient for async_mode,
+ * ...), the same condition the HTTP client logs as a WARN. With Group Commit off the pair is not
+ * registered at all, so the metric tree says nothing it cannot back up.
  *
  * <p>A {@code null} {@link MetricGroup} (e.g. the hand-stubbed {@code InitContext} of unit tests)
  * disables the metrics: every {@code record*}/{@code set*} call becomes a no-op.
@@ -141,9 +141,9 @@ public class DorisWriteMetrics {
     }
 
     /**
-     * Records the rows Doris reported as filtered by a committed load ({@code
-     * NumberFilteredRows}). Only possible with a {@code max_filter_ratio} above zero, but
-     * whatever the cause, a non-zero counter is a silent data loss in progress.
+     * Records the rows Doris reported as filtered by a committed load ({@code NumberFilteredRows}).
+     * Only possible with a {@code max_filter_ratio} above zero, but whatever the cause, a non-zero
+     * counter is a silent data loss in progress.
      */
     public void addFilteredRows(long rows) {
         if (filteredRows != null && rows > 0) {
@@ -152,11 +152,11 @@ public class DorisWriteMetrics {
     }
 
     /**
-     * Records the {@code GroupCommit} flag of a committed Group-Commit load response: whether
-     * Doris really applied group commit to the batch. A {@code false} is the silent fallback the
-     * HTTP client also logs as a WARN; a growing {@code groupCommitFallbackLoads} next to a flat
-     * {@code groupCommitLoads} shows the degradation rate on a dashboard. No-op unless Group
-     * Commit was enabled when the metrics were built.
+     * Records the {@code GroupCommit} flag of a committed Group-Commit load response: whether Doris
+     * really applied group commit to the batch. A {@code false} is the silent fallback the HTTP
+     * client also logs as a WARN; a growing {@code groupCommitFallbackLoads} next to a flat {@code
+     * groupCommitLoads} shows the degradation rate on a dashboard. No-op unless Group Commit was
+     * enabled when the metrics were built.
      */
     public void recordGroupCommitLoad(boolean groupCommitUsed) {
         if (groupCommitLoads != null && groupCommitFallbackLoads != null) {

@@ -84,7 +84,9 @@ class MySqlValueConvertersTest {
         ConnectException overflow =
                 assertThrows(
                         ConnectException.class,
-                        () -> MySqlValueConverters.parseIntegralText(column(), "9223372036854775808"));
+                        () ->
+                                MySqlValueConverters.parseIntegralText(
+                                        column(), "9223372036854775808"));
         assertEquals(
                 "Value '9223372036854775808' for column c overflows a signed long",
                 overflow.getMessage());
@@ -105,7 +107,8 @@ class MySqlValueConvertersTest {
         assertThrows(
                 ConnectException.class, () -> MySqlValueConverters.parseIntegralText(column(), ""));
         assertThrows(
-                ConnectException.class, () -> MySqlValueConverters.parseIntegralText(column(), "+"));
+                ConnectException.class,
+                () -> MySqlValueConverters.parseIntegralText(column(), "+"));
         assertThrows(
                 ConnectException.class,
                 () -> MySqlValueConverters.parseIntegralText(column(), "12 3"));

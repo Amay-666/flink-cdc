@@ -184,11 +184,11 @@ class KafkaJsonRecordFactoryTest {
     }
 
     /**
-     * Regression test for the canal-text double rounding: a snowflake id beyond 2^53 must
-     * survive {@code canalRowData -> createRecord} exactly, in both the key struct and the
-     * after image. {@code Math.round(Double.parseDouble("332805230706017666"))} is
-     * 332805230706017664 — the nearest representable double at 2^58 — which corrupted the
-     * primary key and let distinct source rows collide onto one Doris unique-key row.
+     * Regression test for the canal-text double rounding: a snowflake id beyond 2^53 must survive
+     * {@code canalRowData -> createRecord} exactly, in both the key struct and the after image.
+     * {@code Math.round(Double.parseDouble("332805230706017666"))} is 332805230706017664 — the
+     * nearest representable double at 2^58 — which corrupted the primary key and let distinct
+     * source rows collide onto one Doris unique-key row.
      */
     @Test
     void testSnowflakeIdSurvivesCanalTextConversionExactly() {
@@ -217,10 +217,10 @@ class KafkaJsonRecordFactoryTest {
 
     /**
      * Regression test for the tinyint(1) booleanization: a tinyint(1) column legally holds
-     * -128..127 (0..255 unsigned). The record layer keeps the number (the Connect schema is
-     * INT16 — the slot below holds {@code 2}), and the sink-side type must stay numeric too:
-     * with BOOLEAN, {@code DorisRowConverter} read the record's SMALLINT slot through the
-     * BOOLEAN getter's non-zero test and collapsed 2/3/100 to 1.
+     * -128..127 (0..255 unsigned). The record layer keeps the number (the Connect schema is INT16 —
+     * the slot below holds {@code 2}), and the sink-side type must stay numeric too: with BOOLEAN,
+     * {@code DorisRowConverter} read the record's SMALLINT slot through the BOOLEAN getter's
+     * non-zero test and collapsed 2/3/100 to 1.
      */
     @Test
     void testTinyIntOneKeepsValuesAboveOne() {
@@ -242,19 +242,19 @@ class KafkaJsonRecordFactoryTest {
                         100L);
 
         // the record layer carries the number ...
-        assertEquals(
-                (short) 2, ((Struct) record.value()).getStruct("after").getInt16("enabled"));
+        assertEquals((short) 2, ((Struct) record.value()).getStruct("after").getInt16("enabled"));
         // ... and the sink-side type (what DorisRowConverter builds its getter from) is
         // numeric, so the value reaches Doris as 2, not a boolean true
         assertEquals(
-                "TINYINT", KafkaJsonTypeUtils.fromDbzColumn(table.columnWithName("enabled")).toString());
+                "TINYINT",
+                KafkaJsonTypeUtils.fromDbzColumn(table.columnWithName("enabled")).toString());
     }
 
     /**
      * BIGINT UNSIGNED never rides the signed {@code parseIntegralText} path: the canal text is
      * passed through as a String and {@code convertUnsignedBigint} parses it through {@code
-     * BigDecimal}, so the full [0, 2^64-1] range survives exactly — including values a signed
-     * long cannot hold, which {@code Long.parseLong} would reject.
+     * BigDecimal}, so the full [0, 2^64-1] range survives exactly — including values a signed long
+     * cannot hold, which {@code Long.parseLong} would reject.
      */
     @Test
     void testUnsignedBigintFullRangeSurvivesCanalText() {
@@ -268,8 +268,7 @@ class KafkaJsonRecordFactoryTest {
                         .create();
         factory.registerTable(table);
         Object[] data =
-                factory.canalRowData(
-                        table, Collections.singletonMap("id", "18446744073709551615"));
+                factory.canalRowData(table, Collections.singletonMap("id", "18446744073709551615"));
 
         SourceRecord record =
                 factory.createRecord(
@@ -287,8 +286,7 @@ class KafkaJsonRecordFactoryTest {
         assertEquals("18446744073709551615", String.valueOf(((Struct) record.key()).get("id")));
         Struct value = (Struct) record.value();
         assertEquals("c", value.getString("op"));
-        assertEquals(
-                "18446744073709551615", String.valueOf(value.getStruct("after").get("id")));
+        assertEquals("18446744073709551615", String.valueOf(value.getStruct("after").get("id")));
     }
 
     @Test

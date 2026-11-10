@@ -353,8 +353,7 @@ class KafkaJsonScanFetchTaskTest {
     }
 
     private static KafkaJsonSourceConfig config() {
-        return configWithFetchSize(
-                SourceOptions.SCAN_SNAPSHOT_FETCH_SIZE.defaultValue());
+        return configWithFetchSize(SourceOptions.SCAN_SNAPSHOT_FETCH_SIZE.defaultValue());
     }
 
     /** Like {@link #config()} with an explicit {@code scan.snapshot.fetch.size}. */
@@ -433,8 +432,8 @@ class KafkaJsonScanFetchTaskTest {
      * Builds a {@link JdbcConnection} whose {@link Connection}/{@link PreparedStatement}/{@link
      * ResultSet} are faked with {@link Proxy} handlers: {@code prepareStatement} records the SQL in
      * {@code sqlLog}, {@code setObject} records its arguments in {@code setObjectArgs}, {@code
-     * setFetchSize} records its argument in {@code fetchSizeLog}, and {@code executeQuery}
-     * iterates over {@code rows}.
+     * setFetchSize} records its argument in {@code fetchSizeLog}, and {@code executeQuery} iterates
+     * over {@code rows}.
      */
     private static JdbcConnection fakeJdbc(
             List<Object[]> rows, List<String> sqlLog, List<Object[]> setObjectArgs) {

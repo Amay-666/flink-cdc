@@ -53,11 +53,11 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li>signed integers ({@code TINYINT/SMALLINT/INT/MEDIUMINT/BIGINT}) are parsed to a {@link
  *       Long} here — the way Debezium's binlog decoder delivers row values — because the value
- *       converters' {@code String} branches (see {@link MySqlValueConverters#convertBigInt})
- *       exist only for DDL default literals and round through {@code double}, which corrupts
- *       values beyond 2^53 (snowflake-style ids) to the nearest representable double;
- *   <li>decimals, float/doubles, strings, JSON, ENUM, SET and YEAR accept the plain {@code
- *       String} and are returned unchanged;
+ *       converters' {@code String} branches (see {@link MySqlValueConverters#convertBigInt}) exist
+ *       only for DDL default literals and round through {@code double}, which corrupts values
+ *       beyond 2^53 (snowflake-style ids) to the nearest representable double;
+ *   <li>decimals, float/doubles, strings, JSON, ENUM, SET and YEAR accept the plain {@code String}
+ *       and are returned unchanged;
  *   <li>{@code TINYINT/SMALLINT/MEDIUMINT/INT UNSIGNED} require a {@link Number};
  *   <li>{@code BOOLEAN}/{@code BIT(1)} (whose converter has no {@code String} branch) require a
  *       {@link Number} or {@link Boolean};
@@ -114,7 +114,8 @@ public class KafkaJsonValueConverter {
                 return toNumber(value, column);
             case java.sql.Types.TINYINT: // MySQL TINYINT
             case java.sql.Types.SMALLINT: // MySQL SMALLINT
-            case java.sql.Types.INTEGER: // MySQL INT / MEDIUMINT (JDBC reports MEDIUMINT as INTEGER)
+            case java.sql.Types
+                    .INTEGER: // MySQL INT / MEDIUMINT (JDBC reports MEDIUMINT as INTEGER)
             case java.sql.Types.BIGINT: // MySQL BIGINT
                 if (KafkaJsonTableUtils.isUnsigned(typeName)) {
                     // Unsigned columns keep the trailing handling: their converters expect a

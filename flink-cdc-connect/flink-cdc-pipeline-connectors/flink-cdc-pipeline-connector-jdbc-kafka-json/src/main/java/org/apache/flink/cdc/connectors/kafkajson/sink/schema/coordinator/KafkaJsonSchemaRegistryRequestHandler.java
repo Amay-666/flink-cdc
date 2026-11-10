@@ -60,11 +60,11 @@ import static org.apache.flink.cdc.runtime.operators.schema.event.CoordinationRe
  * A handler to deal with all requests and events for {@link KafkaJsonSchemaRegistry}.
  *
  * <p>State machine: {@code IDLE -> APPLYING -> FINISHED -> IDLE}. A request is accepted only when
- * the registry is idle and every registered sink writer has flushed for the request's nonce —
- * flush events are broadcast before the request is sent, so the acknowledgements and the
- * operator's request poll race benignly against each other. Requests that lose that race receive
- * {@code BUSY} and are retried by the operator (they are not queued here); duplicate and ignored
- * requests are answered without a round at all.
+ * the registry is idle and every registered sink writer has flushed for the request's nonce — flush
+ * events are broadcast before the request is sent, so the acknowledgements and the operator's
+ * request poll race benignly against each other. Requests that lose that race receive {@code BUSY}
+ * and are retried by the operator (they are not queued here); duplicate and ignored requests are
+ * answered without a round at all.
  *
  * <p>Threading model — why {@link KafkaJsonSchemaManager} needs no lock: the handler state and the
  * schema history are owned by the coordinator event loop, the single-threaded executor given as
@@ -73,8 +73,8 @@ import static org.apache.flink.cdc.runtime.operators.schema.event.CoordinationRe
  * posted back to the event loop, which alone applies them to the schema manager ({@link
  * #commitSchemaChangeResults}) and flips the state to {@code FINISHED}. Schema queries and
  * checkpoint serialization also run on the event loop, so no two threads ever touch the
- * unsynchronized {@code HashMap}s inside the schema manager — a slow Doris DDL can no longer race
- * a concurrent read.
+ * unsynchronized {@code HashMap}s inside the schema manager — a slow Doris DDL can no longer race a
+ * concurrent read.
  *
  * <p>Two deviations keep the connector's custom events safe: the derivation is a pure pass-through
  * (no {@code lenientize} switch on {@code getType()}), and the DDL loop gates on {@code instanceof
@@ -241,7 +241,8 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
                 // It is kept because the released SchemaOperator is the other side of this protocol
                 // and does handle SchemaChangeResponse.ignored().
                 if (derivedSchemaChangeEvents.isEmpty()) {
-                    LOG.debug("Event {} is omitted from sending to downstream, ignoring it.", event);
+                    LOG.debug(
+                            "Event {} is omitted from sending to downstream, ignoring it.", event);
                     clearCurrentSchemaChangeRequest(nonce);
                     LOG.debug(
                             "SchemaChangeStatus is still IDLE for request {} due to ignored request.",
@@ -283,10 +284,10 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
 
     /**
      * Runs the DDL statements of an accepted schema change round on the DDL thread. This method
-     * only talks to the external system: the schema manager and the handler state are owned by
-     * the coordinator event loop and are updated by {@link #commitSchemaChangeResults} once this
-     * method returns, so a slow DDL (a Doris asynchronous schema change can take minutes) cannot
-     * overlap a schema read or a checkpoint serialization.
+     * only talks to the external system: the schema manager and the handler state are owned by the
+     * coordinator event loop and are updated by {@link #commitSchemaChangeResults} once this method
+     * returns, so a slow DDL (a Doris asynchronous schema change can take minutes) cannot overlap a
+     * schema read or a checkpoint serialization.
      *
      * @param tableId the table the schema changes apply to
      * @param derivedSchemaChangeEvents the schema changes to apply, in order
@@ -394,11 +395,11 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
     }
 
     /**
-     * Resolves, for every {@link AlterColumnTypeEvent} of a round, the evolved schema as it
-     * stands before that event applies — the {@code oldSchema} an {@link
-     * OldSchemaAwareMetadataApplier} needs. Must run on the coordinator event loop before the
-     * DDL task is submitted: the history is only mutated on that thread, and this round's own
-     * mutations happen at commit time, so the latest version read here is the "before" state.
+     * Resolves, for every {@link AlterColumnTypeEvent} of a round, the evolved schema as it stands
+     * before that event applies — the {@code oldSchema} an {@link OldSchemaAwareMetadataApplier}
+     * needs. Must run on the coordinator event loop before the DDL task is submitted: the history
+     * is only mutated on that thread, and this round's own mutations happen at commit time, so the
+     * latest version read here is the "before" state.
      *
      * <p>The pass-through derivation yields at most one event per round (or a batch of creates,
      * which never alters), so the simulation below — letting a hypothetical second alter of the

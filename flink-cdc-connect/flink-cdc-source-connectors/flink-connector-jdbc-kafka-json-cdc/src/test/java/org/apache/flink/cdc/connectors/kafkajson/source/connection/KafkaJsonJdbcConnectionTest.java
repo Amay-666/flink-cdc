@@ -223,8 +223,8 @@ class KafkaJsonJdbcConnectionTest {
     /**
      * Builds the {@link Connection} behind the constraints query of {@link
      * KafkaJsonJdbcConnection#readTableNames}: {@code getMetaData().getTables(...)} answers the
-     * three-column table rows, {@code prepareStatement(...)} answers the single-column
-     * primary-key rows and records the SQL.
+     * three-column table rows, {@code prepareStatement(...)} answers the single-column primary-key
+     * rows and records the SQL.
      */
     private static Connection mockConnection(
             List<String> sqlLog,
@@ -243,7 +243,8 @@ class KafkaJsonJdbcConnectionTest {
                                             return tableRowIndex.incrementAndGet()
                                                     < tableRows.size();
                                         case "getString":
-                                            return tableRows.get(tableRowIndex.get())[
+                                            return tableRows
+                                                    .get(tableRowIndex.get())[
                                                     (Integer) args[0] - 1];
                                         default:
                                             return defaultValue(method.getReturnType());
