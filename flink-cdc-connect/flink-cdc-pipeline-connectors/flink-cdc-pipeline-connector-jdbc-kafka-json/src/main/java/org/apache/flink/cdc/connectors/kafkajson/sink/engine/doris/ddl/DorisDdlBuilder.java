@@ -119,23 +119,13 @@ public class DorisDdlBuilder implements Serializable {
         String distributeKey = firstPhysicalColumn(schema);
         Set<String> keyColumns =
                 primaryKeys.isEmpty() ? Collections.singleton(distributeKey) : pkSet;
-        List<Column> orderedColumns = new ArrayList<>();
-        for (String pk : primaryKeys) {
-            schema.getColumn(pk)
-                    .filter(Column::isPhysical) // metadata columns are virtual and have no
-                    // storage in Doris
-                    .ifPresent(orderedColumns::add);
-        }
-        for (Column column : schema.getColumns()) {
-            if (column.isPhysical() && !pkSet.contains(column.getName())) {
-                orderedColumns.add(column);
-            }
-        }
+        List<Column> orderedColumns = orderedColumns(schema);
         for (Column column : orderedColumns) {
             columns.add(
                     quote(column.getName())
                             + " "
-                            + convertDataType(column.getType(), keyColumns.contains(column.getName()))
+                            + convertDataType(
+                                    column.getType(), keyColumns.contains(column.getName()))
                             + commentSql(column.getComment()));
         }
         // Group Commit: inject a physical BIGINT sequence column for UNIQUE-model tables.
@@ -208,6 +198,67 @@ public class DorisDdlBuilder implements Serializable {
             return Arrays.asList(dropTableSql, sql.toString());
         }
         return singleton(sql.toString());
+    }
+
+    /**
+     * The column names a {@link #buildCreateTableSql} would create, including the framework's Group
+     * Commit sequence column and generated column.
+     *
+     * <p>The applier uses this to decide whether a replayed {@code CREATE TABLE} is already
+     * reflected in Doris. A plain {@code CREATE TABLE IF NOT EXISTS} is idempotent, but with {@code
+     * sink.is-drop-table-before-create} the generated SQL starts with {@code DROP TABLE IF EXISTS};
+     * replaying it would destroy the data the table already holds. Skipping the pair when the table
+     * exists with every expected column keeps the restore non-destructive.
+     */
+    public List<String> expectedColumnNames(CreateTableEvent event) {
+        Schema schema = event.getSchema();
+        List<String> names = new ArrayList<>();
+        for (Column column : orderedColumns(schema)) {
+            names.add(column.getName());
+        }
+        if (options.isGroupCommitEnabled() && !schema.primaryKeys().isEmpty()) {
+            names.add(options.getSequenceColumnName());
+        }
+        String generatedColumn = options.getGeneratedColumnName();
+        if (generatedColumn != null && !schema.getColumnNames().contains(generatedColumn)) {
+            names.add(generatedColumn);
+        }
+        return names;
+    }
+
+    /** The columns of a CREATE TABLE in emitted order: primary keys first, then the rest. */
+    private static List<Column> orderedColumns(Schema schema) {
+        List<String> primaryKeys = schema.primaryKeys();
+        Set<String> pkSet = new LinkedHashSet<>(primaryKeys);
+        List<Column> orderedColumns = new ArrayList<>();
+        for (String pk : primaryKeys) {
+            // metadata columns are virtual and have no storage in Doris
+            schema.getColumn(pk).filter(Column::isPhysical).ifPresent(orderedColumns::add);
+        }
+        for (Column column : schema.getColumns()) {
+            if (column.isPhysical() && !pkSet.contains(column.getName())) {
+                orderedColumns.add(column);
+            }
+        }
+        return orderedColumns;
+    }
+
+    /**
+     * The Doris type the builder emits for a column, key-aware. Exposed so the applier can compare
+     * a Doris column's current type with the type a {@code MODIFY COLUMN} would produce without
+     * parsing generated SQL.
+     */
+    public String dorisType(DataType type, boolean isKey) {
+        return convertDataType(type, isKey);
+    }
+
+    /**
+     * Whether the change narrows the column's capacity — exactly the changes {@link
+     * #buildAlterColumnTypeSql} skips because Doris rejects them. The applier raises a WARNING
+     * alert for such a skip.
+     */
+    public static boolean isCapacityReduction(@Nullable DataType oldType, DataType newType) {
+        return isSafeReduction(oldType, newType);
     }
 
     private String buildTableProperties(Map<String, String> tableProperties) {

@@ -17,27 +17,36 @@
 
 package org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.ddl;
 
+import org.apache.flink.cdc.common.event.AddColumnEvent;
 import org.apache.flink.cdc.common.event.AlterColumnTypeEvent;
 import org.apache.flink.cdc.common.event.CreateTableEvent;
 import org.apache.flink.cdc.common.event.TableId;
 import org.apache.flink.cdc.common.exceptions.SchemaEvolveException;
+import org.apache.flink.cdc.common.schema.Column;
 import org.apache.flink.cdc.common.schema.Schema;
 import org.apache.flink.cdc.common.types.DataTypes;
 import org.apache.flink.cdc.connectors.kafkajson.event.AlterColumnCommentEvent;
+import org.apache.flink.cdc.connectors.kafkajson.event.RenameTableEvent;
 import org.apache.flink.cdc.connectors.kafkajson.sink.KafkaJsonDataSinkOptions;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.ddl.DorisMetadataApplier;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.alert.SchemaEvolutionAlert;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.alert.SchemaEvolutionAlertHandler;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer.RecordedRequest;
 import org.apache.flink.cdc.connectors.kafkajson.unit.sink.engine.doris.http.MockDorisServer.Response;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.util.InstantiationUtil;
 
+import org.junit.Before;
 import org.junit.Test;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -48,6 +57,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class DorisMetadataApplierTest {
 
     private static final TableId ORDERS = TableId.tableId("shop", "orders");
+
+    @Before
+    public void clearAlerts() {
+        RecordingAlertHandler.ALERTS.clear();
+    }
 
     @Test
     public void testApplyCreateTable() throws Exception {
@@ -76,8 +90,8 @@ public class DorisMetadataApplierTest {
     @Test
     public void testApplyStandardAndCustomEvents() throws Exception {
         Schema schema = Schema.newBuilder().physicalColumn("id", DataTypes.INT()).build();
-        try (MockDorisServer server =
-                new MockDorisServer(req -> Response.ok("{\"code\":0,\"msg\":\"OK\"}"))) {
+        // The comment event triggers the metadata pre-check; the table has to expose the column.
+        try (MockDorisServer server = metadataServer("id|INT|KEY", "name|STRING")) {
             DorisMetadataApplier applier = applier(server);
 
             applier.applySchemaChange(new CreateTableEvent(ORDERS, schema));
@@ -85,12 +99,29 @@ public class DorisMetadataApplierTest {
                     new AlterColumnCommentEvent(
                             ORDERS, Collections.singletonMap("name", "display name")));
 
-            assertThat(server.recorded).hasSize(2);
+            // 3 requests: CREATE + SHOW FULL COLUMNS (pre-check) + comment DDL
+            assertThat(server.recorded).hasSize(3);
             assertThat(server.recorded.get(0).body).contains("CREATE TABLE IF NOT EXISTS");
-            assertThat(server.recorded.get(1).path).isEqualTo("/api/query/default_cluster/shop");
-            assertThat(server.recorded.get(1).body)
+            assertThat(server.recorded.get(1).body).contains("SHOW FULL COLUMNS");
+            assertThat(server.recorded.get(2).path).isEqualTo("/api/query/default_cluster/shop");
+            assertThat(server.recorded.get(2).body)
                     .isEqualTo(
                             "{\"stmt\":\"ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` COMMENT 'display name'\"}");
+        }
+    }
+
+    @Test
+    public void testAlterColumnCommentOnExistingCommentIsSkipped() throws Exception {
+        try (MockDorisServer server = metadataServer("id|INT|KEY", "name|STRING||display name")) {
+            DorisMetadataApplier applier = applier(server);
+
+            applier.applySchemaChange(
+                    new AlterColumnCommentEvent(
+                            ORDERS, Collections.singletonMap("name", "display name")));
+
+            // Only the pre-check query; the comment is already in place.
+            assertThat(server.recorded).hasSize(1);
+            assertThat(server.recorded.get(0).body).contains("SHOW FULL COLUMNS");
         }
     }
 
@@ -199,6 +230,328 @@ public class DorisMetadataApplierTest {
         }
     }
 
+    // ===== Pre-check: duplicates after a checkpoint restore =====
+
+    @Test
+    public void testReplayedCreateTableWithDropBeforeCreateIsSkipped() throws Exception {
+        Configuration config = new Configuration();
+        try (MockDorisServer server = metadataServer("id|INT|KEY")) {
+            config.set(DorisDataSinkOptions.FENODES, server.endpoint());
+            config.set(DorisDataSinkOptions.USERNAME, "root");
+            config.set(DorisDataSinkOptions.PASSWORD, "123456");
+            config.set(DorisDataSinkOptions.IS_DROP_TABLE_BEFORE_CREATE, true);
+            DorisMetadataApplier applier =
+                    new DorisMetadataApplier(new DorisDataSinkOptions(config));
+
+            applier.applySchemaChange(
+                    new CreateTableEvent(
+                            ORDERS,
+                            Schema.newBuilder()
+                                    .physicalColumn("id", DataTypes.INT())
+                                    .primaryKey("id")
+                                    .build()));
+
+            // Only the pre-check: replaying DROP+CREATE would discard the restored data.
+            assertThat(server.recorded).hasSize(1);
+            assertThat(server.recorded.get(0).body).contains("SHOW FULL COLUMNS");
+        }
+    }
+
+    @Test
+    public void testCreateTableWithDropBeforeCreateAppliesWhenTableIsAbsent() throws Exception {
+        Configuration config = new Configuration();
+        try (MockDorisServer server =
+                new MockDorisServer(
+                        req -> {
+                            if (req.body.contains("SHOW FULL COLUMNS")) {
+                                return Response.ok(
+                                        "{\"code\":1105,\"msg\":\"errCode = 2, detailMessage ="
+                                                + " Unknown table 'orders'\"}");
+                            }
+                            return Response.ok("{\"code\":0,\"msg\":\"OK\"}");
+                        })) {
+            config.set(DorisDataSinkOptions.FENODES, server.endpoint());
+            config.set(DorisDataSinkOptions.USERNAME, "root");
+            config.set(DorisDataSinkOptions.PASSWORD, "123456");
+            config.set(DorisDataSinkOptions.IS_DROP_TABLE_BEFORE_CREATE, true);
+            DorisMetadataApplier applier =
+                    new DorisMetadataApplier(new DorisDataSinkOptions(config));
+
+            applier.applySchemaChange(
+                    new CreateTableEvent(
+                            ORDERS,
+                            Schema.newBuilder()
+                                    .physicalColumn("id", DataTypes.INT())
+                                    .primaryKey("id")
+                                    .build()));
+
+            // SHOW FULL COLUMNS + DROP TABLE + CREATE TABLE
+            assertThat(server.recorded).hasSize(3);
+            assertThat(server.recorded.get(1).body).contains("DROP TABLE IF EXISTS");
+            assertThat(server.recorded.get(2).body).contains("CREATE TABLE IF NOT EXISTS");
+        }
+    }
+
+    @Test
+    public void testAddColumnSkipsColumnsThatAlreadyExist() throws Exception {
+        try (MockDorisServer server = metadataServer("id|INT|KEY")) {
+            DorisMetadataApplier applier = applier(server);
+
+            applier.applySchemaChange(
+                    new AddColumnEvent(
+                            ORDERS,
+                            Arrays.asList(
+                                    AddColumnEvent.last(
+                                            Column.physicalColumn("name", DataTypes.VARCHAR(100))),
+                                    AddColumnEvent.last(
+                                            Column.physicalColumn("id", DataTypes.INT())))));
+
+            // Pre-check + one DDL for `name`; the duplicate `id` never reaches Doris.
+            assertThat(server.recorded).hasSize(2);
+            assertThat(server.recorded.get(0).body).contains("SHOW FULL COLUMNS");
+            assertThat(server.recorded.get(1).body)
+                    .contains("ADD COLUMN `name`")
+                    .doesNotContain("ADD COLUMN `id`");
+        }
+    }
+
+    @Test
+    public void testDuplicateAddColumnIsSkippedWithoutAlert() throws Exception {
+        try (MockDorisServer server = metadataServer("id|INT|KEY")) {
+            DorisMetadataApplier applier = applier(server, RecordingAlertHandler.class);
+
+            applier.applySchemaChange(
+                    new AddColumnEvent(
+                            ORDERS,
+                            Collections.singletonList(
+                                    AddColumnEvent.last(
+                                            Column.physicalColumn("id", DataTypes.INT())))));
+
+            // Duplicate DDL is idempotent: no DDL and no alert.
+            assertThat(server.recorded).hasSize(1);
+            assertThat(RecordingAlertHandler.ALERTS).isEmpty();
+        }
+    }
+
+    @Test
+    public void testReplayedRenameTableIsSkipped() throws Exception {
+        TableId renamed = TableId.tableId("shop", "orders_new");
+        Schema schema = Schema.newBuilder().physicalColumn("id", DataTypes.INT()).build();
+        try (MockDorisServer server =
+                new MockDorisServer(
+                        req -> {
+                            if (req.body.contains("SHOW FULL COLUMNS")) {
+                                // The source is gone, the target is in place: applied.
+                                if (req.body.contains("orders_new")) {
+                                    return Response.ok(showColumnsResponse("id|INT|KEY"));
+                                }
+                                return Response.ok(
+                                        "{\"code\":1105,\"msg\":\"errCode = 2, detailMessage ="
+                                                + " Unknown table 'orders'\"}");
+                            }
+                            return Response.ok("{\"code\":0,\"msg\":\"OK\"}");
+                        })) {
+            DorisMetadataApplier applier = applier(server, RecordingAlertHandler.class);
+
+            applier.applySchemaChange(
+                    new RenameTableEvent(
+                            Collections.singletonList(
+                                    new RenameTableEvent.TableRename(ORDERS, renamed, schema)),
+                            null));
+
+            // Two existence checks, no ALTER, no alert.
+            assertThat(server.recorded).hasSize(2);
+            assertThat(server.recorded)
+                    .allSatisfy(request -> assertThat(request.body).contains("SHOW FULL COLUMNS"));
+            assertThat(RecordingAlertHandler.ALERTS).isEmpty();
+        }
+    }
+
+    @Test
+    public void testRenameTableConflictIsSkippedAndAlerted() throws Exception {
+        TableId renamed = TableId.tableId("shop", "orders_new");
+        Schema schema = Schema.newBuilder().physicalColumn("id", DataTypes.INT()).build();
+        try (MockDorisServer server = metadataServer("id|INT|KEY")) {
+            DorisMetadataApplier applier = applier(server, RecordingAlertHandler.class);
+
+            applier.applySchemaChange(
+                    new RenameTableEvent(
+                            Collections.singletonList(
+                                    new RenameTableEvent.TableRename(ORDERS, renamed, schema)),
+                            null));
+
+            // Both names exist: the rename cannot be ordered, so it is skipped.
+            assertThat(server.recorded).hasSize(2);
+            assertThat(RecordingAlertHandler.ALERTS).hasSize(1);
+            assertThat(RecordingAlertHandler.ALERTS.get(0).getKind())
+                    .isEqualTo(SchemaEvolutionAlert.Kind.INCONSISTENT_STATE);
+        }
+    }
+
+    @Test
+    public void testRenameTableChainIsOrderedInMixedState() throws Exception {
+        TableId a = TableId.tableId("shop", "chain_a");
+        TableId b = TableId.tableId("shop", "chain_b");
+        TableId c = TableId.tableId("shop", "chain_c");
+        Schema schema = Schema.newBuilder().physicalColumn("id", DataTypes.INT()).build();
+        try (MockDorisServer server =
+                new MockDorisServer(
+                        req -> {
+                            if (req.body.contains("SHOW FULL COLUMNS")) {
+                                // b is still present, c is not: only part of the event has been
+                                // applied, so a→b has to wait for b→c to free its target.
+                                if (req.body.contains("`chain_c`")) {
+                                    return Response.ok(
+                                            "{\"code\":1105,\"msg\":\"errCode = 2, detailMessage ="
+                                                    + " Unknown table 'chain_c'\"}");
+                                }
+                                return Response.ok(showColumnsResponse("id|INT|KEY"));
+                            }
+                            return Response.ok("{\"code\":0,\"msg\":\"OK\"}");
+                        })) {
+            DorisMetadataApplier applier = applier(server, RecordingAlertHandler.class);
+
+            applier.applySchemaChange(
+                    new RenameTableEvent(
+                            Arrays.asList(
+                                    new RenameTableEvent.TableRename(a, b, schema),
+                                    new RenameTableEvent.TableRename(b, c, schema)),
+                            null));
+
+            // 4 existence checks, then b→c (which frees b) before a→b.
+            assertThat(server.recorded).hasSize(6);
+            assertThat(server.recorded.get(4).body).contains("`chain_b` RENAME `chain_c`");
+            assertThat(server.recorded.get(5).body).contains("`chain_a` RENAME `chain_b`");
+            assertThat(RecordingAlertHandler.ALERTS).isEmpty();
+        }
+    }
+
+    @Test
+    public void testRenameTableChainDoesNotRenameOntoAnOccupiedName() throws Exception {
+        TableId a = TableId.tableId("shop", "chain_a");
+        TableId b = TableId.tableId("shop", "chain_b");
+        TableId c = TableId.tableId("shop", "chain_c");
+        Schema schema = Schema.newBuilder().physicalColumn("id", DataTypes.INT()).build();
+        try (MockDorisServer server = metadataServer("id|INT|KEY")) {
+            DorisMetadataApplier applier = applier(server, RecordingAlertHandler.class);
+
+            applier.applySchemaChange(
+                    new RenameTableEvent(
+                            Arrays.asList(
+                                    new RenameTableEvent.TableRename(a, b, schema),
+                                    new RenameTableEvent.TableRename(b, c, schema)),
+                            null));
+
+            // Every target is occupied and no rename of the event will free one: both pairs are
+            // alerted instead of being sent to Doris, which would reject them.
+            assertThat(server.recorded).hasSize(4);
+            assertThat(server.recorded)
+                    .allSatisfy(request -> assertThat(request.body).contains("SHOW FULL COLUMNS"));
+            assertThat(RecordingAlertHandler.ALERTS).hasSize(2);
+            assertThat(RecordingAlertHandler.ALERTS)
+                    .allSatisfy(
+                            alert ->
+                                    assertThat(alert.getKind())
+                                            .isEqualTo(
+                                                    SchemaEvolutionAlert.Kind
+                                                            .INCONSISTENT_STATE));
+        }
+    }
+
+    @Test
+    public void testPreCheckDisabledAppliesWithoutMetadataQuery() throws Exception {
+        Configuration config = new Configuration();
+        try (MockDorisServer server =
+                new MockDorisServer(req -> Response.ok("{\"code\":0,\"msg\":\"OK\"}"))) {
+            config.set(DorisDataSinkOptions.FENODES, server.endpoint());
+            config.set(DorisDataSinkOptions.USERNAME, "root");
+            config.set(DorisDataSinkOptions.PASSWORD, "123456");
+            config.set(DorisDataSinkOptions.SCHEMA_CHANGE_PRE_CHECK, false);
+            DorisMetadataApplier applier =
+                    new DorisMetadataApplier(new DorisDataSinkOptions(config));
+
+            applier.applySchemaChange(
+                    new AddColumnEvent(
+                            ORDERS,
+                            Collections.singletonList(
+                                    AddColumnEvent.last(
+                                            Column.physicalColumn("id", DataTypes.INT())))));
+
+            assertThat(server.recorded).hasSize(1);
+            assertThat(server.recorded.get(0).body).contains("ADD COLUMN `id`");
+        }
+    }
+
+    // ===== Alerts on non-idempotent skips =====
+
+    @Test
+    public void testAlterColumnTypeOnKeyColumnIsSkippedAndAlerted() throws Exception {
+        Schema oldSchema =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("name", DataTypes.VARCHAR(100))
+                        .primaryKey("id")
+                        .build();
+        try (MockDorisServer server = metadataServer("id|INT|KEY", "name|VARCHAR(300)")) {
+            DorisMetadataApplier applier = applier(server, RecordingAlertHandler.class);
+
+            applier.applyAlterColumnType(
+                    new AlterColumnTypeEvent(
+                            ORDERS, Collections.singletonMap("id", DataTypes.BIGINT())),
+                    Optional.of(oldSchema));
+
+            // The key-column change is refused before any request reaches Doris.
+            assertThat(server.recorded).isEmpty();
+        }
+        assertThat(RecordingAlertHandler.ALERTS).hasSize(1);
+        SchemaEvolutionAlert alert = RecordingAlertHandler.ALERTS.get(0);
+        assertThat(alert.getLevel()).isEqualTo(SchemaEvolutionAlert.Level.WARNING);
+        assertThat(alert.getKind()).isEqualTo(SchemaEvolutionAlert.Kind.MODIFY_KEY_COLUMN);
+        assertThat(alert.getColumn()).isEqualTo("id");
+        assertThat(alert.getTableId()).isEqualTo(ORDERS);
+    }
+
+    @Test
+    public void testCapacityReductionIsSkippedAndAlerted() throws Exception {
+        Schema oldSchema =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("name", DataTypes.VARCHAR(300))
+                        .primaryKey("id")
+                        .build();
+        try (MockDorisServer server =
+                new MockDorisServer(req -> Response.ok("{\"code\":0,\"msg\":\"OK\"}"))) {
+            DorisMetadataApplier applier = applier(server, RecordingAlertHandler.class);
+
+            applier.applyAlterColumnType(
+                    new AlterColumnTypeEvent(
+                            ORDERS, Collections.singletonMap("name", DataTypes.VARCHAR(100))),
+                    Optional.of(oldSchema));
+
+            assertThat(server.recorded).isEmpty();
+        }
+        assertThat(RecordingAlertHandler.ALERTS).hasSize(1);
+        assertThat(RecordingAlertHandler.ALERTS.get(0).getKind())
+                .isEqualTo(SchemaEvolutionAlert.Kind.CAPACITY_REDUCTION);
+    }
+
+    @Test
+    public void testFailingAlertHandlerDoesNotFailThePipeline() throws Exception {
+        Schema oldSchema =
+                Schema.newBuilder().physicalColumn("id", DataTypes.INT()).primaryKey("id").build();
+        try (MockDorisServer server =
+                new MockDorisServer(req -> Response.ok("{\"code\":0,\"msg\":\"OK\"}"))) {
+            DorisMetadataApplier applier = applier(server, ThrowingAlertHandler.class);
+
+            applier.applyAlterColumnType(
+                    new AlterColumnTypeEvent(
+                            ORDERS, Collections.singletonMap("id", DataTypes.BIGINT())),
+                    Optional.of(oldSchema));
+
+            assertThat(server.recorded).isEmpty();
+        }
+    }
+
     @Test
     public void testApplyAlterColumnTypeGrowthEmitsModify() throws Exception {
         Schema oldSchema =
@@ -217,12 +570,38 @@ public class DorisMetadataApplierTest {
                             ORDERS, Collections.singletonMap("name", DataTypes.VARCHAR(300))),
                     Optional.of(oldSchema));
 
-            // 2 requests: 1 DDL (MODIFY COLUMN) + 1 SHOW (poll for completion)
-            assertThat(server.recorded).hasSize(2);
-            assertThat(server.recorded.get(0).body)
+            // 3 requests: SHOW FULL COLUMNS (pre-check) + 1 DDL + 1 SHOW (poll for completion)
+            assertThat(server.recorded).hasSize(3);
+            assertThat(server.recorded.get(0).body).contains("SHOW FULL COLUMNS");
+            assertThat(server.recorded.get(1).body)
                     .isEqualTo(
                             "{\"stmt\":\"ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` VARCHAR(900)\"}");
-            assertThat(server.recorded.get(1).body).contains("SHOW ALTER TABLE COLUMN");
+            assertThat(server.recorded.get(2).body).contains("SHOW ALTER TABLE");
+        }
+    }
+
+    @Test
+    public void testAlterColumnTypeAlreadyAtTargetTypeIsSkipped() throws Exception {
+        Schema oldSchema =
+                Schema.newBuilder()
+                        .physicalColumn("id", DataTypes.INT())
+                        .physicalColumn("name", DataTypes.VARCHAR(100))
+                        .primaryKey("id")
+                        .build();
+        // VARCHAR(300) chars map to VARCHAR(900) bytes, which is already the Doris type.
+        try (MockDorisServer server = metadataServer("id|INT|KEY", "name|VARCHAR(900)")) {
+            DorisMetadataApplier applier = applier(server, RecordingAlertHandler.class);
+
+            applier.applyAlterColumnType(
+                    new AlterColumnTypeEvent(
+                            ORDERS, Collections.singletonMap("name", DataTypes.VARCHAR(300))),
+                    Optional.of(oldSchema));
+
+            // Only the pre-check; the DDL was already applied before the restore.
+            assertThat(server.recorded).hasSize(1);
+            assertThat(server.recorded.get(0).body).contains("SHOW FULL COLUMNS");
+            // A duplicate is idempotent, so it is not delivered as an alert.
+            assertThat(RecordingAlertHandler.ALERTS).isEmpty();
         }
     }
 
@@ -262,6 +641,9 @@ public class DorisMetadataApplierTest {
         try (MockDorisServer server =
                 new MockDorisServer(
                         req -> {
+                            if (req.body.contains("SHOW FULL COLUMNS")) {
+                                return Response.ok(SAMPLE_COLUMNS);
+                            }
                             if (req.body.contains("SHOW ALTER TABLE")) {
                                 int n = showCount.getAndIncrement();
                                 // First poll: RUNNING with progress 3/10
@@ -280,10 +662,11 @@ public class DorisMetadataApplierTest {
                             ORDERS, Collections.singletonMap("name", DataTypes.VARCHAR(300))),
                     Optional.of(oldSchema));
 
-            // 3 requests: 1 DDL + 2 SHOW (RUNNING 3/10, then FINISHED)
-            assertThat(server.recorded).hasSize(3);
-            assertThat(server.recorded.get(1).body).contains("SHOW ALTER TABLE");
+            // 4 requests: pre-check + 1 DDL + 2 SHOW (RUNNING 3/10, then FINISHED)
+            assertThat(server.recorded).hasSize(4);
+            assertThat(server.recorded.get(1).body).contains("MODIFY COLUMN");
             assertThat(server.recorded.get(2).body).contains("SHOW ALTER TABLE");
+            assertThat(server.recorded.get(3).body).contains("SHOW ALTER TABLE");
         }
     }
 
@@ -312,8 +695,8 @@ public class DorisMetadataApplierTest {
                                     assertThat(((SchemaEvolveException) e).getExceptionMessage())
                                             .contains("cancelled"));
 
-            // 2 requests: 1 DDL + 1 SHOW (CANCELLED)
-            assertThat(server.recorded).hasSize(2);
+            // 3 requests: pre-check + 1 DDL + 1 SHOW (CANCELLED)
+            assertThat(server.recorded).hasSize(3);
         }
     }
 
@@ -329,6 +712,9 @@ public class DorisMetadataApplierTest {
         try (MockDorisServer server =
                 new MockDorisServer(
                         req -> {
+                            if (req.body.contains("SHOW FULL COLUMNS")) {
+                                return Response.ok(SAMPLE_COLUMNS);
+                            }
                             if (req.body.contains("SHOW ALTER TABLE")) {
                                 return Response.ok(
                                         "{\"code\":0,\"msg\":\"OK\",\"data\":{\"rows\":[]}}");
@@ -342,8 +728,8 @@ public class DorisMetadataApplierTest {
                             ORDERS, Collections.singletonMap("name", DataTypes.VARCHAR(300))),
                     Optional.of(oldSchema));
 
-            // 2 requests: 1 DDL + 1 SHOW (empty) — returns immediately, no further polling.
-            assertThat(server.recorded).hasSize(2);
+            // 3 requests: pre-check + 1 DDL + 1 SHOW (empty) — no further polling.
+            assertThat(server.recorded).hasSize(3);
         }
     }
 
@@ -397,6 +783,9 @@ public class DorisMetadataApplierTest {
         try (MockDorisServer server =
                 new MockDorisServer(
                         req -> {
+                            if (req.body.contains("SHOW FULL COLUMNS")) {
+                                return Response.ok(SAMPLE_COLUMNS);
+                            }
                             if (req.body.contains("SHOW ALTER TABLE")) {
                                 int n = showCount.getAndIncrement();
                                 switch (n) {
@@ -419,10 +808,9 @@ public class DorisMetadataApplierTest {
                             ORDERS, Collections.singletonMap("name", DataTypes.VARCHAR(300))),
                     Optional.of(oldSchema));
 
-            // 5 requests: 1 DDL + 4 SHOW (2/10, 5/10, 8/10, FINISHED)
-            assertThat(server.recorded).hasSize(5);
-            // Verify the SHOW queries were sent
-            for (int i = 1; i <= 4; i++) {
+            // 6 requests: pre-check + 1 DDL + 4 SHOW (2/10, 5/10, 8/10, FINISHED)
+            assertThat(server.recorded).hasSize(6);
+            for (int i = 2; i <= 5; i++) {
                 assertThat(server.recorded.get(i).body).contains("SHOW ALTER TABLE");
             }
         }
@@ -444,6 +832,9 @@ public class DorisMetadataApplierTest {
         try (MockDorisServer server =
                 new MockDorisServer(
                         req -> {
+                            if (req.body.contains("SHOW FULL COLUMNS")) {
+                                return Response.ok(SAMPLE_COLUMNS);
+                            }
                             if (req.body.contains("SHOW ALTER TABLE")) {
                                 int n = showCount.getAndIncrement();
                                 if (n < 3) {
@@ -468,9 +859,29 @@ public class DorisMetadataApplierTest {
                             ORDERS, Collections.singletonMap("name", DataTypes.VARCHAR(300))),
                     Optional.of(oldSchema));
 
-            // 5 requests: 1 DDL + 4 SHOW (stalled 5/10 × 3, then FINISHED)
-            assertThat(server.recorded).hasSize(5);
+            // 6 requests: pre-check + 1 DDL + 4 SHOW (stalled 5/10 × 3, then FINISHED)
+            assertThat(server.recorded).hasSize(6);
         }
+    }
+
+    // ===== Helpers =====
+
+    private static final String SAMPLE_COLUMNS =
+            showColumnsResponse("id|INT|KEY", "name|VARCHAR(300)");
+
+    /**
+     * Returns a mock server that answers SHOW FULL COLUMNS with the given columns and every other
+     * request with an empty success.
+     */
+    private MockDorisServer metadataServer(String... columns) throws IOException {
+        String metadata = showColumnsResponse(columns);
+        return new MockDorisServer(
+                req -> {
+                    if (req.body.contains("SHOW FULL COLUMNS")) {
+                        return Response.ok(metadata);
+                    }
+                    return Response.ok("{\"code\":0,\"msg\":\"OK\"}");
+                });
     }
 
     /**
@@ -484,11 +895,47 @@ public class DorisMetadataApplierTest {
     private MockDorisServer schemaChangeServer(String state, String progress) throws IOException {
         return new MockDorisServer(
                 req -> {
+                    if (req.body.contains("SHOW FULL COLUMNS")) {
+                        return Response.ok(SAMPLE_COLUMNS);
+                    }
                     if (req.body.contains("SHOW ALTER TABLE")) {
                         return Response.ok(showAlterResponse(state, progress));
                     }
                     return Response.ok("{\"code\":0,\"msg\":\"OK\"}");
                 });
+    }
+
+    /**
+     * Builds a SHOW FULL COLUMNS response. Each definition is {@code name|type}, {@code
+     * name|type|KEY} or {@code name|type|KEY|comment}; the title carries the real Doris column
+     * order so the parser resolves the positions by name.
+     */
+    private static String showColumnsResponse(String... definitions) {
+        StringBuilder rows = new StringBuilder();
+        for (String definition : definitions) {
+            String[] parts = definition.split("\\|", -1);
+            String name = parts[0];
+            String type = parts[1];
+            String key = parts.length > 2 && "KEY".equalsIgnoreCase(parts[2]) ? "true" : "false";
+            String comment = parts.length > 3 ? parts[3] : "";
+            if (rows.length() > 0) {
+                rows.append(',');
+            }
+            rows.append("[\"")
+                    .append(name)
+                    .append("\",\"")
+                    .append(type)
+                    .append("\",\"\",\"YES\",\"")
+                    .append(key)
+                    .append("\",\"\",\"\",\"\",\"")
+                    .append(comment)
+                    .append("\"]");
+        }
+        return "{\"code\":0,\"msg\":\"OK\",\"data\":{\"title\":[\"Field\",\"Type\",\"Collation\","
+                + "\"Null\",\"Key\",\"Default\",\"Extra\",\"Privileges\",\"Comment\"],"
+                + "\"rows\":["
+                + rows
+                + "]}}";
     }
 
     /**
@@ -520,10 +967,42 @@ public class DorisMetadataApplierTest {
     }
 
     private DorisMetadataApplier applier(MockDorisServer server) {
+        return applier(server, null);
+    }
+
+    private DorisMetadataApplier applier(
+            MockDorisServer server, Class<? extends SchemaEvolutionAlertHandler> handlerClass) {
         Configuration config = new Configuration();
         config.set(DorisDataSinkOptions.FENODES, server.endpoint());
         config.set(DorisDataSinkOptions.USERNAME, "root");
         config.set(DorisDataSinkOptions.PASSWORD, "123456");
+        if (handlerClass != null) {
+            config.set(DorisDataSinkOptions.SCHEMA_CHANGE_ALERT_HANDLER, handlerClass.getName());
+        }
         return new DorisMetadataApplier(new DorisDataSinkOptions(config));
+    }
+
+    /** Collects the alerts delivered by the applier. */
+    public static class RecordingAlertHandler implements SchemaEvolutionAlertHandler {
+
+        static final List<SchemaEvolutionAlert> ALERTS = new ArrayList<>();
+
+        public RecordingAlertHandler() {}
+
+        @Override
+        public void onAlert(SchemaEvolutionAlert alert) {
+            ALERTS.add(alert);
+        }
+    }
+
+    /** Fails on every delivery, to check that alerting cannot fail the pipeline. */
+    public static class ThrowingAlertHandler implements SchemaEvolutionAlertHandler {
+
+        public ThrowingAlertHandler() {}
+
+        @Override
+        public void onAlert(SchemaEvolutionAlert alert) throws Exception {
+            throw new Exception("alert backend unavailable");
+        }
     }
 }

@@ -323,6 +323,33 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
     public static final ConfigOption<Boolean> IS_DROP_TABLE_BEFORE_CREATE =
             ConfigOptions.key("sink.is-drop-table-before-create").booleanType().defaultValue(false);
 
+    /**
+     * Whether to inspect the target table before applying a schema change.
+     *
+     * <p>When enabled (the default), the applier reads the current column layout with {@code SHOW
+     * FULL COLUMNS} and skips a change that Doris already reflects — most importantly, the exact
+     * replay of an uncommitted schema-change round after a checkpoint restore (a second {@code ADD
+     * COLUMN} would otherwise be rejected by Doris and fail the job). The pre-check costs one
+     * metadata query per schema change, which only happens when the source DDL changes, so it is
+     * negligible next to the DDL itself. Disable it only when the FE query endpoint is unavailable
+     * to the JobManager, in which case replayed changes that are not naturally idempotent can fail.
+     */
+    public static final ConfigOption<Boolean> SCHEMA_CHANGE_PRE_CHECK =
+            ConfigOptions.key("sink.schema-change.pre-check").booleanType().defaultValue(true);
+
+    /**
+     * Fully-qualified class name of a {@code
+     * org.apache.flink.cdc.connectors.kafkajson.sink.schema.alert.SchemaEvolutionAlertHandler}
+     * implementation that receives alerts for schema changes the applier deliberately skipped.
+     *
+     * <p>Only non-idempotent skips are delivered (for example a {@code MODIFY COLUMN} on a key
+     * column, which Doris rejects); duplicate DDL resolved silently after a checkpoint restore is
+     * not an alert. The class must have a public no-argument constructor. When unset, alerts are
+     * logged at WARN level only. Delivery failures never fail the pipeline.
+     */
+    public static final ConfigOption<String> SCHEMA_CHANGE_ALERT_HANDLER =
+            ConfigOptions.key("sink.schema-change.alert-handler").stringType().noDefaultValue();
+
     public DorisDataSinkOptions(Configuration config) {
         super(config);
         WriterMode mode = getWriterMode();
@@ -525,5 +552,14 @@ public class DorisDataSinkOptions extends KafkaJsonDataSinkOptions {
 
     public boolean isDropTableBeforeCreate() {
         return getConfig().get(IS_DROP_TABLE_BEFORE_CREATE);
+    }
+
+    public boolean isSchemaChangePreCheckEnabled() {
+        return getConfig().get(SCHEMA_CHANGE_PRE_CHECK);
+    }
+
+    /** Fully-qualified alert-handler class name, or {@code null} to only log alerts. */
+    public String getSchemaChangeAlertHandler() {
+        return getConfig().get(SCHEMA_CHANGE_ALERT_HANDLER);
     }
 }

@@ -1154,8 +1154,10 @@ public class DorisHttpClient implements Closeable {
                         return responseBody;
                     }
                     // Application-level failure: surface immediately (not a transient network
-                    // error).
-                    throw new IOException(
+                    // error). A plain IOException would be retried by executeWithRetry, turning a
+                    // rejected statement — for example "unknown table" from the schema-change
+                    // pre-check — into maxRetries pointless requests.
+                    throw new DorisHttpException(
                             "Query failed on database "
                                     + database
                                     + " (code "
