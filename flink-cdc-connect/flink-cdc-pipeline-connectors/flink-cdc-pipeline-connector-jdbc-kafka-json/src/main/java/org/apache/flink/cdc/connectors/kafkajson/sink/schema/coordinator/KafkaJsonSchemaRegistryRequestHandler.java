@@ -457,6 +457,12 @@ public class KafkaJsonSchemaRegistryRequestHandler implements Closeable {
         }
     }
 
+    public void markRestored() {
+        if (metadataApplier instanceof RestoreAwareMetadataApplier) {
+            ((RestoreAwareMetadataApplier) metadataApplier).onRestore();
+        }
+    }
+
     public void getSchemaChangeResult(
             KafkaJsonSchemaChangeResultRequest request,
             CompletableFuture<CoordinationResponse> response) {

@@ -28,7 +28,6 @@ import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.commit.DorisC
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.commit.DorisCommitter;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.state.DorisWriterState;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.state.DorisWriterStateSerializer;
-import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.util.DorisSinkUtils;
 import org.apache.flink.core.io.SimpleVersionedSerializer;
 
 import java.io.IOException;
@@ -69,7 +68,6 @@ public class TwoPhaseDorisSink
     @Override
     public TwoPhaseDorisSinkWriter restoreWriter(
             Sink.InitContext context, Collection<DorisWriterState> states) throws IOException {
-        DorisSinkUtils.maybeDisableDropOnRestore(options, context);
         TwoPhaseDorisSinkWriter writer =
                 new TwoPhaseDorisSinkWriter(options, pipelineZoneId, context);
         writer.restoreState(states);

@@ -204,10 +204,10 @@ public class DorisDdlBuilder implements Serializable {
      * Commit sequence column and generated column.
      *
      * <p>The applier uses this to decide whether a replayed {@code CREATE TABLE} is already
-     * reflected in Doris. A plain {@code CREATE TABLE IF NOT EXISTS} is idempotent, but with {@code
-     * sink.is-drop-table-before-create} the generated SQL starts with {@code DROP TABLE IF EXISTS};
-     * replaying it would destroy the data the table already holds. Skipping the pair when the table
-     * exists with every expected column keeps the restore non-destructive.
+     * reflected in Doris. A plain {@code CREATE TABLE IF NOT EXISTS} is idempotent, so the check
+     * only classifies an existing table (duplicate vs. mismatch); the destructive {@code
+     * DROP+CREATE} of {@code sink.is-drop-table-before-create} never coexists with the check — a
+     * restore disables the option first (see {@code RestoreAwareMetadataApplier}).
      */
     public List<String> expectedColumnNames(CreateTableEvent event) {
         Schema schema = event.getSchema();
@@ -223,6 +223,31 @@ public class DorisDdlBuilder implements Serializable {
             names.add(generatedColumn);
         }
         return names;
+    }
+
+    /**
+     * The normalized Doris type {@link #buildCreateTableSql} would emit for each schema column —
+     * key-aware, i.e. exactly the types the created table would carry, in {@link
+     * DorisMetadataInspector#normalizeType(String)} form so the result compares directly with a
+     * live table's column types. Injected framework columns (the Group Commit sequence column, a
+     * generated column) have no schema type here; compare those by presence alone.
+     */
+    public Map<String, String> expectedColumnTypes(CreateTableEvent event) {
+        Schema schema = event.getSchema();
+        Set<String> primaryKeys = new LinkedHashSet<>(schema.primaryKeys());
+        Set<String> keyColumns =
+                primaryKeys.isEmpty()
+                        ? Collections.singleton(firstPhysicalColumn(schema))
+                        : primaryKeys;
+        Map<String, String> types = new LinkedHashMap<>();
+        for (Column column : orderedColumns(schema)) {
+            types.put(
+                    column.getName(),
+                    DorisMetadataInspector.normalizeType(
+                            convertDataType(
+                                    column.getType(), keyColumns.contains(column.getName()))));
+        }
+        return types;
     }
 
     /** The columns of a CREATE TABLE in emitted order: primary keys first, then the rest. */

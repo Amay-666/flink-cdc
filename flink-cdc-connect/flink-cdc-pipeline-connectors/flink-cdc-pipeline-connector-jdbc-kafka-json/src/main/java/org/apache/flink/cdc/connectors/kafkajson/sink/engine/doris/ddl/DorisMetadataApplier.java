@@ -40,6 +40,7 @@ import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.http.DorisHtt
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.alert.SchemaEvolutionAlert;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.alert.SchemaEvolutionAlertHandler;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordinator.OldSchemaAwareMetadataApplier;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordinator.RestoreAwareMetadataApplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -71,17 +72,19 @@ import java.util.Set;
  * AlterColumnTypeEvent} it also resolves the pre-change schema (an event only carries the new
  * types), which lets this applier recognise a primary-key column and a capacity reduction.
  *
+ * <p>Implements {@link RestoreAwareMetadataApplier}: {@link #onRestore()} disables {@code
+ * sink.is-drop-table-before-create} on restore, so a replayed {@code CREATE TABLE} takes the {@code
+ * IF NOT EXISTS} path; the {@code DROP+CREATE} pair only runs on a cold start.
+ *
  * <h2>Schema-change pre-check</h2>
  *
  * <p>The coordinator's schema state is checkpointed, but a DDL is executed before its round is
  * committed. After a failover the schema registry is restored to the last completed checkpoint, so
  * every round applied after it is delivered again. Some of those DDLs are not idempotent — a second
- * {@code ADD COLUMN} makes Doris reject the statement and fail the job, replayed {@code DROP
- * COLUMN}/{@code RENAME} fail because their source is gone, and a replayed {@code DROP TABLE}
- * followed by {@code CREATE TABLE} (when {@code sink.is-drop-table-before-create} is set) would
- * discard the data loaded since the checkpoint. Before executing such a change the applier
- * therefore reads the target table's current columns ({@link DorisMetadataInspector}) and skips the
- * operations Doris already reflects. The pre-check is controlled by {@code
+ * {@code ADD COLUMN} makes Doris reject the statement and fail the job, and replayed {@code DROP
+ * COLUMN}/{@code RENAME} fail because their source is gone. Before executing such a change the
+ * applier therefore reads the target table's current columns ({@link DorisMetadataInspector}) and
+ * skips the operations Doris already reflects. The pre-check is controlled by {@code
  * sink.schema-change.pre-check} (default on) and is a no-op when disabled.
  *
  * <p>Skipping has two grades, matching what a user needs to know:
@@ -108,7 +111,8 @@ import java.util.Set;
  * rejected when data flow resumes. The DDL execution and the SHOW polling share the same {@code
  * DorisHttpClient} instance.
  */
-public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMetadataApplier {
+public class DorisMetadataApplier
+        implements MetadataApplier, OldSchemaAwareMetadataApplier, RestoreAwareMetadataApplier {
 
     private static final Logger LOG = LoggerFactory.getLogger(DorisMetadataApplier.class);
 
@@ -156,6 +160,18 @@ public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMeta
     }
 
     @Override
+    public void onRestore() {
+        if (options.isDropTableBeforeCreate()) {
+            options.getConfig().set(DorisDataSinkOptions.IS_DROP_TABLE_BEFORE_CREATE, false);
+            LOG.info(
+                    "The schema registry restored from a checkpoint: drop-before-create is"
+                            + " disabled for the rest of this run. A replayed CREATE TABLE is"
+                            + " applied with IF NOT EXISTS instead of DROP+CREATE, so the"
+                            + " restore cannot discard the data loaded since the checkpoint.");
+        }
+    }
+
+    @Override
     public void applySchemaChange(SchemaChangeEvent schemaChangeEvent)
             throws SchemaEvolveException {
         try {
@@ -196,57 +212,67 @@ public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMeta
     //  Per-event application with pre-checks
     // ------------------------------------------------------------------------
 
-    /**
-     * A plain {@code CREATE TABLE IF NOT EXISTS} is idempotent, so a replay is harmless. Only
-     * {@code sink.is-drop-table-before-create} needs protection: its SQL starts with {@code DROP
-     * TABLE IF EXISTS}, and replaying that after a restore would discard everything written since
-     * the checkpoint. When the table already exists with every column the event would create, the
-     * pair is skipped instead of dropping the table.
-     */
     private void applyCreateTable(CreateTableEvent event) throws SchemaEvolveException {
-        if (!options.isDropTableBeforeCreate() || !isPreCheckEnabled()) {
-            applySqls(event, ddlBuilder.buildCreateTableSql(event), httpClient());
-            return;
-        }
         DorisHttpClient client = httpClient();
-        DorisTableMetadata metadata = inspect(event, client);
-        List<String> sqls = ddlBuilder.buildCreateTableSql(event);
-        if (!metadata.tableExists()) {
-            applySqls(event, sqls, client);
+        if (options.isDropTableBeforeCreate() || !isPreCheckEnabled()) {
+            applySqls(event, ddlBuilder.buildCreateTableSql(event), client);
             return;
         }
-        List<String> expected = ddlBuilder.expectedColumnNames(event);
+        DorisTableMetadata metadata = inspect(event, client);
+        if (!metadata.tableExists()) {
+            applySqls(event, ddlBuilder.buildCreateTableSql(event), client);
+            return;
+        }
         List<String> missing = new ArrayList<>();
-        for (String column : expected) {
-            if (!metadata.hasColumn(column)) {
-                missing.add(column);
+        List<String> diverged = new ArrayList<>();
+        Map<String, String> expectedTypes = ddlBuilder.expectedColumnTypes(event);
+        for (Map.Entry<String, String> expected : expectedTypes.entrySet()) {
+            String name = expected.getKey();
+            if (!metadata.hasColumn(name)) {
+                missing.add(name);
+                continue;
+            }
+            String current = metadata.normalizedType(name).orElse("");
+            if (!current.equals(expected.getValue())) {
+                diverged.add(
+                        name
+                                + " is "
+                                + current
+                                + ", the event would create "
+                                + expected.getValue());
             }
         }
-        if (missing.isEmpty()) {
+        // The injected columns (sequence/generated) carry no schema type; compare by presence.
+        for (String name : ddlBuilder.expectedColumnNames(event)) {
+            if (!expectedTypes.containsKey(name) && !metadata.hasColumn(name)) {
+                missing.add(name);
+            }
+        }
+        String sql = ddlBuilder.buildCreateTableSql(event).get(0);
+        if (missing.isEmpty() && diverged.isEmpty()) {
             skip(
                     event,
                     SchemaEvolutionAlert.Level.INFO,
                     SchemaEvolutionAlert.Kind.DUPLICATE,
                     null,
-                    "table already exists with every column of the replayed CREATE TABLE;"
-                            + " skipping the configured DROP+CREATE so the restore keeps the data"
-                            + " loaded since the checkpoint",
-                    sqls.get(0));
+                    "table already exists with every column and type this CREATE TABLE would"
+                            + " create; the IF NOT EXISTS create is a no-op",
+                    sql);
             return;
         }
-        // The table exists but does not match the event: dropping it could destroy data that the
-        // event schema knows nothing about (for example columns added after this CREATE TABLE).
-        // Replaying DROP+CREATE would also re-create an older schema, so refuse and surface it.
         skip(
                 event,
                 SchemaEvolutionAlert.Level.WARNING,
                 SchemaEvolutionAlert.Kind.INCONSISTENT_STATE,
                 null,
-                "table exists but lacks the columns "
+                "table exists but does not match the CREATE TABLE event — missing columns "
                         + missing
-                        + " of the replayed CREATE TABLE; refusing to drop it and skipping the"
-                        + " event. Drop the table manually if it is safe to rebuild it.",
-                sqls.get(0));
+                        + ", diverged types "
+                        + diverged
+                        + ". CREATE IF NOT EXISTS keeps the table as is, and the data flow may"
+                        + " lose or misroute the mismatched columns. Drop the table manually if"
+                        + " it is safe to rebuild it.",
+                sql);
     }
 
     /**
@@ -453,7 +479,7 @@ public class DorisMetadataApplier implements MetadataApplier, OldSchemaAwareMeta
             if (DorisDdlBuilder.isCapacityReduction(oldType.orElse(null), newType)) {
                 skip(
                         event,
-                        SchemaEvolutionAlert.Level.WARNING,
+                        SchemaEvolutionAlert.Level.INFO,
                         SchemaEvolutionAlert.Kind.CAPACITY_REDUCTION,
                         column,
                         "capacity reduction from "

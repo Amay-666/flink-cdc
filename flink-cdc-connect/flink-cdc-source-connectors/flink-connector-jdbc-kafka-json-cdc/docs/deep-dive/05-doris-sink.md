@@ -280,17 +280,16 @@ applySchemaChange(event)
 
 coordinator 的 schema 状态随 checkpoint 保存，但 DDL 在 **round 提交之前**执行；failover 后状态回退到最后一个完成的
 checkpoint，之后执行过的每个 round 都会再交付一次。其中一部分 DDL 不幂等：第二次 `ADD COLUMN` 会被 Doris 拒绝并让作业
-失败；`DROP`/`RENAME` 的源已经不存在；开启 `sink.is-drop-table-before-create` 时重放的 `DROP+CREATE` 会丢掉 checkpoint
-之后写入的数据。因此 applier 在执行前先用 `SHOW FULL COLUMNS FROM db.tbl` 读当前列（`DorisMetadataInspector` →
-`DorisTableMetadata`），跳过 Doris 已经体现的操作：
+失败；`DROP`/`RENAME` 的源已经不存在。因此 applier 在执行前先用 `SHOW FULL COLUMNS FROM db.tbl` 读当前列
+（`DorisMetadataInspector` → `DorisTableMetadata`），跳过 Doris 已经体现的操作：
 
 | 事件 | 已应用 / 冲突时的处理 |
 |---|---|
-| `CREATE TABLE` | 无 drop-before-create：`IF NOT EXISTS` 本身幂等，直接执行；有 drop-before-create 且表存在、期望列（含注入的 sequence/generated 列）齐全：跳过 `DROP+CREATE`（INFO）；表存在但缺列：**不 drop**，WARNING |
+| `CREATE TABLE` | 无 drop-before-create：表存在 → 期望列与归一化类型（含注入的 sequence/generated 列，按存在性）齐全视为已应用（INFO，`IF NOT EXISTS` 本就是空操作）；列缺失或类型漂移 → WARNING（提示遗留表与事件不符，人工核对）；表不存在 → 执行。有 drop-before-create：**仅冷启动生效**——直接执行 `DROP+CREATE`，不做前置查询（恢复时该选项已被关闭，见下） |
 | `ADD COLUMN` | 逐列判断：列已存在 → 跳过（INFO）；其余列组成过滤后的事件继续执行 |
 | `DROP COLUMN` | 列已不存在 → 跳过（INFO） |
 | `RENAME COLUMN` | 源不存在、目标存在 → 已应用（INFO）；源和目标都存在或都不存在 → WARNING skip |
-| `MODIFY COLUMN` | 先过滤主键列与容量收缩（WARNING）；再查元数据：列不存在（WARNING）、已是目标类型（INFO） |
+| `MODIFY COLUMN` | 先过滤主键列与容量收缩（WARNING / INFO）；再查元数据：列不存在（WARNING）、已是目标类型（INFO） |
 | `RENAME TABLE` | 所有旧名都在 → 整条事件照常执行（交换/环语义只有整体执行才成立）；所有旧名都不在且新名都在 → INFO skip；混合状态 → 执行可执行的部分并 WARNING |
 | `TRUNCATE` / `ALTER COLUMN COMMENT` | 表不存在 / 注释已一致 → skip |
 | `DROP TABLE` | `IF EXISTS` 幂等，不查 |
@@ -302,14 +301,22 @@ checkpoint，之后执行过的每个 round 都会再交付一次。其中一部
 - 类型比较前归一化（`decimalv3(10, 2)` ↔ `DECIMAL(10,2)`、整数显示宽度、`tinyint(1)` ↔ `BOOLEAN`）；
 - `sink.schema-change.pre-check`（默认 `true`）可关闭；关闭后不再查询元数据，重放的非幂等 DDL 仍可能失败。
 
+**`DROP+CREATE` 重放的保护不靠表状态推断，靠恢复信号**：`resetToCheckpoint`（JobManager 从 ck/savepoint 恢复、
+coordinator 状态被回滚时必调）→ `KafkaJsonSchemaRegistryRequestHandler.markRestored()` → applier 的
+`RestoreAwareMetadataApplier.onRestore()` 关闭 `sink.is-drop-table-before-create`，重放走 `IF NOT EXISTS` 路径，不删表。
+region failover 不回滚 coordinator 状态，重放事件在 schema manager 就被 duplicate 拦下，到不了 applier——所以该信号恰好
+只覆盖危险窗口。信号必须走 coordinator 而不是 writer：`Sink.InitContext.getRestoredCheckpointId()` 只在 TaskManager 的
+writer 侧可用，而 DDL 决策与 options 在 JobManager 侧（曾有一个 writer 侧的实现，改的是够不着 applier 的序列化副本，
+已移除）。
+
 ### 5.1.2 告警：只告警非幂等 skip
 
 两类 skip 的等级不同：
 
-- **DUPLICATE（INFO）**：DDL 已经生效（列已存在、改名目标已就位、类型已是目标）。跳过是幂等的，只记 INFO，**不会进用户
-  handler**；
-- **非幂等 skip（WARNING）**：改不了、且目标 schema 会持续偏离——主键列 `MODIFY`、容量收缩、源/目标都缺失的 `RENAME`、
-  表缺失。记 WARN 并交给 `SchemaEvolutionAlertHandler`。
+- **DUPLICATE（INFO）**：DDL 已经生效、或跳过是幂等的（列已存在、改名目标已就位、类型已是目标、容量收缩——更宽的列
+  本就能装下更窄的数据）。只记 INFO，**不会进用户 handler**；
+- **非幂等 skip（WARNING）**：改不了、且目标 schema 会持续偏离——主键列 `MODIFY`、源/目标都缺失的 `RENAME`、
+  表缺失、遗留表与 CREATE 事件不符。记 WARN 并交给 `SchemaEvolutionAlertHandler`。
 
 用户通过 `sink.schema-change.alert-handler` 配置实现
 `org.apache.flink.cdc.connectors.kafkajson.sink.schema.alert.SchemaEvolutionAlertHandler` 的全限定类名（public 无参构造），
@@ -445,7 +452,7 @@ sink/engine/doris/
 | OkHttp 不可序列化（MetadataApplier 跨 client→JM 序列化） | `transient` + 懒初始化 |
 | `is_execute_sql_in_http` 不可用时 DDL 全挂 | 阻塞协议会把作业卡死在 APPLYING → 需按上表切换 JDBC |
 | 前置判断的元数据查询失败（网络/权限） | **向上抛、作业失败**：不能把"查不到"当成"尚未应用"，否则会重放非幂等 DDL |
-| `DROP TABLE` + `CREATE TABLE` 重放 | 开了 `sink.is-drop-table-before-create` 时，若表已存在且期望列齐全，跳过整对 SQL。注意首次运行遇到"表已存在且列齐全"也会跳过（这是有意的保护）；确需重建请手工 `DROP TABLE` |
+| `DROP TABLE` + `CREATE TABLE` 重放 | 恢复信号关闭选项：`resetToCheckpoint → onRestore()` 把 `sink.is-drop-table-before-create` 置 false，重放走 `IF NOT EXISTS`，不删表；冷启动（无恢复）保持 `DROP+CREATE` 重建语义，不做前置查询。历史包袱：曾有 writer 侧用 `InitContext` 关闭该选项的实现，但改的是 TaskManager 序列化副本，applier（JobManager）读不到，从未生效，已移除 |
 | MODIFY 已下发、Doris 异步 schema change 尚未可见时 failover | 当前列类型仍是旧值，前置判断看不出"已应用"，重放会再发 `MODIFY`，Doris 以 "pending schema change" 拒绝 → 作业失败重放。已知边界：前置判断只看列元数据，不查 `SHOW ALTER TABLE COLUMN` 的在途作业 |
 | 告警重复 | 告警至少一次（未提交 round 会重放）；`SchemaEvolutionAlert.getAlertId()` 对同一事件/列/原因稳定，接收端按它去重 |
 | 告警 handler 自身失败 | applier 捕获并记 WARN，**不让告警失败影响数据链路**；未配置 handler 时 WARNING 只落日志 |
@@ -479,15 +486,23 @@ hidden_columns、Authorization）/body、`Status!=Success` 时按 label 幂等�
 
 | 测试 | 断言什么 |
 |---|---|
-| `testReplayedCreateTableWithDropBeforeCreateIsSkipped` | 表已存在且列齐全时不发 `DROP`/`CREATE`，只发前置查询 |
-| `testCreateTableWithDropBeforeCreateAppliesWhenTableIsAbsent` | `Unknown table` 被识别为缺表，照常 `DROP+CREATE`；且查询不重试 |
+| `testRestoredCreateTableWithDropBeforeCreateIsSkipped` | `onRestore()` 后重放建表走 `IF NOT EXISTS`：表已存在且列/类型齐全 → 只发前置查询，不发任何 DDL |
+| `testRestoredCreateTableWithDropBeforeCreateAppliesWhenTableAbsent` | 恢复后表缺失 → 前置查询 + `CREATE IF NOT EXISTS`，**任何请求都不含 `DROP TABLE`** |
+| `testColdStartWithDropBeforeCreateRebuildsExistingTable` | 冷启动（无恢复）+ 表已存在 → `DROP+CREATE` 照常执行，连元数据都不读——选项语义不被前置检查推翻 |
+| `testCreateTableWithDropBeforeCreateAppliesWhenTableIsAbsent` | 冷启动 + 表缺失 → 直接 `DROP+CREATE`，不重试查询 |
+| `testCreateTableWithoutDropAlertsOnLeftoverTableMismatch` | 遗留表缺列 → WARNING `INCONSISTENT_STATE`（`IF NOT EXISTS` 静默空操作会被指出） |
+| `testCreateTableWithoutDropAlertsOnLeftoverTypeDivergence` | 遗留表类型漂移（`varchar(50)` vs 期望 `varchar(300)`）→ WARNING 点名差异 |
+| `testCreateTableWithoutDropDuplicateIsSkippedWithoutAlert` | 遗留表与事件完全一致 → INFO，不发 DDL 不告警 |
 | `testAddColumnSkipsColumnsThatAlreadyExist` | 只对缺失列生成 `ADD COLUMN` |
 | `testDuplicateAddColumnIsSkippedWithoutAlert` | 重复 DDL 是 INFO，handler 一次都没被调用 |
 | `testAlterColumnTypeOnKeyColumnIsSkippedAndAlerted` | 主键列 `MODIFY` 不发请求，WARNING + `MODIFY_KEY_COLUMN` |
-| `testCapacityReductionIsSkippedAndAlerted` | 容量收缩 WARNING + `CAPACITY_REDUCTION` |
+| `testCapacityReductionIsSkippedAsInfoWithoutAlert` | 容量收缩（length 类）是幂等 skip：INFO，handler 收到 0 条 |
 | `testAlterColumnTypeAlreadyAtTargetTypeIsSkipped` | 类型已是目标值只发前置查询，不发 DDL、不告警 |
 | `testPreCheckDisabledAppliesWithoutMetadataQuery` | 关掉 `sink.schema-change.pre-check` 后恢复旧行为 |
 | `testFailingAlertHandlerDoesNotFailThePipeline` | handler 抛异常被吞掉，作业不失败 |
+
+恢复通知的接线由 `KafkaJsonSchemaRegistryTest.testRestoreNotifiesRestoreAwareApplier` 验证：`resetToCheckpoint` 在
+状态反序列化**之前**通知 applier——空载荷、不可读载荷（仍算恢复）都触发。
 
 > 运行方式：本仓库 `test` 阶段只跑 `**/*Test.java`，`*ITCase` 在 `integration-test` 阶段跑。只想验证 2PC 时
 > `mvn -o -pl .../flink-cdc-pipeline-connector-jdbc-kafka-json test -Dtest=DorisTwoPhaseCommitITCase` 即可

@@ -30,6 +30,7 @@ import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJ
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.KafkaJsonSchemaChangeResultRequest;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordination.SchemaChangeResponse;
 import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordinator.KafkaJsonSchemaRegistry;
+import org.apache.flink.cdc.connectors.kafkajson.sink.schema.coordinator.RestoreAwareMetadataApplier;
 import org.apache.flink.cdc.runtime.operators.schema.event.CoordinationResponseUtils;
 import org.apache.flink.cdc.runtime.operators.schema.event.GetEvolvedSchemaRequest;
 import org.apache.flink.cdc.runtime.operators.schema.event.GetEvolvedSchemaResponse;
@@ -55,6 +56,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Unit test for {@link KafkaJsonSchemaRegistry}, driving the coordinator over its own event loop.
@@ -205,6 +207,35 @@ public class KafkaJsonSchemaRegistryTest {
         }
     }
 
+    @Test
+    public void testRestoreNotifiesRestoreAwareApplier() throws Exception {
+        RestoreAwareRecordingMetadataApplier restoreAwareApplier =
+                new RestoreAwareRecordingMetadataApplier();
+        try (KafkaJsonSchemaRegistry restored =
+                new KafkaJsonSchemaRegistry(
+                        "schema-operator",
+                        context,
+                        Executors.newSingleThreadExecutor(),
+                        restoreAwareApplier,
+                        SchemaChangeBehavior.EVOLVE)) {
+            restored.resetToCheckpoint(1L, null);
+            assertThat(restoreAwareApplier.restores).isEqualTo(1);
+        }
+        try (KafkaJsonSchemaRegistry restored =
+                new KafkaJsonSchemaRegistry(
+                        "schema-operator",
+                        context,
+                        Executors.newSingleThreadExecutor(),
+                        restoreAwareApplier,
+                        SchemaChangeBehavior.EVOLVE)) {
+            // Unreadable state bytes still count as a restore: the notification fires before
+            // deserialization.
+            assertThatThrownBy(() -> restored.resetToCheckpoint(1L, new byte[0]))
+                    .isInstanceOf(Exception.class);
+            assertThat(restoreAwareApplier.restores).isEqualTo(2);
+        }
+    }
+
     private KafkaJsonSchemaRegistry registry(TestCoordinatorContext ctx) {
         return new KafkaJsonSchemaRegistry(
                 "schema-operator", ctx, executor, applier, SchemaChangeBehavior.EVOLVE);
@@ -262,6 +293,16 @@ public class KafkaJsonSchemaRegistryTest {
         @Override
         public void applySchemaChange(SchemaChangeEvent schemaChangeEvent) {
             applied.add(schemaChangeEvent);
+        }
+    }
+
+    private static class RestoreAwareRecordingMetadataApplier extends RecordingMetadataApplier
+            implements RestoreAwareMetadataApplier {
+        int restores;
+
+        @Override
+        public void onRestore() {
+            restores++;
         }
     }
 

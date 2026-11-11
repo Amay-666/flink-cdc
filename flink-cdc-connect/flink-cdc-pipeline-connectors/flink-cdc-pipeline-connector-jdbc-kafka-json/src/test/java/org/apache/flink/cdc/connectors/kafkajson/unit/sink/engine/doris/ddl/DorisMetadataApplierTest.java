@@ -77,8 +77,10 @@ public class DorisMetadataApplierTest {
                                     .primaryKey("id")
                                     .build()));
 
-            assertThat(server.recorded).hasSize(1);
-            RecordedRequest request = server.recorded.get(0);
+            // 2 requests: pre-check + create.
+            assertThat(server.recorded).hasSize(2);
+            assertThat(server.recorded.get(0).body).contains("SHOW FULL COLUMNS");
+            RecordedRequest request = server.recorded.get(1);
             assertThat(request.path).isEqualTo("/api/query/default_cluster/shop");
             assertThat(request.body)
                     .isEqualTo(
@@ -90,8 +92,22 @@ public class DorisMetadataApplierTest {
     @Test
     public void testApplyStandardAndCustomEvents() throws Exception {
         Schema schema = Schema.newBuilder().physicalColumn("id", DataTypes.INT()).build();
-        // The comment event triggers the metadata pre-check; the table has to expose the column.
-        try (MockDorisServer server = metadataServer("id|INT|KEY", "name|STRING")) {
+        // Absent for the create's pre-check, present with the comment event's columns.
+        AtomicInteger showCount = new AtomicInteger();
+        try (MockDorisServer server =
+                new MockDorisServer(
+                        req -> {
+                            if (req.body.contains("SHOW FULL COLUMNS")) {
+                                if (showCount.getAndIncrement() == 0) {
+                                    return Response.ok(
+                                            "{\"code\":1105,\"msg\":\"errCode = 2, detailMessage"
+                                                    + " = Unknown table 'orders'\"}");
+                                }
+                                return Response.ok(
+                                        showColumnsResponse("id|INT|KEY", "name|STRING"));
+                            }
+                            return Response.ok("{\"code\":0,\"msg\":\"OK\"}");
+                        })) {
             DorisMetadataApplier applier = applier(server);
 
             applier.applySchemaChange(new CreateTableEvent(ORDERS, schema));
@@ -99,12 +115,13 @@ public class DorisMetadataApplierTest {
                     new AlterColumnCommentEvent(
                             ORDERS, Collections.singletonMap("name", "display name")));
 
-            // 3 requests: CREATE + SHOW FULL COLUMNS (pre-check) + comment DDL
-            assertThat(server.recorded).hasSize(3);
-            assertThat(server.recorded.get(0).body).contains("CREATE TABLE IF NOT EXISTS");
-            assertThat(server.recorded.get(1).body).contains("SHOW FULL COLUMNS");
-            assertThat(server.recorded.get(2).path).isEqualTo("/api/query/default_cluster/shop");
-            assertThat(server.recorded.get(2).body)
+            // 4 requests: SHOW (pre-check, absent) + CREATE + SHOW (pre-check) + comment DDL
+            assertThat(server.recorded).hasSize(4);
+            assertThat(server.recorded.get(0).body).contains("SHOW FULL COLUMNS");
+            assertThat(server.recorded.get(1).body).contains("CREATE TABLE IF NOT EXISTS");
+            assertThat(server.recorded.get(2).body).contains("SHOW FULL COLUMNS");
+            assertThat(server.recorded.get(3).path).isEqualTo("/api/query/default_cluster/shop");
+            assertThat(server.recorded.get(3).body)
                     .isEqualTo(
                             "{\"stmt\":\"ALTER TABLE `shop`.`orders` MODIFY COLUMN `name` COMMENT 'display name'\"}");
         }
@@ -142,7 +159,8 @@ public class DorisMetadataApplierTest {
             // The applier holds one DorisHttpClient for its lifetime, so the second and third DDL
             // arrive over the connection the first one opened instead of paying a new TCP
             // handshake per event, as a per-event client (whose close() evicts its pool) did.
-            assertThat(server.recorded).hasSize(3);
+            // 6 requests: pre-check + create, per table.
+            assertThat(server.recorded).hasSize(6);
             assertThat(
                             server.recorded.stream()
                                     .map(request -> request.remotePort)
@@ -172,7 +190,8 @@ public class DorisMetadataApplierTest {
             assertThat(restored).isNotNull();
             restored.applySchemaChange(
                     new CreateTableEvent(TableId.tableId("shop", "items"), schema));
-            assertThat(server.recorded).hasSize(2);
+            // 4 requests: pre-check + create, before and after the serialization.
+            assertThat(server.recorded).hasSize(4);
         }
     }
 
@@ -192,13 +211,15 @@ public class DorisMetadataApplierTest {
                                                             .build())))
                     .isInstanceOf(SchemaEvolveException.class)
                     // SchemaEvolveException keeps the message in getExceptionMessage() and wires
-                    // the (null) cause into getMessage().
+                    // the (null) cause into getMessage(). The create's pre-check is the first
+                    // request, so it is the one that fails.
                     .satisfies(
                             e ->
                                     assertThat(((SchemaEvolveException) e).getExceptionMessage())
                                             .contains("code 1105"));
-            // No retry on an application-level DDL error.
+            // No retry on an application-level query error, and no DDL behind a failed pre-check.
             assertThat(server.recorded).hasSize(1);
+            assertThat(server.recorded.get(0).body).contains("SHOW FULL COLUMNS");
         }
     }
 
@@ -222,10 +243,15 @@ public class DorisMetadataApplierTest {
                                     .primaryKey("id")
                                     .build()));
 
-            assertThat(server.recorded).hasSize(1);
+            // 2 requests: pre-check + create, both against the mapped names.
+            assertThat(server.recorded).hasSize(2);
             assertThat(server.recorded.get(0).path)
                     .isEqualTo("/api/query/default_cluster/dws_shop");
             assertThat(server.recorded.get(0).body)
+                    .contains("SHOW FULL COLUMNS FROM `dws_shop`.`ods_orders`");
+            assertThat(server.recorded.get(1).path)
+                    .isEqualTo("/api/query/default_cluster/dws_shop");
+            assertThat(server.recorded.get(1).body)
                     .contains("CREATE TABLE IF NOT EXISTS `dws_shop`.`ods_orders`");
         }
     }
@@ -233,9 +259,73 @@ public class DorisMetadataApplierTest {
     // ===== Pre-check: duplicates after a checkpoint restore =====
 
     @Test
-    public void testReplayedCreateTableWithDropBeforeCreateIsSkipped() throws Exception {
+    public void testRestoredCreateTableWithDropBeforeCreateIsSkipped() throws Exception {
         Configuration config = new Configuration();
         try (MockDorisServer server = metadataServer("id|INT|KEY")) {
+            config.set(DorisDataSinkOptions.FENODES, server.endpoint());
+            config.set(DorisDataSinkOptions.USERNAME, "root");
+            config.set(DorisDataSinkOptions.PASSWORD, "123456");
+            config.set(DorisDataSinkOptions.IS_DROP_TABLE_BEFORE_CREATE, true);
+            DorisMetadataApplier applier =
+                    new DorisMetadataApplier(new DorisDataSinkOptions(config));
+            applier.onRestore();
+
+            applier.applySchemaChange(
+                    new CreateTableEvent(
+                            ORDERS,
+                            Schema.newBuilder()
+                                    .physicalColumn("id", DataTypes.INT())
+                                    .primaryKey("id")
+                                    .build()));
+
+            // Only the pre-check query; the duplicate create never reaches Doris.
+            assertThat(server.recorded).hasSize(1);
+            assertThat(server.recorded.get(0).body).contains("SHOW FULL COLUMNS");
+        }
+    }
+
+    @Test
+    public void testRestoredCreateTableWithDropBeforeCreateAppliesWhenTableAbsent()
+            throws Exception {
+        Configuration config = new Configuration();
+        try (MockDorisServer server =
+                new MockDorisServer(
+                        req -> {
+                            if (req.body.contains("SHOW FULL COLUMNS")) {
+                                return Response.ok(
+                                        "{\"code\":1105,\"msg\":\"errCode = 2, detailMessage ="
+                                                + " Unknown table 'orders'\"}");
+                            }
+                            return Response.ok("{\"code\":0,\"msg\":\"OK\"}");
+                        })) {
+            config.set(DorisDataSinkOptions.FENODES, server.endpoint());
+            config.set(DorisDataSinkOptions.USERNAME, "root");
+            config.set(DorisDataSinkOptions.PASSWORD, "123456");
+            config.set(DorisDataSinkOptions.IS_DROP_TABLE_BEFORE_CREATE, true);
+            DorisMetadataApplier applier =
+                    new DorisMetadataApplier(new DorisDataSinkOptions(config));
+            applier.onRestore();
+
+            applier.applySchemaChange(
+                    new CreateTableEvent(
+                            ORDERS,
+                            Schema.newBuilder()
+                                    .physicalColumn("id", DataTypes.INT())
+                                    .primaryKey("id")
+                                    .build()));
+
+            // SHOW (absent) + CREATE IF NOT EXISTS — and no DROP TABLE anywhere.
+            assertThat(server.recorded).hasSize(2);
+            assertThat(server.recorded.get(1).body).contains("CREATE TABLE IF NOT EXISTS");
+            assertThat(server.recorded)
+                    .noneSatisfy(request -> assertThat(request.body).contains("DROP TABLE"));
+        }
+    }
+
+    @Test
+    public void testColdStartWithDropBeforeCreateRebuildsExistingTable() throws Exception {
+        Configuration config = new Configuration();
+        try (MockDorisServer server = metadataServer("id|INT|KEY", "name|STRING")) {
             config.set(DorisDataSinkOptions.FENODES, server.endpoint());
             config.set(DorisDataSinkOptions.USERNAME, "root");
             config.set(DorisDataSinkOptions.PASSWORD, "123456");
@@ -251,9 +341,76 @@ public class DorisMetadataApplierTest {
                                     .primaryKey("id")
                                     .build()));
 
-            // Only the pre-check: replaying DROP+CREATE would discard the restored data.
+            // The pair executes without even reading the table's layout.
+            assertThat(server.recorded).hasSize(2);
+            assertThat(server.recorded.get(0).body).contains("DROP TABLE IF EXISTS");
+            assertThat(server.recorded.get(1).body).contains("CREATE TABLE IF NOT EXISTS");
+        }
+    }
+
+    @Test
+    public void testCreateTableWithoutDropAlertsOnLeftoverTableMismatch() throws Exception {
+        try (MockDorisServer server = metadataServer("id|INT|KEY")) {
+            DorisMetadataApplier applier = applier(server, RecordingAlertHandler.class);
+
+            applier.applySchemaChange(
+                    new CreateTableEvent(
+                            ORDERS,
+                            Schema.newBuilder()
+                                    .physicalColumn("id", DataTypes.INT())
+                                    .physicalColumn("name", DataTypes.VARCHAR(100))
+                                    .primaryKey("id")
+                                    .build()));
+
+            // Only the pre-check; the create is a no-op either way.
             assertThat(server.recorded).hasSize(1);
-            assertThat(server.recorded.get(0).body).contains("SHOW FULL COLUMNS");
+            assertThat(RecordingAlertHandler.ALERTS).hasSize(1);
+            SchemaEvolutionAlert alert = RecordingAlertHandler.ALERTS.get(0);
+            assertThat(alert.getLevel()).isEqualTo(SchemaEvolutionAlert.Level.WARNING);
+            assertThat(alert.getKind()).isEqualTo(SchemaEvolutionAlert.Kind.INCONSISTENT_STATE);
+            assertThat(alert.getMessage()).contains("missing columns [name]");
+        }
+    }
+
+    @Test
+    public void testCreateTableWithoutDropAlertsOnLeftoverTypeDivergence() throws Exception {
+        // The builder emits VARCHAR(300) for a VARCHAR(100) column (byte counting).
+        try (MockDorisServer server = metadataServer("id|INT|KEY", "name|VARCHAR(50)")) {
+            DorisMetadataApplier applier = applier(server, RecordingAlertHandler.class);
+
+            applier.applySchemaChange(
+                    new CreateTableEvent(
+                            ORDERS,
+                            Schema.newBuilder()
+                                    .physicalColumn("id", DataTypes.INT())
+                                    .physicalColumn("name", DataTypes.VARCHAR(100))
+                                    .primaryKey("id")
+                                    .build()));
+
+            assertThat(server.recorded).hasSize(1);
+            assertThat(RecordingAlertHandler.ALERTS).hasSize(1);
+            assertThat(RecordingAlertHandler.ALERTS.get(0).getMessage())
+                    .contains("name is varchar(50), the event would create varchar(300)");
+        }
+    }
+
+    @Test
+    public void testCreateTableWithoutDropDuplicateIsSkippedWithoutAlert() throws Exception {
+        // VARCHAR(300) is what the builder creates for a VARCHAR(100) column.
+        try (MockDorisServer server = metadataServer("id|INT|KEY", "name|VARCHAR(300)")) {
+            DorisMetadataApplier applier = applier(server, RecordingAlertHandler.class);
+
+            applier.applySchemaChange(
+                    new CreateTableEvent(
+                            ORDERS,
+                            Schema.newBuilder()
+                                    .physicalColumn("id", DataTypes.INT())
+                                    .physicalColumn("name", DataTypes.VARCHAR(100))
+                                    .primaryKey("id")
+                                    .build()));
+
+            assertThat(server.recorded).hasSize(1);
+            assertThat(RecordingAlertHandler.ALERTS).isEmpty();
         }
     }
 
@@ -285,10 +442,10 @@ public class DorisMetadataApplierTest {
                                     .primaryKey("id")
                                     .build()));
 
-            // SHOW FULL COLUMNS + DROP TABLE + CREATE TABLE
-            assertThat(server.recorded).hasSize(3);
-            assertThat(server.recorded.get(1).body).contains("DROP TABLE IF EXISTS");
-            assertThat(server.recorded.get(2).body).contains("CREATE TABLE IF NOT EXISTS");
+            // A cold start does not even read the layout: DROP TABLE + CREATE TABLE directly.
+            assertThat(server.recorded).hasSize(2);
+            assertThat(server.recorded.get(0).body).contains("DROP TABLE IF EXISTS");
+            assertThat(server.recorded.get(1).body).contains("CREATE TABLE IF NOT EXISTS");
         }
     }
 
@@ -511,7 +668,7 @@ public class DorisMetadataApplierTest {
     }
 
     @Test
-    public void testCapacityReductionIsSkippedAndAlerted() throws Exception {
+    public void testCapacityReductionIsSkippedAsInfoWithoutAlert() throws Exception {
         Schema oldSchema =
                 Schema.newBuilder()
                         .physicalColumn("id", DataTypes.INT())
@@ -527,11 +684,11 @@ public class DorisMetadataApplierTest {
                             ORDERS, Collections.singletonMap("name", DataTypes.VARCHAR(100))),
                     Optional.of(oldSchema));
 
+            // A length-reduction skip is idempotent — the wider column already accepts the
+            // narrower data — so it is INFO and never reaches an alert handler.
             assertThat(server.recorded).isEmpty();
+            assertThat(RecordingAlertHandler.ALERTS).hasSize(0);
         }
-        assertThat(RecordingAlertHandler.ALERTS).hasSize(1);
-        assertThat(RecordingAlertHandler.ALERTS.get(0).getKind())
-                .isEqualTo(SchemaEvolutionAlert.Kind.CAPACITY_REDUCTION);
     }
 
     @Test

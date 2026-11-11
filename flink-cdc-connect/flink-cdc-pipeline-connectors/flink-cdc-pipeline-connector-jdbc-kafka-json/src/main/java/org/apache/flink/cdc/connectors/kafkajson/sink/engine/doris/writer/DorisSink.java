@@ -21,7 +21,6 @@ import org.apache.flink.api.connector.sink2.Sink;
 import org.apache.flink.api.connector.sink2.SinkWriter;
 import org.apache.flink.cdc.common.event.Event;
 import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.DorisDataSinkOptions;
-import org.apache.flink.cdc.connectors.kafkajson.sink.engine.doris.util.DorisSinkUtils;
 
 import java.time.ZoneId;
 
@@ -48,7 +47,6 @@ public class DorisSink implements Sink<Event> {
 
     @Override
     public SinkWriter<Event> createWriter(InitContext context) {
-        DorisSinkUtils.maybeDisableDropOnRestore(options, context);
         return new DorisSinkWriter(options, pipelineZoneId, context);
     }
 }

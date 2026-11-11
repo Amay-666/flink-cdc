@@ -273,6 +273,7 @@ public class KafkaJsonSchemaRegistry implements OperatorCoordinator, Coordinatio
     @Override
     public void resetToCheckpoint(long checkpointId, @Nullable byte[] checkpointData)
             throws Exception {
+        requestHandler.markRestored();
         if (checkpointData == null) {
             return;
         }
